@@ -26,3 +26,8 @@ packs/
 #    不想带就把下面两行取消注释（功能会退回"用用户自己装的 mod 建参考包"）。
 # src/WarbandStudio.Ui/bundled/wuu/
 # src/WarbandStudio.Ui/bundled/uilibrary/
+
+# ── 内部工作文档（本地留着用，不进公开仓库）──
+docs/交接文档_当前版本.md
+docs/兵种升级数据链_教程摘要.md
+.pidbase.txt
