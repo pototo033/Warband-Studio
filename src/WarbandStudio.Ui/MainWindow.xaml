@@ -71,7 +71,7 @@
                           Command="{Binding OpenPackCommand}" />
                 <MenuItem Header="加载兵种 mod（参考包：图标/中文名/兵种库）…"
                           Command="{Binding OpenUnitPackCommand}" />
-                <MenuItem Header="关闭 Pack" Command="{Binding ClosePackCommand}" />
+                <MenuItem Header="关闭 Pack（当前这个）" Command="{Binding ClosePackCommand}" />
                 <Separator />
                 <MenuItem Header="保存 Pack" InputGestureText="Ctrl+S" Command="{Binding SavePackCommand}" />
                 <MenuItem Header="另存为…" Command="{Binding SavePackAsCommand}" />
@@ -94,7 +94,8 @@
                         ToolTip="加载一个兵种 mod 当参考包：图标/中文名/右上「mod 兵种」页读它；不进战帮树、不占画布" />
                 <Button Content="保存" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" />
                 <Button Content="另存为" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackAsCommand}" />
-                <Button Content="关闭 Pack" Padding="10,3" Margin="0,0,12,0" Command="{Binding ClosePackCommand}" />
+                <Button Content="关闭 Pack" Padding="10,3" Margin="0,0,12,0" Command="{Binding ClosePackCommand}"
+                        ToolTip="关掉当前画布这个包（别的包留着）；有未导出的编辑会先问" />
                 <Button Content="跑诊断" Padding="10,3" Margin="0,0,6,0" Command="{Binding DiagnosticsCommand}" />
                 <Button Content="教程" Padding="10,3" Margin="0,0,10,0" VerticalAlignment="Center"
                         Click="OnStartTour" ToolTip="再看一遍使用教程（PPT 式指引）" />
@@ -136,6 +137,7 @@
                     </Border>
                     <TreeView x:Name="TreeFiles" ItemsSource="{Binding TreeRoots}" Background="Transparent"
                               MouseDoubleClick="OnTreeDoubleClick"
+                              ContextMenuOpening="OnTreeContextOpening"
                               BorderThickness="0" Foreground="{DynamicResource Text.Primary}"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <TreeView.ContextMenu>
@@ -147,6 +149,7 @@
                                     </Style>
                                 </ContextMenu.Resources>
                                 <MenuItem Header="在新画布中打开该包" Click="OnOpenCanvasForNode" />
+                                <MenuItem x:Name="MenuClosePack" Header="关闭这个 pack（只关它，别的包留着）" Click="OnTreeClosePack" />
                                 <Separator />
                                 <MenuItem Header="打开所在文件夹" Click="OnTreeOpenFolder" />
                                 <MenuItem Header="重命名…（这个文件）" Click="OnTreeRenameFile" />

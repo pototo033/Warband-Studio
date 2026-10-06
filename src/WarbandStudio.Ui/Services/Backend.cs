@@ -43,6 +43,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         if (_pack?.PackPath is { Length: > 0 } k) _editsByPack[k] = new WarbandEdits();
         else _fallbackEdits = new WarbandEdits();
         InvalidateCanvas();
+        RestagePendingArt();          // 放弃编辑 → 换图的预览也撤掉（画布回到包里那张）
         Log?.Invoke($"已放弃 {n} 处未导出的编辑");
     }
 
@@ -56,6 +57,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var n = _editsByPack.TryGetValue(packPath, out var e) ? e.Count : 0;
         _editsByPack[packPath] = new WarbandEdits();
         InvalidateCanvas();
+        RestagePendingArt();
         Log?.Invoke($"已放弃 {n} 处未导出的编辑（{Path.GetFileName(packPath)}）");
     }
 
@@ -73,6 +75,14 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     }
     public int EditCount => Edits.Count;
     public string EditSummary => Edits.Summary();
+
+    /// <summary>**某个包**有多少处未导出编辑（关别的包 / 关画布页签时判断"要不要先问保存"用）。</summary>
+    public int EditCountOf(string? packPath) =>
+        packPath is { Length: > 0 } && _editsByPack.TryGetValue(packPath, out var e) ? e.Count : 0;
+
+    /// <summary>某个包未导出编辑的摘要。</summary>
+    public string EditSummaryOf(string? packPath) =>
+        packPath is { Length: > 0 } && _editsByPack.TryGetValue(packPath, out var e) ? e.Summary() : "";
 
     public void SetGroupPos(string group, int x, int y)
     {
@@ -1018,7 +1028,8 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             var pack = _pack?.Archive;
             foreach (var t in knownTabs)
             {
-                var target = $"ui/skins/default/warband_upgrades/{prefix}{t.ToLowerInvariant()}.png";
+                // **twui 里这个页签实际引用的那个文件**（不是约定名 —— 改名会带 _N，老遗留可能叫别的 key）
+                var target = ArtInnerOf(prefix, t);
                 // 本会话最后一次换图（同目标后写为准）→ 来源就是"现在显示的这张"
                 var last = Edits.FileReplacements.Where(x => x.Target.Equals(target, StringComparison.OrdinalIgnoreCase))
                                                  .LastOrDefault();
@@ -1028,6 +1039,62 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         }
         catch { }
         return map;
+    }
+
+    /// <summary>twui 文本（当前包的）。解析"页签实际用的图"用它 —— 一次解析缓存一份，别每次重建画布都读 780KB。</summary>
+    private string? TwuiText()
+    {
+        var pack = _pack?.Archive;
+        if (pack is null) return null;
+        var e = pack.VisibleEntries.FirstOrDefault(x =>
+            x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
+        if (e is null) return null;
+        try { return System.Text.Encoding.UTF8.GetString(pack.ReadDecoded(e)); }
+        catch { return null; }
+    }
+
+    private Dictionary<string, TwuiTabs.TabArt>? _tabArtMap;
+    private PackArchive? _tabArtPack;
+    /// <summary>页签 → 图（twui 解析，按 Archive 实例缓存；存包会换实例 → 自动重解析）。</summary>
+    private Dictionary<string, TwuiTabs.TabArt> TabArtMap()
+    {
+        var pack = _pack?.Archive;
+        if (_tabArtMap is not null && ReferenceEquals(_tabArtPack, pack)) return _tabArtMap;
+        _tabArtPack = pack;
+        return _tabArtMap = TwuiTabs.Parse(TwuiText());
+    }
+
+    /// <summary>有**待导出改名**时，包里还是旧 key（改名导出时才落盘）→ 解析要按旧 key 找。</summary>
+    private string PackSideKey(string category)
+    {
+        var k = category;
+        for (var i = 0; i < 8; i++)
+        {
+            var prev = Edits.TabRenames.Where(x => x.New.Equals(k, StringComparison.OrdinalIgnoreCase))
+                                       .Select(x => x.Old).LastOrDefault();
+            if (prev is null || prev.Equals(k, StringComparison.OrdinalIgnoreCase)) break;
+            k = prev;
+        }
+        return k;
+    }
+
+    /// <summary>
+    /// 这个页签的图**在包里的真实路径**：`ui/skins/default/warband_upgrades/&lt;twui 里实际引用的文件名&gt;`。
+    /// 游戏看的是 twui 里那个名字（页签面板背景 = `&lt;states&gt;` 下按 key 命名的状态 → 那张图；
+    /// 按钮图写在 `button_toggle_tab_*` 组件里）—— 写约定名 `&lt;前缀&gt;&lt;key&gt;.png` 就会出现
+    /// "换了图页签还是旧的 / 在用标记指错文件"（用户实测）。解析不到才退回约定名。
+    /// </summary>
+    private string ArtInnerOf(string prefix, string category)
+    {
+        var key = PackSideKey(category);
+        var bg = prefix.StartsWith("background_images_", StringComparison.OrdinalIgnoreCase);
+        if (TabArtMap().TryGetValue(key, out var art))
+        {
+            var f = bg ? art.BgFile : art.BtnFile;
+            if (!string.IsNullOrWhiteSpace(f)) return TwuiTabs.SkinDir + f;
+        }
+        var scan = TwuiTabs.ScanName(TwuiText(), prefix, key);
+        return TwuiTabs.SkinDir + (scan ?? TwuiTabs.ConventionName(prefix, key));
     }
 
     /// <summary>某个页签现在显示的图是谁（没换图就是它自己的画布文件）。给 SetTabArt 写日志/查占用用。</summary>
@@ -1130,6 +1197,10 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         return $"ui/skins/default/warband_upgrades/{prefix}{sfx}.png";
     }
 
+    /// <summary>给自检/诊断用：这个页签**实际用的图**（包内路径，twui 解析出来的）。</summary>
+    public string TabArtPathOf(string category, bool background) =>
+        ArtInnerOf(background ? "background_images_" : "button_upgrade_", category);
+
     /// <summary>兼容旧调用（同路径替换）。</summary>
     public void AddUiAssetToPack(string inner)
     {
@@ -1142,12 +1213,15 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>给某个页签换背景图/按钮图（来源 = 素材库里的本地文件；写进包里对应条目）。</summary>
     public void SetTabArt(string category, string? bgSource, string? btnSource)
     {
-        var key = category.ToLowerInvariant();
-        // 目标名必须是**页签 key**（twui 按 background_images_<页签>.png 找图）；但**绝不动素材库里的文件名** ——
-        // 库是全局共享的，同名会互相覆盖（实测：把雪乃的 skv2 改名成 skv，就把库里 WUU 的 SKV 封面顶掉了）。
-        // 要自定义名字请用「添加到当前包」+后缀那条路。
+        if (string.IsNullOrWhiteSpace(category)) return;
         var bg = bgSource;
         var btn = btnSource;
+        // 目标 = **twui 里这个页签实际引用的那个文件**（页签面板背景 = twui states 下按 key 命名的状态那张图；
+        // 老版本按约定名 `<前缀><key>.png` 写 → 改名后的页签根本不看这个文件，用户实测"换图没生效"）。
+        var bgInner = ArtInnerOf("background_images_", category);
+        var btnInner = ArtInnerOf("button_upgrade_", category);
+        var bgName = Path.GetFileName(bgInner);
+        var btnName = Path.GetFileName(btnInner);
         // 被别的页签用着的源图 → 这里只**复制一份**（写成目标页签自己的名字），绝不重命名/覆盖原来那张
         foreach (var (kind2, src) in new[] { ("背景", bg), ("按钮", btn) })
         {
@@ -1156,28 +1230,46 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             if (owners.Count > 0)
                 Log?.Invoke($"换图：源图 {Path.GetFileName(src!)} 正被 {string.Join("、", owners)} 页签用着 → 只复制一张给 {category}，不动原来那张。");
         }
-        if (!string.IsNullOrWhiteSpace(bg) && !SameArt(bg!, $"ui/skins/default/warband_upgrades/background_images_{key}.png"))
-            Edits.FileReplacements.Add(($"ui/skins/default/warband_upgrades/background_images_{key}.png", bg!));
-        if (!string.IsNullOrWhiteSpace(btn) && !SameArt(btn!, $"ui/skins/default/warband_upgrades/button_upgrade_{key}.png"))
-            Edits.FileReplacements.Add(($"ui/skins/default/warband_upgrades/button_upgrade_{key}.png", btn!));
-        // 画布预览：先清掉这个页签的旧缓存（否则会显示上一次/别处留下的图），再把来源图抽成目标名
+        var did = new List<string>();
+        foreach (var (label, src, inner, name) in new[] { ("背景", bg, bgInner, bgName), ("按钮", btn, btnInner, btnName) })
+        {
+            if (string.IsNullOrWhiteSpace(src)) continue;
+            if (SameArt(src!, inner))
+            {
+                Log?.Invoke($"换图：页签 {category} 的{label} 选的那张和页签现在用的内容一样 → 没变化，不记改动。");
+                continue;
+            }
+            Edits.FileReplacements.Add((inner, src!));
+            did.Add($"{label} ← {Path.GetFileName(src!)}（写到 {name}）");
+        }
+        // 画布预览：先清掉这个页签的旧缓存（否则会显示上一次/别处留下的图），再把来源图抽成**实际用的名字**
         try
         {
             var skins = Skins(_pack?.Archive, _pack?.PackPath);
-            foreach (var n in new[] { $"background_images_{key}.png", $"button_upgrade_{key}.png" })
-            {
-                var f = Path.Combine(skins.CacheDir, n);
-                if (File.Exists(f)) File.Delete(f);
-            }
+            foreach (var n in new[] { bgName, btnName }) skins.DropCache(n);
             // 来源有两种：包内路径（老用法）或**本地素材文件**（素材库那份）——预览都要出得来
             string? Stage(string srcPath, string cacheName) =>
                 File.Exists(srcPath) ? skins.StageLocalFile(srcPath, cacheName) : skins.ExtractForPage(srcPath, cacheName);
-            if (!string.IsNullOrWhiteSpace(bg)) Stage(bg!, $"background_images_{key}.png");
-            if (!string.IsNullOrWhiteSpace(btn)) Stage(btn!, $"button_upgrade_{key}.png");
+            if (!string.IsNullOrWhiteSpace(bg)) Stage(bg!, bgName);
+            if (!string.IsNullOrWhiteSpace(btn)) Stage(btn!, btnName);
         }
         catch (Exception ex) { Log?.Invoke("换图预览失败：" + ex.Message); }
         InvalidateCanvas();
-        Log?.Invoke($"换图：页签 {category} ← 背景 {bg ?? "（不变）"} / 按钮 {btn ?? "（不变）"}　待导出");
+        // **可见提示**（用户报过"换了图上方一点动静都没有"）：改了哪几张、写到哪个文件、要保存才生效
+        if (did.Count > 0)
+        {
+            Log?.Invoke($"换图：页签 {category} 已改 {did.Count} 处 —— {string.Join("；", did)}　待导出（保存/导出后游戏里才生效）");
+            var bgConv = TwuiTabs.ConventionName("background_images_", category);
+            var btnConv = TwuiTabs.ConventionName("button_upgrade_", category);
+            if ((bg is not null && !bgName.Equals(bgConv, StringComparison.OrdinalIgnoreCase)) ||
+                (btn is not null && !btnName.Equals(btnConv, StringComparison.OrdinalIgnoreCase)))
+                Log?.Invoke($"提示：页签 {category} 在 twui 里用的图名是 {bgName} / {btnName}（和页签 key 不一致，多半是以前改名的遗留）" +
+                            "—— 换图已按**实际文件名**写，游戏里会生效；名字不齐整不影响使用。");
+        }
+        else
+        {
+            Log?.Invoke($"换图：页签 {category} 没有任何改动（没选图，或选的那张和现在这张一样）。");
+        }
         // 换图只换"这张图"；页签本身要存在才算数 —— 包里没有 categories 行 / twui 块时，
         // 换了图游戏里也不会出现这个页签（用户实测：SKVG 建过一回但结构没落进包 → 进游戏页签直接没有）。
         if (!TabHasStructure(category))
@@ -2030,6 +2122,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var snap = s[^1]; s.RemoveAt(s.Count - 1);
         _editsByPack[k] = snap;
         InvalidateCanvas();
+        RestagePendingArt();          // 撤掉的换图预览别留在画布上（撤销/重做都要跟当前待导出对齐）
         Log?.Invoke($"撤销一步（剩 {s.Count} 步可撤）：{Edits.Summary()}");
         return true;
     }
@@ -2044,11 +2137,32 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var snap = r[^1]; r.RemoveAt(r.Count - 1);
         _editsByPack[k] = snap;
         InvalidateCanvas();
+        RestagePendingArt();
         Log?.Invoke($"重做一步：{Edits.Summary()}");
         return true;
     }
 
-    /// <summary>有编辑/换包时让画布缓存失效。</summary>
+    /// <summary>
+    /// 把"待导出"里 warband_upgrades 的图替换重新暂存到皮肤缓存 —— 撤销/重做后画布要跟着变。
+    /// 先 DropStaged 清掉已撤掉的那些（否则画布还挂着旧图），再按当前的 FileReplacements 重新抽一遍。
+    /// </summary>
+    private void RestagePendingArt()
+    {
+        try
+        {
+            var skins = Skins(_pack?.Archive, _pack?.PackPath);
+            skins.DropStaged();
+            foreach (var (target, source) in Edits.FileReplacements)
+            {
+                if (!target.StartsWith("ui/skins/default/warband_upgrades/", StringComparison.OrdinalIgnoreCase)) continue;
+                var name = Path.GetFileName(target);
+                skins.DropCache(name);
+                if (File.Exists(source)) skins.StageLocalFile(source, name);
+                else skins.ExtractForPage(source, name);
+            }
+        }
+        catch { }
+    }    /// <summary>有编辑/换包时让画布缓存失效。</summary>
     public void InvalidateCanvas()
     {
         _rev++;
@@ -2696,7 +2810,20 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         foreach (var kv in pageFacSet) pageFactions[kv.Key] = ToJsonArray(kv.Value);
 
         var skins = Skins(pack, session.PackPath);
-        var skin = skins.Prepare(pages.Select(p => p!.GetValue<string>()));
+        // 页签的图**按 twui 里实际引用的文件名**抽（改名会带 _N、老遗留可能不是 key）——
+        // 按约定名抽的话，改名过的页签画布上显示的是另一个文件的内容（用户实测"工坊显示的不是我要的图"）
+        var pageArt = pages.Select(p => p!.GetValue<string>())
+                           .Where(c => !string.IsNullOrWhiteSpace(c))
+                           .Select(c => (Cat: c,
+                                         Bg: Path.GetFileName(ArtInnerOf("background_images_", c)),
+                                         Btn: Path.GetFileName(ArtInnerOf("button_upgrade_", c))))
+                           .ToList();
+        var skin = skins.Prepare(pageArt);
+        // 页面也要知道"这个页签实际用的文件名"（换图对话框的"保持当前"那格按它显示，别按 key 拼）
+        var pageArtName = new System.Text.Json.Nodes.JsonObject();
+        foreach (var (cat, bg, btn) in pageArt)
+            pageArtName[cat] = new System.Text.Json.Nodes.JsonObject { ["bg"] = bg, ["btn"] = btn };
+        jso["pageArtName"] = pageArtName;
         var pageBg = new System.Text.Json.Nodes.JsonObject();
         foreach (var p in pages)
         {

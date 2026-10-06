@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using WarbandStudio.Packfile;
 
 namespace WarbandStudio.Pack;
@@ -621,37 +622,181 @@ public static class WarbandAmender
                 (t, i) => Cell(t, i, CatColumn(pack, vanilla, schema)).Equals(oldKey, StringComparison.OrdinalIgnoreCase));
             // infos.category：把该页签的组改成新 key（改原文件里那一列的值）
             changed += RewriteChanging(pack, Infos2, schema, repl, notes, "category", oldKey, newKey);
-            // twui：holder_tab_<旧> → 新、value="<旧>" → 新
-            var twui = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
-            if (twui is not null)
+            // **两张图 + twui 里的图路径/组件名/背景状态**（先定下图片的"真实新名字"，再拿它去改 twui）
+            //   · 源名按 **twui 里实际引用的名字**取，不按约定名猜 —— 老版本改名只改了 holder_tab，
+            //     页签的按钮组件/背景状态还叫旧 key，图也就还是旧名（写约定名 = 改到页签不看的文件上 ✗）；
+            //   · 目标名已被占用（包里或本轮 repl 里）→ **不覆盖**，自动加 _1/_2 后缀
+            //     （用户实测：SKVG→SKV2 把 SKV 正在用的 background_images_skv2.png 顶掉了 ✗）；
+            //   · 源图如果是"本次换图"改过的（在 repl 里）→ 取**本轮缓冲**的字节，并撤掉旧名那条替换：
+            //     旧文件保持包里原样（真·改名），新名字带上换的图（不然换图会被改名整块吃掉 ✗）。
+            static bool InPackOrRepl(PackArchive pk, Dictionary<string, byte[]> rp, string path)
             {
-                var xml = System.Text.Encoding.UTF8.GetString(pack.ReadDecoded(twui));
-                var bom = xml.Length > 0 && xml[0] == '\uFEFF' ? "\uFEFF" : "";
-                xml = xml.TrimStart('\uFEFF');
-                var n1 = xml.Replace("holder_tab_" + oldKey, "holder_tab_" + newKey);
-                n1 = n1.Replace("holder_tab_" + oldKey.ToLowerInvariant(), "holder_tab_" + newKey);
-                n1 = n1.Replace("value=\"" + oldKey + "\"", "value=\"" + newKey + "\"");
+                var norm = path.Replace((char)92, '/');
+                if (rp.Keys.Any(k => k.Replace((char)92, '/').Equals(norm, StringComparison.OrdinalIgnoreCase))) return true;
+                return pk.VisibleEntries.Any(x => x.Path.Replace((char)92, '/').Equals(norm, StringComparison.OrdinalIgnoreCase));
+            }
+            static void DropRepl(Dictionary<string, byte[]> rp, string path)
+            {
+                foreach (var k in rp.Keys.Where(k => k.Replace((char)92, '/').Equals(path.Replace((char)92, '/'),
+                                                                                     StringComparison.OrdinalIgnoreCase)).ToList())
+                    rp.Remove(k);
+            }
+            // twui（本轮缓冲优先：本会话先换图、后改名时，改名要接着改那一份）
+            var twui = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
+            var xml = twui is null ? null : CurrentBytes(pack, repl, twui.Path) is { } tb
+                ? System.Text.Encoding.UTF8.GetString(tb) : null;
+            var bom = xml is { Length: > 0 } && xml[0] == '\uFEFF' ? "\uFEFF" : "";
+            xml = xml?.TrimStart('\uFEFF');
+            // 这个页签**现在**实际用的图与组件名（老遗留：页签 key 是 SKV2，按钮组件/状态还叫 skvg）
+            var art = TwuiTabs.Of(xml, oldKey);
+            var oldLow = oldKey.ToLowerInvariant();
+            var newLow = newKey.ToLowerInvariant();
+            var btnCompOld = art?.BtnComponent ?? oldLow;
+            var stateOld = art?.PanelState ?? oldLow;
+            // **别的页签也在用同一张图 / 同一个按钮组件**（老遗留里会有）→ 那一处**不改名**：
+            // 改名是"加新名 + 旧名留着"，但 twui 里的图路径/组件名是**全局字符串替换** ——
+            // 动了就会把别的页签一起改掉（用户明确要"别影响其他图"）。宁可名字不齐整。
+            var allTabs = TwuiTabs.Parse(xml);
+            bool UsedByOthers(string file) => file.Length > 0 && allTabs.Any(kv =>
+                !kv.Key.Equals(oldKey, StringComparison.OrdinalIgnoreCase)
+                && ((kv.Value.BgFile ?? "").Equals(file, StringComparison.OrdinalIgnoreCase)
+                 || (kv.Value.BtnFile ?? "").Equals(file, StringComparison.OrdinalIgnoreCase)));
+            bool BtnCompUsedByOthers() => allTabs.Any(kv =>
+                !kv.Key.Equals(oldKey, StringComparison.OrdinalIgnoreCase)
+                && (kv.Value.BtnComponent ?? "").Equals(btnCompOld, StringComparison.OrdinalIgnoreCase));
+            var artRenames = new List<(string OldLow, string NewLow)>();
+            foreach (var (kind, actual) in new[] { ("background_images_", art?.BgFile), ("button_upgrade_", art?.BtnFile) })
+            {
+                var oldLowFile = actual ?? kind + oldLow + ".png";
+                var srcPath = $"ui/skins/default/warband_upgrades/{oldLowFile}";
+                var srcBytes = CurrentBytes(pack, repl, srcPath);
+                if (srcBytes is null) { notes.Add($"重命名：{srcPath} 不在包里（这张图跳过）"); continue; }
+                if (UsedByOthers(oldLowFile))
+                {
+                    notes.Add($"重命名：{oldLowFile} 还被别的页签用着 → **这张图不改名**（免得动到别的页签）；" +
+                              $"{newKey} 的页签会继续用它，换图也照旧写这个文件。");
+                    continue;
+                }
+                var baseName = kind + newLow;
+                var newLowFile = baseName + ".png";
+                for (var k = 1; k <= 99 && InPackOrRepl(pack, repl, $"ui/skins/default/warband_upgrades/{newLowFile}"); k++)
+                    newLowFile = $"{baseName}_{k}.png";
+                var dstPath = $"ui/skins/default/warband_upgrades/{newLowFile}";
+                repl[dstPath] = srcBytes;
+                DropRepl(repl, srcPath);
+                changed++;
+                artRenames.Add((oldLowFile, newLowFile));
+                notes.Add($"重命名：{oldLowFile} → {newLowFile}" +
+                          (newLowFile != baseName + ".png" ? "（原名字已被占用 → 自动加 _N，不覆盖）" : "") +
+                          (actual is not null && !actual.Equals(kind + oldLow + ".png", StringComparison.OrdinalIgnoreCase)
+                              ? $"（页签实际用的就是 {actual}，按它改的）" : ""));
+            }
+            // twui：holder_tab_<旧> → 新、按钮组件名、**背景状态名**、value="<旧>" → 新、图路径 → 真实新名字
+            if (xml is not null && twui is not null)
+            {
+                var n1 = Regex.Replace(xml, "holder_tab_" + Regex.Escape(oldKey) + @"\b", "holder_tab_" + newKey,
+                                       RegexOptions.IgnoreCase);
+                // 按钮组件：holder_tab 里挂着的是哪个组件就改哪个（老遗留的组件名可能不是 key）
+                var btnRenamed = true;
+                if (BtnCompUsedByOthers())
+                {
+                    btnRenamed = false;
+                    notes.Add($"重命名：按钮组件 button_toggle_tab_{btnCompOld} 还被别的页签引用 → **组件名不改**（免得动到它）。");
+                }
+                else
+                    n1 = Regex.Replace(n1, "button_toggle_tab_" + Regex.Escape(btnCompOld) + @"\b", "button_toggle_tab_" + newLow,
+                                       RegexOptions.IgnoreCase);
+                n1 = Regex.Replace(n1, "value=\"" + Regex.Escape(oldKey) + "\"", "value=\"" + newKey + "\"",
+                                   RegexOptions.IgnoreCase);
+                foreach (var (o, nn) in artRenames)
+                {
+                    n1 = n1.Replace(o, nn);                              // 正斜杠（twui 里的写法）
+                    n1 = n1.Replace(o.Replace('/', (char)92), nn.Replace('/', (char)92));
+                }
+                // **背景状态名必须 = 页签 key**（游戏按 key 切这个状态；不改的话改名后面板背景不跟着走，
+                // 用户实测"SKVG 改名 SKV2 后显示的还是 SKV 的图"就是这个）；没有这个状态就补一个。
+                if (WarbandTabArt.FindState(n1, stateOld) is not null)
+                {
+                    if (!stateOld.Equals(newLow, StringComparison.OrdinalIgnoreCase))
+                        n1 = WarbandTabArt.RenameState(n1, stateOld, newLow);
+                }
+                else if (WarbandTabArt.FindState(n1, newLow) is null)
+                {
+                    var donor = TwuiTabs.StemOf(artRenames.Count > 0 ? artRenames[0].NewLow : null) ?? stateOld;
+                    if (WarbandTabArt.FindState(n1, donor) is not null)
+                    {
+                        n1 = WarbandTabArt.CloneState(n1, donor, newLow);
+                        notes.Add($"重命名：页签 {newKey} 原本没有背景状态 → 按 {donor} 补了一个 <{newLow}>" +
+                                  "（缺这个状态时游戏里面板背景不跟着页签走）。");
+                    }
+                }
                 if (n1 != xml)
                 {
                     repl[twui.Path] = System.Text.Encoding.UTF8.GetBytes(bom + n1);
                     changed++;
-                    notes.Add($"重命名：twui 里 holder_tab_{oldKey} → {newKey}");
+                    notes.Add($"重命名：twui 里 holder_tab_{oldKey} → {newKey}" +
+                              (btnRenamed ? $"、按钮组件 {btnCompOld} → {newLow}" : "、按钮组件不动") +
+                              (artRenames.Count > 0 ? $"、图路径 {string.Join("、", artRenames.Select(x => x.OldLow + "→" + x.NewLow))}" : ""));
                 }
-            }
-            // 两张图：把旧 key 的图复制成新 key 的（旧文件保留，包不动它）
-            foreach (var kind in new[] { "background_images_", "button_upgrade_" })
-            {
-                var srcPath = $"ui/skins/default/warband_upgrades/{kind}{oldKey.ToLowerInvariant()}.png";
-                var dstPath = $"ui/skins/default/warband_upgrades/{kind}{newKey.ToLowerInvariant()}.png";
-                var srcEntry = pack.Find(srcPath) ?? pack.VisibleEntries.FirstOrDefault(x =>
-                    string.Equals(x.Path.Replace('/', '\\'), srcPath.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase));
-                if (srcEntry is null) { notes.Add($"重命名：{srcPath} 不在包里（这张图跳过）"); continue; }
-                repl[dstPath] = pack.ReadDecoded(srcEntry);
-                changed++;
-                notes.Add($"重命名：{Path.GetFileName(dstPath)} 已按新 key 生成");
             }
             notes.Add($"页签重命名：{oldKey} → {newKey}");
         }
+
+        // ── 6d-2) 页签背景状态自愈：**状态名必须 = 页签 key** ──
+        // 页签在游戏里的面板背景 = `warband_upgrades` 组件 <states> 下按页签 key 命名的那个状态
+        // （TwuiTabs 解析；缺了它游戏按新 key 找不到状态，面板背景不跟着页签走 —— 用户实测
+        // "SKVG 改名 SKV2 后显示的是 SKV 的图"、"换图没生效"都是它）。老版本改名只改了 holder_tab，
+        // 状态名还留在旧 key 上 → 这里给"有组在用的页签"补一个按 key 命名的状态（幂等，已有就跳过）。
+        try
+        {
+            var twui2 = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
+            var tb2 = twui2 is null ? null : CurrentBytes(pack, repl, twui2.Path);
+            var xml2 = tb2 is null ? null : System.Text.Encoding.UTF8.GetString(tb2);
+            if (xml2 is not null && twui2 is not null)
+            {
+                var bom2 = xml2.Length > 0 && xml2[0] == '\uFEFF' ? "\uFEFF" : "";
+                xml2 = xml2.TrimStart('\uFEFF');
+                var want = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in e.InfoEdits)
+                    if (kv.Value.Category is { Length: > 0 } c0) want.Add(c0);
+                foreach (var f in TablePaths(pack, Infos, repl))
+                {
+                    var b = CurrentBytes(pack, repl, f);
+                    if (b is null) continue;
+                    DbTable t;
+                    try { t = DbTable.Decode(b, Infos, schema); } catch { continue; }
+                    var c = t.Columns.FindIndex(x => x.Name.Equals("category", StringComparison.OrdinalIgnoreCase));
+                    if (c < 0) continue;
+                    foreach (var r in t.Rows) { var v = r[c].ToTsv(); if (v.Length > 0) want.Add(v); }
+                }
+                // 本次换过图的页签（换图目标 = 某个页签实际用的背景图）也要保状态
+                foreach (var (target, _) in e.FileReplacements)
+                {
+                    var tn = TwuiTabs.FileName(target);
+                    if (!tn.StartsWith("background_images_", StringComparison.OrdinalIgnoreCase)) continue;
+                    var stem = TwuiTabs.StemOf(tn);
+                    if (stem is not null) want.Add(stem);
+                }
+                var adds = new List<string>();
+                foreach (var key in want)
+                {
+                    if (WarbandTabArt.FindState(xml2, key) is not null) continue;
+                    var art2 = TwuiTabs.Of(xml2, key);
+                    var donor = art2?.PanelState ?? TwuiTabs.StemOf(art2?.BgFile) ?? TwuiTabs.StemOf(art2?.BtnFile);
+                    if (donor is null || WarbandTabArt.FindState(xml2, donor) is null) continue;
+                    xml2 = WarbandTabArt.CloneState(xml2, donor, key.ToLowerInvariant());
+                    adds.Add($"{key}（母版状态 {donor}）");
+                }
+                if (adds.Count > 0)
+                {
+                    repl[twui2.Path] = System.Text.Encoding.UTF8.GetBytes(bom2 + xml2);
+                    changed++;
+                    notes.Add($"页签背景状态：补了 {adds.Count} 个（{string.Join("、", adds.Take(6))}{(adds.Count > 6 ? " 等" : "")}）" +
+                              "—— 状态名必须等于页签 key，缺了它游戏里面板背景不跟着页签走（换图会看着像没生效）。");
+                }
+            }
+        }
+        catch (Exception ex) { notes.Add("页签背景状态自愈跳过：" + ex.Message); }
 
         // ── 6e) 加进画布的兵自动解锁战役经验（main_units.restrict_xp_gain_in_campaign = false）──
         if (e.UnlockXp.Count > 0)

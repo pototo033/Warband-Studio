@@ -1685,8 +1685,14 @@ function openNewPop(mode) {
   const lib = DATA.artLibrary || [];
   // 目标页签：从页签右键菜单进来的「换图」是**被右键的那个**（npTargetCat），其余情况是当前页签
   const curCat = (mode === 'art' && npTargetCat) ? npTargetCat : (activePage || '');   // 注意别和上面的 npCat 变量撞名（cat）
-  // 当前这个页签正在用的图（换图对话框要"显示现在的样子"，而不是只说跟母版一样）
-  const curName = kind => kind + (curCat ? curCat.toLowerCase() : '') + '.png';
+  // 当前这个页签正在用的图（换图对话框要"显示现在的样子"，而不是只说跟母版一样）。
+  // **名字用后台解析出来的实际文件名**（twui 里这个页签引用的那张 —— 改名后可能带 _N、老遗留可能不是 key）；
+  // 按 key 拼约定名会指错文件（用户实测：在用标记/换图看着不是同一张）。
+  const curName = kind => {
+    const m = ((DATA.pageArtName || {})[curCat] || {});
+    const n = kind === 'btn' ? m.btn : m.bg;
+    return n || (kind + (curCat ? curCat.toLowerCase() : '') + '.png');
+  };
   const curUrl = kind => kind === 'background_images_'
     ? ((DATA.pageBg || {})[curCat] || '') : ((DATA.pageBtn || {})[curCat] || '');
   // ── 素材选择器：缩略图 + 文件名，从下往上弹（背景一行 3 个、按钮一行 4 个）──
@@ -1715,7 +1721,7 @@ function openNewPop(mode) {
     };
     // 第一格永远是「保持当前」（= 这个页签现在用的那张，来自当前包）
     const cur = (kind === 'btn' ? (DATA.pageBtn || {})[curCat] : (DATA.pageBg || {})[curCat]) || '';
-    cell('', curCat ? ('保持当前：' + prefix + curCat.toLowerCase() + '.png') : '保持当前', cur, '　（这张来自当前包）');
+    cell('', curCat ? ('保持当前：' + curName(prefix)) : '保持当前', cur, '　（这张来自当前包）');
     if (looksLikeKeep(prefix)) cell('__donor__', '跟默认母版一样', '', '　（新建页签没选图时用它）');
     for (const a of entries)
     {

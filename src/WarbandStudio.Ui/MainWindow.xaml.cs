@@ -122,6 +122,22 @@ public partial class MainWindow : Window
         if (TreeFiles.SelectedItem is ViewModels.TreeItem item) await _vm.OpenCanvasForNodeAsync(item);
     }
 
+    /// <summary>文件树右键菜单打开时：把"只对某类节点有意义"的项开关一下（「关闭 pack」只在 pack 名上有意义）。</summary>
+    private void OnTreeContextOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        if (MenuClosePack is null) return;
+        MenuClosePack.IsEnabled = TreeFiles.SelectedItem is ViewModels.TreeItem it
+                                  && it.IsFolder && it.Path.Length == 0 && it.PackPath is { Length: > 0 };
+    }
+
+    /// <summary>文件树里 pack 名右键 →「关闭这个 pack」：只关这一个包（别的已打开的包留着）。</summary>
+    private async void OnTreeClosePack(object sender, RoutedEventArgs e)
+    {
+        if (TreeFiles.SelectedItem is not ViewModels.TreeItem it || it.PackPath is not { Length: > 0 } p)
+        { _vm.SetStatus("先点一下 pack 名（树最上面那行）再右键"); return; }
+        await _vm.ClosePackByPathAsync(p);
+    }
+
     /// <summary>右栏选中种族/派系 → 刷新兵种库。</summary>
     private void OnFactionSelected(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
@@ -632,6 +648,12 @@ public partial class MainWindow : Window
 
         FileLog.Write($"[selftest] 结论：CmbCostId 清单 {CmbCostId.Items.Count} 条 / CmbCostRes 清单 {CmbCostRes.Items.Count} 条" +
                       "（都 > 0 = 点箭头能看到选项；= 0 就是弹了个空条）");
+
+        // ⑫ 换图落表目标：必须是 **twui 里这个页签实际用的那个文件**（不是按 key 拼的约定名）。
+        //    用户实测"换图没生效"就是写到了页签不看的那个文件上（改名过的页签尤其明显）。
+        var (arts, swap) = _vm.SelfTestTabArt();
+        FileLog.Write($"[selftest] ⑫ 页签实际用图 {arts.Count} 个：" + string.Join("；", arts.Take(10)));
+        FileLog.Write("[selftest] ⑫ 换图落表目标：" + swap);
     }
 
     /// <summary>双击文件树里的 DB 表 → 中间栏开表视图（原生解码）。</summary>

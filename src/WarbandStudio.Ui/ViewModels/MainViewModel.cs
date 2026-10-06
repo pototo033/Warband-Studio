@@ -404,17 +404,18 @@ public sealed class MainViewModel : ObservableObject
     {
         if (tab is CanvasTab ct)
         {
-            var pending = _backend.EditCount > 0 && string.Equals(_backend.Pack?.PackPath, ct.PackPath, StringComparison.OrdinalIgnoreCase);
+            // 未导出编辑按**这个页签那个包**算（不是"当前包"）：右键关别的包时，当前包有编辑不该误弹
+            var pending = _backend.EditCountOf(ct.PackPath) > 0;
             if (pending)
             {
                 // 三选一：0=现在导出（另存为） 1=放弃编辑并关闭 2=取消（不关）
-                var choice = AskSave?.Invoke(ct.Header, _backend.EditSummary) ?? 1;
+                var choice = AskSave?.Invoke(ct.Header, _backend.EditSummaryOf(ct.PackPath)) ?? 1;
                 if (choice == 2) { Status = "已取消关闭"; return; }
                 if (choice == 0)
                 {
                     Status = "关闭前先导出：请选保存位置…";
                     await SaveAsAsync();
-                    if (_backend.EditCount > 0) { Status = "另存被取消，画布保持打开"; return; }
+                    if (_backend.EditCountOf(ct.PackPath) > 0) { Status = "另存被取消，画布保持打开"; return; }
                 }
                 else _backend.DiscardEditsOf(ct.PackPath);   // 清**这个页签那个包**的编辑（当前包可能已经被挪走了）
             }
@@ -1789,28 +1790,82 @@ public sealed class MainViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
+    /// <summary>
+    /// 「关闭 Pack」= 关掉**当前选中的那个包**（画布页签），**不是所有包** ——
+    /// 其它已打开的包和它们的画布原样留着（用户要的就是这个：多开时关一个别把别的也关了）。
+    /// 走的是关页签那条路：有未导出的编辑会先问（导出/放弃/取消）。
+    /// </summary>
     private async Task ClosePackAsync()
     {
-        IsBusy = true;
-        try
+        var tab = _activeCenterTab as CanvasTab
+                  ?? CenterTabs.OfType<CanvasTab>().FirstOrDefault(t =>
+                         string.Equals(t.PackPath, _backend.Pack?.PackPath, StringComparison.OrdinalIgnoreCase));
+        if (tab is null) { Status = "没有打开的包"; return; }
+        await CloseTabAsync(tab);
+        AfterPackClosed();
+    }
+
+    /// <summary>文件树里 pack 名（树根）右键「关闭这个 pack」：只关这一个包。</summary>
+    public async Task ClosePackByPathAsync(string packPath)
+    {
+        var tab = CenterTabs.OfType<CanvasTab>().FirstOrDefault(t =>
+            string.Equals(t.PackPath, packPath, StringComparison.OrdinalIgnoreCase));
+        if (tab is null) { Status = "这个包没有画布页签（可能已经关了）"; return; }
+        // 先切到它的画布：后面的"现在导出/放弃"都对着这个包（不切的话另存会存到别的包上）
+        if (!ReferenceEquals(_activeCenterTab, tab)) ActiveCenterTab = tab;
+        await CloseTabAsync(tab);
+        AfterPackClosed();
+    }
+
+    /// <summary>关掉一个包之后的收尾：清单跟着换（没了就清空）、按钮可用性重算。</summary>
+    private void AfterPackClosed()
+    {
+        if (_backend.Pack is { IsOpen: true }) RefreshPooledResources();
+        else
         {
-            await _backend.ClosePackAsync();
-            TreeRoots.Clear();
-            // 没有"当前包"了 → 成本工坊清单跟着清空（留着旧清单会让人以为还能选/能改）
             CostListAll.Clear();
             CostListShown.Clear();
             PooledResAll.Clear();
             PooledResShown.Clear();
             PackText = "Pack：未打开";
-            Status = "已关闭 pack";
-            Raise(nameof(PackOpen));
-            foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ClosePackCommand }) c.RaiseCanExecute();
         }
-        finally { IsBusy = false; }
+        Raise(nameof(PackOpen));
+        foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ClosePackCommand }) c.RaiseCanExecute();
     }
 
     // ── 诊断 ───────────────────────────────────────────────────
 
+    /// <summary>自检（--ui-selftest）⑫：页签"实际用的图"清单 + 真换一次图，看落表目标是不是那个文件。</summary>
+    public (List<string> Arts, string Swap) SelfTestTabArt()
+    {
+        var arts = new List<string>();
+        try
+        {
+            foreach (var t in _backend.TabKeys())
+                arts.Add($"{t} → {Path.GetFileName(_backend.TabArtPathOf(t, true))} / {Path.GetFileName(_backend.TabArtPathOf(t, false))}");
+        }
+        catch (Exception ex) { arts.Add("(读取失败：" + ex.Message + ")"); }
+        var swap = "(没做)";
+        try
+        {
+            if (arts.Count > 0 && _backend.Pack is { IsOpen: true })
+            {
+                var cat = arts[0].Split(' ')[0];
+                var tmp = Path.Combine(Path.GetTempPath(), "studio_selftest_bg.png");
+                File.WriteAllBytes(tmp, Convert.FromBase64String(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="));
+                _backend.SetTabArt(cat, tmp, null);
+                var hit = _backend.Edits.FileReplacements.LastOrDefault(x => x.Target.Contains("background_images_"));
+                var want = _backend.TabArtPathOf(cat, true);
+                swap = $"页签 {cat}：写 {Path.GetFileName(hit.Target)}" +
+                       (hit.Target.Equals(want, StringComparison.OrdinalIgnoreCase) ? "（= 实际用的那张 ✓）" : $"（✗ 实际用的是 {Path.GetFileName(want)}）");
+            }
+        }
+        catch (Exception ex) { swap = "(换图失败：" + ex.Message + ")"; }
+        return (arts, swap);
+    }
+
+    /// <summary>诊断 ───────────────────────────────────────────</summary>
     private async Task RunDiagnosticsAsync()
     {
         IsBusy = true;
