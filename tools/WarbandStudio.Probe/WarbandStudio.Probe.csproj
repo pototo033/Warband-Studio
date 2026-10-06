@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WarbandStudio.Core\WarbandStudio.Core.csproj" />
+    <ProjectReference Include="..\..\src\WarbandStudio.Rpfm\WarbandStudio.Rpfm.csproj" />
+    <ProjectReference Include="..\..\src\WarbandStudio.Pack\WarbandStudio.Pack.csproj" />
+    <ProjectReference Include="..\..\src\WarbandStudio.Packfile\WarbandStudio.Packfile.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

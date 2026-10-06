@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\WarbandStudio.Core\WarbandStudio.Core.csproj" />
+    <ProjectReference Include="..\WarbandStudio.Rpfm\WarbandStudio.Rpfm.csproj" />
+    <ProjectReference Include="..\WarbandStudio.Pack\WarbandStudio.Pack.csproj" />
+    <ProjectReference Include="..\WarbandStudio.Editors\WarbandStudio.Editors.csproj" />
+    <ProjectReference Include="..\WarbandStudio.Packfile\WarbandStudio.Packfile.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!-- 产物名要干净：WarbandStudio.exe（默认会叫 WarbandStudio.Ui.exe） -->
+    <AssemblyName>WarbandStudio</AssemblyName>
+    <RootNamespace>WarbandStudio.Ui</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 画布页面（WebView2 打开它） -->
+    <None Update="Web\canvas.html" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 内置的 WUU 内容：建「WUU战帮升级」包时优先用这份（不依赖你机器上的 workshop 目录） -->
+    <None Update="bundled\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

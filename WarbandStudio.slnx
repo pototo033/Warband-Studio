@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WarbandStudio.Core/WarbandStudio.Core.csproj" />
+    <Project Path="src/WarbandStudio.Editors/WarbandStudio.Editors.csproj" />
+    <Project Path="src/WarbandStudio.Pack/WarbandStudio.Pack.csproj" />
+    <Project Path="src/WarbandStudio.Packfile/WarbandStudio.Packfile.csproj" />
+    <Project Path="src/WarbandStudio.Rpfm/WarbandStudio.Rpfm.csproj" />
+    <Project Path="src/WarbandStudio.Ui/WarbandStudio.Ui.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WarbandStudio.Tests/WarbandStudio.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/WarbandStudio.Probe/WarbandStudio.Probe.csproj" />
+  </Folder>
+</Solution>

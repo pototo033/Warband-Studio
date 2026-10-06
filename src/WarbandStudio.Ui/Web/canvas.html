@@ -1,0 +1,2423 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>战帮画布</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #151719; color: #E4E7E9;
+               font: 11px "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif; overflow: hidden; }
+  #world { position: absolute; left: 0; top: 0; right: 0; bottom: 0; }
+  /* 页签背景图（游戏里那块面板背景，取自包里的 background_images_<页签>.png） */
+  /* 页签背景图：**按原始像素 1:1 画**（游戏是 1:1 映射：实测 (0,0)→(316,43)、(850,600)→(1167,643)），
+     锚在网格原点 (316,43)；WUU 改过面板尺寸，拉伸会把它压扁，所以不缩放。 */
+  /* 面板 = 整个画布视口（用户口径：不要参考旧工坊的 322×780）。背景**填满面板**（fill，不保持比例）。 */
+  #bg { position: absolute; left: 0; top: 0; width: 1296px; height: 780px; object-fit: fill; opacity: .75; }
+  /* 左侧 UI 区：**不再自己铺底色**（底色在页签背景图里），只把游戏 UI 的元素叠上去 */
+  #uizone { position: absolute; left: 0; top: 0; width: 316px; height: 780px;
+            border-right: 1px dashed #343A4055; overflow: hidden; }
+  #uizone .uzCard { margin: 60px auto 0; width: 140px; height: 210px; border: 1px solid #343A40;
+                    border-radius: 4px; background: #212529 center/cover no-repeat; }
+  #uizone .uzName { margin: 10px auto 0; width: 240px; height: 26px; background: #212529 center/contain no-repeat;
+                    display: flex; align-items: center; justify-content: center;
+                    color: #B0B6BC; font-size: 12px; }
+  #uizone .uzHint { margin-top: 8px; text-align: center; color: #858D95; }
+  #uizone .uzCost { margin: 14px auto 0; width: 240px; display: flex; align-items: center;
+                    justify-content: center; gap: 6px; color: #E2B45F; }
+  #uizone .uzCost img { height: 16px; }
+  #uizone .uzTag { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center;
+                   color: #9C9CAA; font-size: 10px; text-shadow: 0 1px 2px #000; }
+  #grid { position: absolute; left: -1500px; top: -1500px; width: 6000px; height: 4500px; opacity: .35;
+          background-image: linear-gradient(#343A40 1px, transparent 1px),
+                            linear-gradient(90deg, #343A40 1px, transparent 1px);
+          background-size: 50px 50px; background-position: 316px 43px; }
+  #panel { position: absolute; left: 0; top: 0; width: 1296px; height: 780px;
+           border: 1px dashed #464E56; pointer-events: none; }
+  #tree { position: absolute; left: 316px; top: 43px; width: 0; height: 0; }
+  #links { position: absolute; left: -900px; top: -500px; pointer-events: none; }
+  #links path { fill: none; stroke: #5A6470; stroke-width: 2; stroke-linejoin: round; }
+  #links path.hl { stroke: #64A9E2; stroke-width: 3; }
+  #links path.dim { opacity: .12; }
+  #links path.sel { stroke: #E2B45F; stroke-width: 3; }
+  #links.pick { pointer-events: auto; }
+  #links.pick path { pointer-events: stroke; cursor: pointer; }
+  /* 加粗的**透明命中线**：线本身只有 2px，要求精准点中太苛刻 —— 鼠标离 7px 内都算点这条线 */
+  #links path.hit { stroke: transparent; stroke-width: 14; stroke-linejoin: round; }
+  /* 「无连线」：有升级路线、但界面没画线的对 → 画一条**临时黄色虚线**（只在页面里，不写 ui_links） */
+  #links path.nolink { stroke: #E2B45F; stroke-width: 1.6; stroke-dasharray: 7 5; opacity: .85;
+                       pointer-events: stroke; cursor: pointer; }
+  #links path:not(.hit) { pointer-events: none; }          /* 可见线不吃事件（都交给命中线） */
+  #links.pick path.hit { pointer-events: stroke; cursor: pointer; }
+  #links.pick path.hit:hover + path { stroke: #64A9E2; stroke-width: 3; }   /* 悬停高亮 */
+  .card { position: absolute; width: 40px; height: 87px; background: #212529;
+          border: 1px solid #464E56; border-radius: 3px; overflow: hidden;
+          cursor: grab; box-sizing: border-box; }
+  .card:hover { border-color: #64A9E2; z-index: 5; }
+  .card.sel { border-color: #E2B45F; box-shadow: 0 0 0 1px #E2B45F; z-index: 6; }
+  .card.msel { border-color: #72BC91; box-shadow: 0 0 0 2px #72BC91; z-index: 7; }
+  /* 选中一个组时的对比：本组最亮、可升级到的组次亮、其余压暗 */
+  .card.dimmed { opacity: .28; }
+  .card.upnext { border-color: #E2B45F; box-shadow: 0 0 0 1px #E2B45F; opacity: .78; }
+  .card.conn { border-color: #72BC91; box-shadow: 0 0 0 1px #72BC91; z-index: 6; }
+  .card.empty { border-style: dashed; border-color: #858D95; background: #1B1E21cc; }
+  /* 专属兵角标（只有部分派系能拿到的兵） */
+  .card .ex { position: absolute; right: 1px; top: 0; width: 0; height: 0;
+              border-top: 9px solid #E2B45F; border-left: 9px solid transparent; }
+  .card .exTxt { position: absolute; right: 1px; top: 9px; font-size: 8px; color: #E2B45F;
+                 background: #000000a0; padding: 0 2px; border-radius: 2px; display: none; }
+  .card:hover .exTxt { display: block; }
+  /* 连线转点手柄：小方块，选中连线时出现在中间那段上 */
+  #linkKnob { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 3px;
+              background: #E2B45F; border: 1px solid #1B1E21; cursor: grab; z-index: 5; }
+  #linkKnob.hidden { display: none; }
+  #linkKnob.drag { cursor: grabbing; background: #64A9E2; }
+  /* "不在军事组"角标：蓝灰三角 + 提示常显（它就是给人看"这个组没有军事组"的，不能只靠 hover） */
+  .card .ex.nm { border-top-color: #8FC3E8; }
+  .card .exTxt.nmTxt { color: #8FC3E8; display: block; }
+  .card.empty .nm { background: #00000080; color: #858D95; text-align: center; }
+  .card img { width: 38px; height: 85px; display: block; object-fit: cover; }
+  .card .nm { position: absolute; left: 0; right: 0; bottom: 0; background: #000000b0;
+              font-size: 8px; line-height: 9px; padding: 1px 2px; white-space: nowrap; overflow: hidden; }
+  #hdr { position: fixed; left: 8px; top: 6px; color: #B0B6BC; z-index: 10; }
+  #bar { position: fixed; left: 8px; top: 26px; z-index: 20; display: flex; gap: 6px; align-items: center; }
+  #bar button { background: #212529; color: #B0B6BC; border: 1px solid #464E56; border-radius: 4px;
+                padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  #bar button:hover { background: #30363C; color: #E4E7E9; }
+  #bar button.on { background: #263A4B; color: #64A9E2; border-color: #64A9E2; font-weight: 600; }
+  #bar .hint { color: #858D95; }
+  #rail { position: fixed; right: 10px; top: 34px; width: 116px; max-height: 70%;
+          overflow: auto; background: #212529f2; border: 1px solid #464E56; border-radius: 7px;
+          padding: 6px; z-index: 20; }
+  #rail .rtitle { color: #9C9CAA; font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+  #rail .rp { padding: 3px 6px; border-radius: 4px; cursor: pointer; color: #B0B6BC;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rail .rp:hover { background: #30363C; color: #E4E7E9; }
+  #rail .rp.on { background: #263A4B; color: #64A9E2; font-weight: 600; }
+  #rail .rp.foreign { color: #E2B45F; }
+  #rail .rp.foreign::after { content: " ●"; font-size: 9px; }
+  #rail button { width: 100%; margin-top: 6px; background: #212529; color: #64A9E2;
+                 border: 1px solid #464E56; border-radius: 4px; padding: 3px 6px;
+                 font-size: 11px; cursor: pointer; }
+  #rail button:hover { background: #263A4B; }
+  #band { position: absolute; border: 1px solid #64A9E2; background: #64A9E21f;
+          pointer-events: none; display: none; z-index: 8; }
+  #xy { position: fixed; left: 8px; bottom: 8px; color: #858D95; z-index: 10; font-family: Consolas, monospace; }
+  /* 浮动操作面板（卡片 / 升级） */
+  .pop.left { left: 12px; transform: none; }
+  .pop.right { left: auto; right: 12px; transform: none; }
+  .pop { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+         background: #1B1E21f7; border: 1px solid #464E56; border-radius: 7px; padding: 8px 10px;
+         z-index: 30; box-shadow: 0 6px 20px #0008; max-width: 92%; }
+  .pop.hidden { display: none; }
+  /* 手动调整画线：每侧 = 名字 + ↑ + 左右 + 牌 + ↓（1上 2右 3下 4左，直接对应 ui_links 的 position） */
+  .lineSide { display: grid; grid-template-columns: 30px 122px 30px; grid-template-rows: 16px 22px 172px 22px;
+              gap: 3px; justify-items: center; align-items: center; }
+  .lineSide .lsName { grid-area: 1 / 1 / 2 / 4; font-size: 11px; color: #E2B45F; }
+  .lineSide .lsUp { grid-area: 2 / 2; }
+  .lineSide .lsLeft { grid-area: 3 / 1; }
+  .lineSide .lsCard { grid-area: 3 / 2; width: 122px; height: 172px; border: 1px solid #464E56; border-radius: 4px;
+                      background: #151719; display: flex; flex-direction: column; align-items: center; justify-content: center;
+                      overflow: hidden; gap: 2px; }
+  .lineSide .lsCard img { max-width: 100%; max-height: 150px; }
+  .lineSide .lsRight { grid-area: 3 / 3; }
+  .lineSide .lsDown { grid-area: 4 / 2; }
+  .lineSide button { min-width: 0; padding: 2px 6px; }
+  .lineSide button.on { border-color: #E2B45F; color: #E2B45F; box-shadow: 0 0 0 1px #E2B45F; }
+  .pop .t { color: #E4E7E9; font-weight: 600; margin-bottom: 6px; }
+  .pop .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+  .pop label { color: #B0B6BC; }
+  .pop input, .pop select { background: #151719; color: #E4E7E9; border: 1px solid #464E56;
+                            border-radius: 4px; padding: 2px 4px; font-size: 11px; }
+  .pop input[type=number] { width: 64px; }
+  .pop button { background: #212529; color: #E4E7E9; border: 1px solid #464E56; border-radius: 4px;
+                padding: 3px 10px; cursor: pointer; }
+  .pop button.primary { background: #263A4B; color: #64A9E2; border-color: #64A9E2; font-weight: 600; }
+  .pop button.danger { color: #E17979; border-color: #E17979; }
+  .pop button:hover { filter: brightness(1.2); }
+  /* 素材选择器（换图/新建页签）：缩略图 + 文件名，从下往上弹 */
+  .artPick { position: relative; display: inline-block; }
+  .artPick > button { min-width: 200px; text-align: left; }
+  /* 面板放大：格子足够宽、文件名**换行显示两行**（不然 key 被省略号吃掉，看不出是哪个文件） */
+  .artPanel { position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; max-height: 360px; overflow: auto;
+              min-width: 452px; background: #1B1E21f7; border: 1px solid #464E56; border-radius: 6px; padding: 8px;
+              box-shadow: 0 -6px 20px #0008; z-index: 60; display: none; }
+  .artPanel.open { display: block; }
+  .artGrid { display: grid; gap: 8px; }
+  .artGrid.bg { grid-template-columns: repeat(3, 140px); }
+  .artGrid.btn { grid-template-columns: repeat(4, 101px); }
+  .artCell { cursor: pointer; text-align: center; border: 1px solid #343A40; border-radius: 4px; padding: 3px;
+             background: #151719; }
+  .artCell:hover { border-color: #64A9E2; }
+  .artCell.on { border-color: #E2B45F; box-shadow: 0 0 0 1px #E2B45F; }
+  /* 后台标记：这张图正被某个页签用着（选它给别的页签换图只会复制一张，不动原图） */
+  .artCell.use { border-color: #6F8FA8; background: #131B22; }
+  .artCell.use span { color: #8FC3E8; }
+  .artCell.use::after { content: '🔒 在用'; display: block; font-size: 9px; line-height: 10px; color: #8FC3E8; }
+  .artCell img { width: 100%; object-fit: cover; display: block; border-radius: 2px; }
+  .artGrid.bg .artCell img { height: 74px; }
+  .artGrid.btn .artCell img { height: 54px; }
+  .artCell span { display: block; margin-top: 2px; font-size: 10px; line-height: 11px; color: #B0B6BC;
+                  word-break: break-all; max-height: 23px; overflow: hidden; }
+  /* 成本 Key 选择器：原生 <select> 的选项塞不了图片（资源图标）→ 按钮 + 自定义列表 */
+  .costPick { position: relative; display: inline-block; vertical-align: middle; }
+  #rpCostText { width: 300px; background: #151719; color: #E6E8EA; border: 1px solid #464E56; border-radius: 5px;
+                padding: 4px 6px; font-size: 12px; }
+  #rpCostText:focus { border-color: #64A9E2; outline: none; }
+  #rpCostBtn { background: #151719; color: #B0B6BC; border: 1px solid #464E56; border-radius: 5px;
+               padding: 4px 7px; margin-left: 3px; cursor: pointer; font-size: 11px; }
+  #rpCostBtn:hover { border-color: #64A9E2; color: #E6E8EA; }
+  .costList { position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 40; min-width: 320px; max-width: 560px;
+              max-height: 240px; overflow: auto; background: #1B1E21f7; border: 1px solid #464E56; border-radius: 6px;
+              box-shadow: 0 6px 20px #0008; padding: 3px; }
+  .costList .it { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer;
+                  font-size: 12px; color: #E6E8EA; white-space: nowrap; }
+  .costList .it:hover { background: #263A4B; }
+  .costList .it.on { background: #2E4256; }
+  .costList .it img { width: 16px; height: 16px; flex: 0 0 16px; }
+  /* **别漏这条**：画布里的 .hidden 只对 #linkKnob / .pop 定义过，costList 不写就永远显示（"一开就展开、关不掉"的真凶） */
+  .costList.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="world">
+  <div id="uizone">
+    <div class="uzCard" id="uzCard"></div>
+    <div class="uzName" id="uzName">兵种名</div>
+    <div class="uzHint">选择一项升级</div>
+    <div class="uzCost" id="uzCost"><span>升级资金 / 等级</span></div>
+    <div class="uzTag">游戏 UI 区 322×780（兵牌压上来会被挡住）</div>
+  </div>
+  <img id="bg" alt="">
+  <div id="grid"></div>
+  <div id="panel"></div>
+  <div id="tree"><svg id="links" width="3000" height="2200" viewBox="-900 -500 3000 2200"></svg>
+    <!-- 选中连线时的"转点"手柄：拖动 = 调整中间那段的位置（写 mid_link_offset，游戏里同一个效果） -->
+    <div id="linkKnob" class="hidden" title="拖动 = 调整这条线中间那段的位置（写进 mid_link_offset，游戏里一致）"></div></div>
+</div>
+<div id="hdr">战帮画布（等待数据…）</div>
+<div id="bar">
+  <span style="display:flex;flex-direction:column;gap:4px">
+    <button id="bSel" class="on" title="选择/移动：左键拖兵牌改坐标（实时跟随连线），中键拖动整块画面">选择</button>
+    <button id="bSnap" title="吸附：点一下在右边展开 X / Y / 顶点 三种吸附">吸附</button>
+    <button id="bNoLink" title="查看「无连线」升级：把"有升级路线、但界面没画线"的对用**临时黄色虚线**画出来（只在画布上，不写表）；点虚线可打开它的编辑对话框">无连线</button>
+  </span>
+  <span id="snapMenu" style="display:none;background:#212529;border:1px solid #464E56;border-radius:4px;padding:3px 4px;gap:4px;align-items:center">
+    <button id="snapX" title="只按 50 网格吸附 X（左右对齐）">X 吸附</button>
+    <button id="snapY" title="只按 50 网格吸附 Y（上下对齐）">Y 吸附</button>
+    <button id="snapV" class="on" title="X、Y 都吸附到 50 网格顶点">顶点吸附</button>
+    <button id="snapOff" title="取消吸附（再点一次当前模式也能关）">关闭吸附</button>
+  </span>
+
+  <span class="hint" id="barHint">左键拖牌 · 中键拖画面 · 滚轮缩放 · Ctrl+拖牌到右边兵种库=删兵</span>
+</div>
+<div id="rail">
+  <div class="rtitle">页签</div>
+  <div id="railList"></div>
+  <button id="bNewTab" title="新建页签：克隆一个已有页签（twui + 两张图 + categories 行），图可从素材库选">＋ 新建页签</button>
+  <button id="bTabOpen" title="打开别的种族的页签：只影响显示，里面的兵不写军事组授权（兵牌打黄标，可右键改）">打开页签</button>
+</div>
+
+<!-- 打开页签 -->
+<div id="openPop" class="pop hidden">
+  <div class="t">打开页签（可多选；不属于当前种族/派系的会打黄标，不写军事组授权）</div>
+  <div class="row" id="opList" style="max-height:220px;overflow:auto;flex-wrap:wrap"></div>
+  <div class="row">
+    <button id="opOk" class="primary">打开选中的</button>
+    <button id="opClose">取消</button>
+  </div>
+</div>
+
+<!-- 多选操作 -->
+<!-- 多选操作：和单选面板同一个位置（左下）——单选弹这个位置的单选面板，多选自动换成这一块 -->
+<div id="multiPop" class="pop left hidden">
+  <div class="t" id="mBody">—</div>
+  <div class="row" id="mButtons"></div>
+</div>
+
+<!-- 手动调整画线：左边起始兵牌、右边指向兵牌，每侧四个方向箭头（点箭头就把这一端改到那个方向出发） -->
+<div id="linePop" class="pop hidden" style="max-width:min(620px,94vw)">
+  <div class="t" id="lineTitle">调整画线</div>
+  <div class="row" style="align-items:flex-start;gap:26px">
+    <div id="lineFrom"></div>
+    <div id="lineTo"></div>
+  </div>
+  <div class="row">
+    <span id="lineHint" style="color:#8FA0B0;font-size:11px"></span>
+    <button id="lineClose">关闭</button>
+  </div>
+</div>
+
+<!-- 新建分组 / 新建页签 -->
+<div id="newPop" class="pop hidden" style="max-width:min(760px,94vw)">
+  <div class="t" id="npTitle">新建页签</div>
+  <div class="row" id="npGroupRow">
+    <label>组 key</label><input id="npGroupKey" style="width:260px" value="">
+    <label>页签</label><select id="npCat"></select>
+  </div>
+  <div class="row" id="npTabRow">
+    <label>页签 key</label><input id="npTabKey" style="width:120px" placeholder="例如 MOD2">
+  </div>
+  <div class="row" id="npArtRow" style="align-items:flex-start">
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label>背景图（当前包的图；一行 3 个）</label>
+      <div class="artPick">
+        <button id="npBgPick">（保持当前）</button>
+        <div class="artPanel" id="npBgPanel"><div class="artGrid bg" id="npBgGrid"></div></div>
+      </div>
+      <img id="npBgPrev" alt="" style="width:252px;height:120px;object-fit:cover;border:1px solid #464E56;border-radius:4px;background:#151719">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label>按钮图（一行 4 个）</label>
+      <div class="artPick">
+        <button id="npBtnPick">（保持当前）</button>
+        <div class="artPanel" id="npBtnPanel"><div class="artGrid btn" id="npBtnGrid"></div></div>
+      </div>
+      <img id="npBtnPrev" alt="" style="width:80px;height:80px;object-fit:contain;border:1px solid #464E56;border-radius:4px;background:#151719">
+    </div>
+  </div>
+  <div class="row">
+    <button id="npOk" class="primary">创建</button>
+    <button id="npClose">取消</button>
+  </div>
+</div>
+
+<div id="xy">—</div>
+<div id="ctxMenu" class="pop hidden" style="left:0;top:0;transform:none">
+  <div class="t" id="ctxTitle">—</div>
+  <div class="row" id="ctxRow1">
+    <button id="ctxAdd" class="primary">加入当前军事组</button>
+    <button id="ctxDel">从当前军事组移除</button>
+    <button id="ctxUpg">查看已有升级…</button>
+    <button id="ctxSplit">拆分成单兵组</button>
+    <button id="ctxMove">移动到页签…</button>
+    <button id="ctxClose">关闭</button>
+  </div>
+  <!-- 第二页：可移动到的页签（只列当前已打开/可见的页签） -->
+  <div class="row" id="ctxRow2" style="display:none;max-width:420px;flex-wrap:wrap"></div>
+</div>
+<div id="band"></div>
+
+<!-- 画布页签右键：小菜单（重命名 / 应用到其他种族） -->
+<!-- 从其他已加载的 mod 导入页签：左边选包、右边勾页签（导入 = 把它的 categories 行 + twui 块 + 两张图搬进当前包） -->
+<div id="impPop" class="pop hidden" style="max-width:min(560px,94vw)">
+  <div class="t">从其他 mod 导入页签</div>
+  <div class="row">
+    <label>来源包</label><select id="impPack" style="min-width:240px"></select>
+  </div>
+  <div class="row" id="impList" style="max-height:240px;overflow:auto;flex-wrap:wrap"></div>
+  <div class="row">
+    <span id="impHint" style="color:#8FA0B0;font-size:11px">勾选要导入的页签（同名页签已存在会跳过）</span>
+    <button id="impOk" class="primary">导入</button>
+    <button id="impClose">取消</button>
+  </div>
+</div>
+
+<div id="tabMenu" class="pop hidden" style="left:0;top:0;transform:none">
+  <div class="t" id="tmTitle">页签</div>
+  <div class="row" id="tmRow1">
+    <button id="tmRename">重命名…</button>
+    <button id="tmArt">换图…</button>
+    <button id="tmImport">从其他 mod 导入页签…</button>
+    <button id="tmScope">应用到其他种族…</button>
+    <button id="tmClose">关闭</button>
+  </div>
+  <div class="row" id="tmRow2" style="display:none;max-height:220px;overflow:auto;max-width:420px;flex-wrap:wrap"></div>
+  <div class="row" id="tmRow3" style="display:none">
+    <button id="tmScopeOk" class="primary">应用</button>
+    <button id="tmScopeCancel">取消</button>
+  </div>
+</div>
+
+<!-- 已有升级（右键兵牌 → 查看已有升级）：列出这个组作为 base / target 的全部升级关系。
+     跨页（两端不在同一页签）或无界面连线的关系：交换/删除**只改路线表**，不写 ui_links（防跨页连线 bug） -->
+<div id="upgPop" class="pop hidden" style="max-width:min(880px,94vw)">
+  <div class="t" id="upTitle">已有升级</div>
+  <div id="upBody" style="max-height:44vh;overflow:auto;display:flex;flex-direction:column;gap:5px"></div>
+  <div class="row" style="justify-content:space-between">
+    <span style="color:#858D95" id="upHint"></span>
+    <button id="upClose">关闭</button>
+  </div>
+</div>
+
+<!-- 卡片操作 -->
+<div id="cardPop" class="pop left hidden">
+  <div class="t" id="cpTitle">—</div>
+  <div class="row" id="cpUnits"></div>
+  <div class="row">
+    <button id="cpDelCard">删除这张兵卡</button>
+    <button id="cpSplit">拆分成单兵组</button>
+    <button id="cpDelGroup" class="danger">删除整组</button>
+  </div>
+  <div class="row">
+    <label>坐标</label>X <input id="cpX" type="number" style="width:70px">
+    Y <input id="cpY" type="number" style="width:70px">
+    <button id="cpPosOk">应用坐标</button>
+  </div>
+  <div class="row">
+    <label>归到页签</label><select id="cpCat"></select>
+    <button id="cpCatOk">应用</button>
+    <button id="cpClose">关闭</button>
+  </div>
+</div>
+
+<!-- 新建/编辑升级 -->
+<div id="routePop" class="pop hidden">
+  <div class="t" id="rpTitle">新建升级</div>
+  <div class="row">
+    <label>升级为</label><span id="rpPair" style="color:#E2B45F"></span>
+  </div>
+  <div class="row">
+    <label>成本 Key</label>
+    <!-- 原生 select 的选项塞不了图片（资源图标）→ 用"按钮 + 自定义列表"（列表项：图标 + id（金 · 资源）） -->
+    <div id="rpCostPick" class="costPick">
+      <input id="rpCostText" type="text" placeholder="打字筛选成本 id（只查不建）"
+             title="打字按 id 筛选（只查询、不新建）；点右边 ▼ 或点输入框手动展开；选中哪条才用哪条" />
+      <button id="rpCostBtn" type="button" title="展开 / 收起成本列表">▼</button>
+      <div id="rpCostList" class="costList hidden"></div>
+      <input id="rpCost" type="hidden" />
+    </div>
+    <label>新建金额</label><input id="rpAmount" type="number" min="0" step="50" value="0" title="成本 Key 选「新建」时用：工具会自动建一个 studio_cost_<金额> 并在 resource_costs_tables 里写负数">
+  </div>
+  <div class="row">
+    <label>最低等级</label><input id="rpRank" type="number" min="0" max="30" value="2">
+    <label>扣除等级</label><input id="rpSub" type="number" min="0" max="30" value="0">
+    <label><input id="rpMutual" type="checkbox"> 互相升级</label>
+  </div>
+  <div class="row" id="rpNoLinkRow">
+    <label><input id="rpNoLink" type="checkbox" title="勾上 = 只写升级路线（unit_upgrade_to_unit_groups_tables），不写界面连线（ui_links）"> 只升级不连线</label>
+    <span id="rpNoLinkHint" style="color:#8FA0B0;font-size:11px"></span>
+  </div>
+  <div class="row">
+    <button id="rpOk" class="primary">建立升级</button>
+    <button id="rpSwap">⇄ 交换方向</button>
+    <button id="rpMutual2" style="display:none" title="给这条升级补一条**反向**路线（两个方向都能升；界面连线还是这一条，不改方向）">⇅ 双向升级</button>
+    <button id="rpAddLink" style="display:none" title="这条升级有路线但界面没连线：补一条界面连线（同页才能补；跨页的线游戏里画不出来）">添加连线</button>
+    <button id="rpUnlink">取消连线</button>
+    <button id="rpLine">调整画线</button>
+    <button id="rpDel" class="danger">删除这条升级</button>
+    <button id="rpClose">取消</button>
+  </div>
+</div>
+
+<script>
+// 画布里的未捕获错误/未处理 Promise 都回报给工具（写进 app.log），免得再出现“整个画布没反应”这种只能猜的情况
+window.onerror = function (msg, src, line, col) { report({ type: 'jsError', msg: String(msg), line: line, col: col }); };
+// 自检：浮层里的按钮必须真的在浮层里（早期标签不配平时按钮会飘到页面左上角）
+window.addEventListener('load', function () {
+  const chk = ['npOk', 'npClose', 'mButtons', 'ctxRow1', 'upClose'];
+  const bad = [];
+  for (const id of chk) {
+    const el = document.getElementById(id);
+    if (!el) { bad.push(id + '=缺失'); continue; }
+    const pop = el.closest('.pop');
+    if (!pop) bad.push(id + '=不在浮层里');
+  }
+  report({ type: 'domCheck', bad: bad });
+});
+
+window.addEventListener('unhandledrejection', function (e) { report({ type: 'jsError', msg: 'promise: ' + ((e.reason && e.reason.message) || e.reason) }); });
+const CARD_W = 40, CARD_H = 87, SLOT = 46, STUB = 12;   // 步长 46（用户口径，别改成网格的 50）
+let drag = null;
+let DATA = { groups: [], links: [], icons: {} };
+let GROUPS = {};          // 组 key → 组对象（坐标的唯一真相，拖动时改它）
+let LINKELS = [];         // 连线元素 + 两端 key
+let CARDSBYGROUP = {};    // 组 key → [卡元素]
+let pan = { x: 0, y: 0 }, panning = null, zoom = 1;   // 中键平移 + 滚轮缩放
+let band = null;                                      // 框选起点
+let pendingDrop = null;                               // 没页签时先记下这次拖入，建完页签再放
+let railTabs = [];                                    // 页签列当前可见的页签（移动页签的目标）
+let snapOn = false;                                   // 吸附开关
+let snapMode = 'vertex';                              // vertex=顶点 / x=只吸附X / y=只吸附Y
+// 吸附到 50 网格（顶点 = X/Y 都吸；x/y 模式只吸一个轴）。
+// **拖动中、松手上报、落表都用吸完的值** —— 上报原始指针值会让"吸附拖到顶点、一松手又跳回去"。
+function snapPair(x, y) {
+  if (!snapOn) return [x, y];
+  return [snapMode === 'y' ? x : Math.round(x / 50) * 50,
+          snapMode === 'x' ? y : Math.round(y / 50) * 50];
+}
+let mode = 'select';      // select | connect
+let filterRace = '', filterFaction = '';   // 右上选了种族/派系 → 画布只显示对应内容
+let pagePinned = false;                    // 页签被人手动点过（含点「全部」）—— 之后不再自动切页
+let selected = null;      // {group, unit}（单选：用于卡片面板/连接起点）
+let multiGroups = [];     // 多选：组 key 数组（Ctrl 点选 / Ctrl+A / 框选；**以组为单位**）
+let connectFrom = null;   // 连接模式的起点 {group, unit}
+let linkSel = null;       // 选中的连线（{c,p,k,rc,rr,rs}）
+// 出入口：1=上 2=右 3=下 4=左（原版 55 条连线几何反推）
+const DIR = { 1: [0, -1], 2: [1, 0], 3: [0, 1], 4: [-1, 0] };
+
+function box(g) {
+  const n = Math.max(1, (g.units || []).length);
+  return { x: g.x, y: g.y, w: CARD_W + SLOT * (n - 1), h: CARD_H };
+}
+function anchor(g, pos) {
+  const b = box(g);
+  const d = DIR[pos] || [0, 1];
+  const p = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  if (d[0] === 0) p.y = d[1] < 0 ? b.y : b.y + b.h;
+  else p.x = d[0] < 0 ? b.x : b.x + b.w;
+  return { p: p, d: d };
+}
+// 走线（用户实测口径，必须和游戏一致）：
+//   mid_link_offset = 从起点沿**起始方向**先走这么多像素（游戏坐标单位，正负跟坐标轴）**才转第一个弯**；
+//   0 = 就在起始点转（游戏原本的单折路径）。所以中间那一小段的位置 = a1 + mo，
+//   起始方向是上下 → 挪 y；左右 → 挪 x。（以前这里按"两端中点"画，游戏里对不上。）
+function linkPath(a, b, mo) {
+  const A = a.p, B = b.p;
+  const a1 = { x: A.x + a.d[0] * STUB, y: A.y + a.d[1] * STUB };
+  const b1 = { x: B.x + b.d[0] * STUB, y: B.y + b.d[1] * STUB };
+  const mv = mo || 0;
+  let pts;
+  if (a.d[0] === 0) {
+    const my = a1.y + mv;
+    pts = [A, a1, { x: a1.x, y: my }, { x: b1.x, y: my }, b1, B];
+  } else {
+    const mx = a1.x + mv;
+    pts = [A, a1, { x: mx, y: a1.y }, { x: mx, y: b1.y }, b1, B];
+  }
+  return pts.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ');
+}
+
+// 自动 mid offset：让中间那段落在两端中间（就是画布以前的观感），并且**写进表** ——
+// 这样游戏里画出来的走线和画布一模一样（见 §7.45）。偏了就让用户拖转点手柄。
+function autoMidOffset(parentG, childG, parentPos, childPos) {
+  if (!parentG || !childG) return 0;
+  const A = anchor(parentG, parentPos || 3), B = anchor(childG, childPos || 1);
+  const a1x = A.p.x + A.d[0] * STUB, a1y = A.p.y + A.d[1] * STUB;
+  const b1x = B.p.x + B.d[0] * STUB, b1y = B.p.y + B.d[1] * STUB;
+  return A.d[0] === 0 ? Math.round((b1y - a1y) / 2) : Math.round((b1x - a1x) / 2);
+}
+
+// 两个组的相对位置 → 出入口方向位（保证线从对着的那条边出去）
+function positionsFor(parentG, childG) {
+  const pb = box(parentG), cb = box(childG);
+  const pcy = pb.y + pb.h / 2, ccy = cb.y + cb.h / 2;
+  const pcx = pb.x + pb.w / 2, ccx = cb.x + cb.w / 2;
+  if (Math.abs(pcy - ccy) >= Math.abs(pcx - ccx))
+    return pcy <= ccy ? { parentPos: 3, childPos: 1 } : { parentPos: 1, childPos: 3 };
+  return pcx <= ccx ? { parentPos: 2, childPos: 4 } : { parentPos: 4, childPos: 2 };
+}
+
+function renderWarband(data) {
+  DATA = data || { groups: [], links: [] };
+  const tree = document.getElementById('tree');
+  for (const el of Array.from(tree.querySelectorAll('.card'))) el.remove();
+  const svg = document.getElementById('links');
+  svg.innerHTML = '';
+  // 升级线加**箭头**方便看方向（parent=base 来源 → child=target 结果；游戏里不画箭头，这是画布辅助）。
+  // 用 polygon 不用 path：画布多处按 '#links path' 遍历（过滤/自检），别把 marker 里的形状算成一条线。
+  {
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const mk2 = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    mk2.setAttribute('id', 'arrowDir');
+    mk2.setAttribute('viewBox', '0 0 10 10');
+    mk2.setAttribute('refX', '9'); mk2.setAttribute('refY', '5');
+    mk2.setAttribute('markerWidth', '5.5'); mk2.setAttribute('markerHeight', '5.5');
+    mk2.setAttribute('orient', 'auto-start-reverse');   // marker-start 反向定向：箭头指向起点（= child/target）
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', '0,0 10,5 0,10');
+    poly.setAttribute('fill', 'context-stroke');       // 跟着线的颜色（选中黄/高亮蓝也自动跟着）
+    mk2.appendChild(poly); defs.appendChild(mk2); svg.appendChild(defs);
+  }
+  LINKELS = []; CARDSBYGROUP = {}; GROUPS = {};
+  // **重推画布不能把左下角的坐标面板关掉**：应用坐标 / 拖动 / 落表后都会重推一次，
+  // 老代码在这里无条件"清空选中 + 关面板"，表现就是"点了应用坐标，面板自己关了"。
+  // 记下"刚才选中谁、面板/多选开没开"，渲染完按新数据恢复（坐标框显示的就是新值）。
+  const keepSel = selected ? { group: selected.group, unit: selected.unit } : null;
+  const keepPanel = !document.getElementById('cardPop').classList.contains('hidden');
+  const keepMulti = multiGroups.slice();
+  const keepLink = linkSel ? { c: linkSel.c, p: linkSel.p } : null;      // 选中的连线（转点手柄要留住）
+  selected = null; connectFrom = null; linkSel = null;
+  hidePop('cardPop'); hidePop('routePop');
+
+  let cards = 0; const cardRects = [];
+  for (const g of (DATA.groups || [])) GROUPS[g.unit_group] = g;
+
+  let drawn = 0;
+  const seenPair = new Set();                       // 一对组只画一条线（两个方向算同一对，双保险）
+  for (const L of (DATA.links || [])) {
+    const pairKey = [L.c, L.p].sort().join('|');
+    if (seenPair.has(pairKey)) continue;             // 后到的先画……同对重复的直接跳过
+    seenPair.add(pairKey);
+    const d = linkPath3(L);
+    if (d === null) continue;
+    // ① 命中线（透明、14px）：点/悬停都靠它，不用精准点在那 2px 上
+    const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    hit.classList.add('hit');
+    hit.setAttribute('d', d);
+    hit.dataset.c = L.c; hit.dataset.p = L.p;
+    hit.dataset.cat = (GROUPS[L.c].category || '') + '|' + (GROUPS[L.p].category || '');
+    // ② 可见线（真正画出来的那条；不吃事件，由命中线负责 hover 高亮它）
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    el.setAttribute('d', d);
+    // 箭头挂**起点**：路径是从 child 画到 parent 的（linkPath(anchor(gc…), anchor(gp…))），
+    // 用 auto-start-reverse 反向定向 → 箭头落在 child 端、**指向 child** = parent → child 的升级方向 ✓
+    el.setAttribute('marker-start', 'url(#arrowDir)');
+    el.dataset.c = L.c; el.dataset.p = L.p;
+    el.dataset.cat = hit.dataset.cat;
+    const rec = { el: el, hit: hit, c: L.c, p: L.p, cp: L.cp, pp: L.pp, mo: L.mo, k: L.k || '', rc: L.rc || '', rr: L.rr || 0, rs: L.rs || 0 };
+    const pickIt = ev => { ev.stopPropagation(); if (mode === 'select') selectLink(rec); };
+    hit.addEventListener('click', pickIt);
+    el.addEventListener('click', pickIt);
+    svg.appendChild(hit);
+    svg.appendChild(el);
+    LINKELS.push(rec);
+    drawn++;
+  }
+  drawNoLinkRoutes();          // 「无连线」开关：有路线没连线的对 → 临时黄色虚线（只在 UI 层）
+
+  for (const g of (DATA.groups || [])) {
+    if (!g.units || g.units.length === 0) {
+      // 空组：虚线占位框（新建分组之后要能看见、能选中、能往里拖兵）
+      const ph = document.createElement('div');
+      ph.className = 'card empty';
+      ph.style.left = g.x + 'px'; ph.style.top = g.y + 'px';
+      ph.dataset.cat = g.category || '';
+      ph.dataset.group = g.unit_group;
+      ph.dataset.empty = '1';
+      ph.innerHTML = '<div class="nm">空组</div>';
+      ph.title = '空组 ' + g.unit_group + '　坐标(' + g.x + ',' + g.y + ')' +
+                 (g.category ? '　页签 ' + g.category : '') + '　（从兵种库拖兵进来）';
+      ph.addEventListener('mousedown', e => {
+        if (e.button !== 0 || mode === 'connect') return;
+        const live = GROUPS[g.unit_group];
+        drag = { el: ph, g: g.unit_group, i: 0, x: live ? live.x : g.x, y: live ? live.y : g.y,
+                 sx: e.clientX, sy: e.clientY, t0: Date.now(), moved: false, lastX: e.clientX, lastY: e.clientY, curX: live ? live.x : g.x, curY: live ? live.y : g.y };
+        e.preventDefault();
+      });
+      ph.addEventListener('click', () => {
+        if (mode === 'connect') { pickConnect(g.unit_group, ''); return; }
+        selectCard(g.unit_group, '');
+      });
+      tree.appendChild(ph);
+      (CARDSBYGROUP[g.unit_group] = CARDSBYGROUP[g.unit_group] || []).push(ph);
+      cardRects.push({ unit: '(空组)', x: g.x, y: g.y });
+    }
+    (g.units || []).forEach((u, i) => {
+      const d = document.createElement('div');
+      d.className = 'card';
+      const x = g.x + i * SLOT, y = g.y;
+      d.style.left = x + 'px';
+      d.style.top = y + 'px';
+      d.dataset.x = x; d.dataset.y = y;
+      d.dataset.cat = g.category || '';
+      d.dataset.group = g.unit_group;
+      const icon = DATA.icons ? DATA.icons[u] : null;
+      const cn = (DATA.names || {})[u] || shortName(u);
+      // 黄标/专属角标**不在渲染时定死**：存下判断要用的数据，由 updateBadges() 按"当前过滤"实时算。
+      // 渲染时定死的话，切种族/派系后画布不重渲染（数据没变）→ 上一次选择的黄标会一直挂在卡上，
+      // 看起来就是"所有单位都有黄标"（实测日志：foreign == shown，同一页再点一次又变成 0）。
+      d._gR = (DATA.groupRaces || {})[g.unit_group] || [];      // 只在"确实知道这个组属于谁"时才判黄标
+      d._gF = (DATA.groupFactions || {})[g.unit_group] || [];
+      d._excl = DATA.unitExcl ? DATA.unitExcl[u] : null;
+      d.innerHTML = (icon ? '<img src="' + icon + '" loading="lazy">' : '') +
+                    '<div class="nm">' + cn + '</div>';
+      // 角标挂载位单独建元素（不用 innerHTML 拼）：离线测试的 DOM 桩能查得到它
+      const bdg = document.createElement('div');
+      bdg.className = 'bdg';
+      d.appendChild(bdg);
+      d.title = cn + '　' + u + '　坐标(' + x + ',' + y + ')' + (g.category ? '　页签 ' + g.category : '') +
+                '　（左键拖=移动，Ctrl+拖到右侧兵种库=删除）';
+      d.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        if (mode === 'connect') return;                       // 连接模式：点击选端点，不拖
+        // 起点必须现取（渲染时捕获的 x/y 在上一次拖动后就过期了 —— 直接用它会导致"二次拖动瞬移"）
+        const live = GROUPS[g.unit_group];
+        const bx = (live ? live.x : g.x) + i * SLOT, by = live ? live.y : g.y;
+        // 如果这个组在多选里（且多选了不止一个）→ 一起拖：记下每个选中组的起点
+        const keys = (multiGroups.includes(g.unit_group) && multiGroups.length > 1)
+          ? multiGroups.slice() : [g.unit_group];
+        drag = { el: d, g: g.unit_group, i: i, x: bx, y: by, sx: e.clientX, sy: e.clientY, t0: Date.now(), moved: false,
+                 lastX: e.clientX, lastY: e.clientY, curX: bx, curY: by,
+                 groups: keys.filter(k => GROUPS[k]).map(k => ({ k: k, x: GROUPS[k].x, y: GROUPS[k].y })) };
+        if (e.ctrlKey) d.draggable = true;                    // Ctrl+拖 = 拖出去（拖进兵种库=删）
+        e.preventDefault();
+      });
+      d.addEventListener('dragstart', e => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', JSON.stringify({ unit: u, group: g.unit_group }));
+      });
+      d.addEventListener('click', e => {
+        // 多选以**组**为单位：Ctrl 点组里任意一张牌 = 选中整个组
+        if (e.ctrlKey || e.metaKey) {
+          // 之前"单选"的那个也要并进多选（先点一个、再 Ctrl 点第二个时，第一个才算数）
+          if (selected && selected.group && !multiGroups.includes(selected.group)) addMulti(selected.group);
+          selected = null;
+          for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('sel', 'dimmed', 'upnext');
+          toggleMulti(g.unit_group);
+          return;
+        }
+        multiGroups = [];
+        selectCard(g.unit_group, u);
+        paintMulti();
+      });
+      // 右键：加入 / 移出「当前军事组」（按右上选中的种族/派系）
+      d.addEventListener('contextmenu', ev => {
+        ev.preventDefault();
+        // 右键作用于**当前选中的组**（框选/Ctrl 多选都在内）；如果右键的这个组没被选中，就只作用于它
+        const keys = multiGroups.includes(g.unit_group) ? multiGroups.slice() : [g.unit_group];
+        ctxGroups = keys.slice();
+        const units = [];
+        for (const k of keys) units.push(...(((GROUPS[k] || {}).units) || []));
+        ctxUnits = units.slice();
+        ctxGroup = keys.length > 1 ? (keys.length + ' 个组') : g.unit_group;
+        const m = document.getElementById('ctxMenu');
+        const t0 = document.getElementById('ctxTitle');
+        t0.textContent = '组 ' + (units[0] ? ((DATA.names || {})[units[0]] || shortName(units[0])) : ctxGroup)
+          + '（' + units.length + ' 个兵）'
+          + (filterFaction ? '　当前军事组：' + filterFaction : (filterRace ? '　当前种族：' + filterRace : '　（右侧没选种族/派系）'));
+        t0.title = '组 key：' + ctxGroups.join(' / ');
+        m.style.left = ev.clientX + 'px';
+        m.style.top = ev.clientY + 'px';
+        m.classList.remove('hidden');
+      });
+      d.addEventListener('mouseenter', () => highlight(g.unit_group));
+      d.addEventListener('mouseleave', () => highlight(null));
+      tree.appendChild(d);
+      (CARDSBYGROUP[g.unit_group] = CARDSBYGROUP[g.unit_group] || []).push(d);
+      cardRects.push({ unit: u, x: x, y: y });
+      cards++;
+    });
+  }
+
+  buildRail(DATA.pages || []);
+  applyFilter();
+  applySkin();
+  syncLinkPick();                  // 渲染完就把"连线可点"按当前状态定好（不用先点兵牌）
+  // 把渲染前记下的选中/面板恢复回来（兵被删了就退到这一组的第一张牌；组没了就不恢复）
+  if (keepSel && GROUPS[keepSel.group]) {
+    const units0 = GROUPS[keepSel.group].units || [];
+    const unit0 = units0.includes(keepSel.unit) ? keepSel.unit : (units0[0] || '');
+    selectCard(keepSel.group, unit0);          // 选中态 / 高亮 / 坐标框一起按新数据重画
+    if (!keepPanel) hidePop('cardPop');        // 原来就是关着的 → 别硬打开
+  }
+  if (keepMulti.length > 0) { multiGroups = keepMulti.filter(k => GROUPS[k]); paintMulti(); }
+  // 选中的连线也恢复（拖着转点手柄时会被重推打断，不然每拖一次都要重新点线）
+  if (keepLink) {
+    const again = LINKELS.find(L => L.c === keepLink.c && L.p === keepLink.p);
+    if (again) { linkSel = null; selectLinkSilent(again); }
+  }
+  // 过滤会改 display，但不动对比度类；选中态在 selectCard 里维护
+  // 「查看已有升级」面板开着的时候跟着数据重算（改金额/交换/删除之后行要立刻变）
+  if (upgGroups.length > 0 && !document.getElementById('upgPop').classList.contains('hidden')) buildUpgPanel();
+  // 画线面板开着也重算一次：刚点的箭头要立刻亮起来（数据已经落进编辑集）
+  if (lineCur && !document.getElementById('linePop').classList.contains('hidden')) buildLinePop();
+  report({ type: 'rendered', groups: (DATA.groups || []).length, cards: cards, links: drawn,
+           linkRows: (DATA.links || []).length, icons: Object.keys(DATA.icons || {}).length,
+           pages: (DATA.pages || []).length, routes: DATA.diag ? DATA.diag.routes : null,
+           routeNoLink: DATA.diag ? DATA.diag.routeNoLink.length : null,
+           linkNoRoute: DATA.diag ? DATA.diag.linkNoRoute.length : null,
+           edits: DATA.edits || '', costKeys: (DATA.costKeys || []).length,
+           routeRows: (DATA.routeList || []).length,
+           bg: Object.keys(DATA.pageBg || {}).length, skin: Object.keys(DATA.skin || {}).length,
+           excl: Object.keys(DATA.unitExcl || {}).length, races: Object.keys(DATA.groupRaces || {}).length,
+           firstCard: cardRects[0] || null, lastCard: cardRects[cardRects.length - 1] || null });
+  document.getElementById('hdr').textContent =
+    '战帮画布：' + (DATA.groups || []).length + ' 组 / ' + cards + ' 张牌 / 连线 ' + drawn +
+    (DATA.diag ? '（路线 ' + DATA.diag.routes + ' 条）' : '') +
+    (DATA.pages ? ' · 页签 ' + DATA.pages.length + ' 个' : '') +
+    (DATA.edits ? ' · 未导出编辑：' + DATA.edits : '');
+}
+
+function linkPath3(L) {
+  const gc = GROUPS[L.c], gp = GROUPS[L.p];
+  if (!gc || !gp) return null;
+  return linkPath(anchor(gc, L.cp), anchor(gp, L.pp), L.mo);
+}
+// 转点手柄：放在"中间那段"的中点。拖动它 → 改 rec.mo（沿起始方向挪多少像素）→ 立刻重画，
+// 松手把新 mo 发给后端（写进 ui_links.mid_link_offset，游戏里同一条走线）。
+let knobDrag = null;
+function knobPosOf(rec) {
+  const gc = GROUPS[rec.c], gp = GROUPS[rec.p];
+  if (!gc || !gp) return null;
+  const A = anchor(gp, rec.pp), B = anchor(gc, rec.cp);
+  const a1 = { x: A.p.x + A.d[0] * STUB, y: A.p.y + A.d[1] * STUB };
+  const b1 = { x: B.p.x + B.d[0] * STUB, y: B.p.y + B.d[1] * STUB };
+  const mv = rec.mo || 0;
+  const mid = A.d[0] === 0
+    ? { x: a1.x, y: a1.y + mv, x2: b1.x, y2: b1.y }
+    : { x: a1.x + mv, y: a1.y, x2: a1.x, y2: b1.y };
+  return A.d[0] === 0
+    ? { x: (a1.x + b1.x) / 2, y: a1.y + mv, a1: a1, vertical: true }
+    : { x: a1.x + mv, y: (a1.y + b1.y) / 2, a1: a1, vertical: false };
+}
+function selectLinkSilent(rec) {
+  linkSel = rec;
+  for (const e of LINKELS) e.el.classList.remove('sel');
+  rec.el.classList.add('sel');
+  showKnob(rec);
+}
+function showKnob(rec) {
+  const k = document.getElementById('linkKnob');
+  if (!rec) { k.classList.add('hidden'); return; }
+  const p = knobPosOf(rec);
+  if (!p) { k.classList.add('hidden'); return; }
+  k.style.left = Math.round(p.x) + 'px';
+  k.style.top = Math.round(p.y) + 'px';
+  k.classList.remove('hidden');
+}
+function hideKnob() { document.getElementById('linkKnob').classList.add('hidden'); }
+document.getElementById('linkKnob').addEventListener('mousedown', e => {
+  if (e.button !== 0 || !linkSel) return;
+  e.preventDefault(); e.stopPropagation();
+  knobDrag = { rec: linkSel, start: (linkSel.mo || 0) };
+  document.getElementById('linkKnob').classList.add('drag');
+});
+addEventListener('mousemove', e => {
+  if (!knobDrag) return;
+  const rec = knobDrag.rec;
+  const p = knobPosOf(rec);
+  if (!p) return;
+  const t = document.getElementById('tree').getBoundingClientRect();
+  const px = (e.clientX - t.left) / zoom, py = (e.clientY - t.top) / zoom;   // 画布像素 = 游戏坐标
+  rec.mo = Math.round(p.vertical ? (py - p.a1.y) : (px - p.a1.x));
+  const d = linkPath3(rec);
+  if (d !== null) setLinkD(rec, d);
+  showKnob(rec);
+  document.getElementById('xy').textContent = 'mid_link_offset = ' + rec.mo + '（沿起始方向走的像素；0 = 起点处就转）';
+});
+addEventListener('mouseup', e => {
+  if (!knobDrag) return;
+  const rec = knobDrag.rec;
+  knobDrag = null;
+  document.getElementById('linkKnob').classList.remove('drag');
+  report({ type: 'adjustLink', child: rec.c, parent: rec.p, childPos: rec.cp, parentPos: rec.pp,
+           midOffset: rec.mo || 0 });
+});
+
+// 打开"这条升级"的编辑对话框（多选面板「升级设置…」/ 无连线虚线点击 / 查看已有升级面板共用同一套字段）
+function openRouteEdit(rel) {
+  const pos = positionsFor(GROUPS[rel.b], GROUPS[rel.t]);
+  routeDialog('编辑升级', { base: rel.b, target: rel.t, key: rel.k, cost: rel.c, rank: rel.rr, sub: rel.rs,
+                            childPos: pos.childPos, parentPos: pos.parentPos, routeOnly: false, hasLink: !!rel.link });
+}
+
+// ── 「无连线」：有升级路线（unit_upgrade_to_unit_groups）但界面没有连线（ui_links）的对，
+//    画一条**临时黄色虚线**方便编辑 —— **只在页面里画，不写任何表**（不是真连线，重推画布就重算）。
+let noLinkOn = false;
+function pairHasLink(a, b) {
+  return (DATA.links || []).some(L => (L.c === a && L.p === b) || (L.c === b && L.p === a));
+}
+function drawNoLinkRoutes() {
+  const svg = document.getElementById('links');
+  for (const el of Array.from(svg.querySelectorAll('path.nolink'))) el.remove();
+  if (!noLinkOn) return 0;
+  let n = 0;
+  for (const r of (DATA.routeList || [])) {
+    const gb = GROUPS[r.b], gt = GROUPS[r.t];
+    if (!gb || !gt || pairHasLink(r.b, r.t)) continue;
+    const pos = positionsFor(gb, gt);
+    const mo = autoMidOffset(gb, gt, pos.parentPos, pos.childPos);
+    const d = linkPath(anchor(gt, pos.childPos), anchor(gb, pos.parentPos), mo);
+    if (!d) continue;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    el.classList.add('nolink');
+    el.setAttribute('d', d);
+    el.setAttribute('marker-start', 'url(#arrowDir)');     // 虚线同理：箭头落在 child 端、指向 child
+    // **和真连线一样带页签/两端 key**：applyFilter 按 dataset.cat 过滤 —— 不带的话所有页签的虚线会叠在一起（用户实测）
+    el.dataset.cat = (GROUPS[r.t].category || '') + '|' + (GROUPS[r.b].category || '');
+    el.dataset.c = r.t; el.dataset.p = r.b;
+    el.title = '有升级、无连线：' + r.k;                    // 悬浮给升级 key
+    el.addEventListener('click', ev => {                    // 点它 = 打开这条升级的编辑对话框（好顺手补/删）
+      ev.stopPropagation();
+      routeDialog('编辑升级（无连线）', { base: r.b, target: r.t, key: r.k, cost: r.c, rank: r.rr, sub: r.rs,
+                                         childPos: pos.childPos, parentPos: pos.parentPos, routeOnly: false, hasLink: false });
+    });
+    svg.appendChild(el);
+    n++;
+  }
+  return n;
+}
+document.getElementById('bNoLink').onclick = () => {
+  noLinkOn = !noLinkOn;
+  const btn = document.getElementById('bNoLink');
+  if (noLinkOn) btn.classList.add('on'); else btn.classList.remove('on');
+  const n = drawNoLinkRoutes();
+  applyFilter();                       // 立刻按当前页签过滤（不然刚画的虚线要等下一次重推才归位）
+  document.getElementById('xy').textContent = noLinkOn
+    ? ('「无连线」：画出 ' + n + ' 条临时虚线（有升级路线、界面没连线的对；只是可视化，不写表）')
+    : '已关闭「无连线」显示';
+};
+
+// 一条线有两条 path（命中线 + 可见线），改路径要两条一起改
+function setLinkD(rec, d) {
+  rec.el.setAttribute('d', d);
+  if (rec.hit) rec.hit.setAttribute('d', d);
+}
+function redrawLinksFor(gk) {
+  let n = 0;
+  for (const L of LINKELS) {
+    if (L.c !== gk && L.p !== gk) continue;
+    const d = linkPath3(L);
+    if (d !== null) { setLinkD(L, d); n++; }
+  }
+  return n;
+}
+function applyPan() {
+  document.getElementById('world').style.transform =
+    'translate(' + pan.x + 'px, ' + pan.y + 'px) scale(' + zoom + ')';
+  document.getElementById('world').style.transformOrigin = '0 0';
+  report({ type: 'pan', x: Math.round(pan.x), y: Math.round(pan.y), zoom: Math.round(zoom * 100) / 100 });
+}
+function resetPan() { pan = { x: 0, y: 0 }; zoom = 1; applyPan(); }
+// 滚轮缩放（以鼠标位置为中心，25%–400%）
+function onWheel(e) {
+  // 鼠标在页签列或浮动面板上时：让它自己滚，不缩放画布
+  if (e.target && e.target.closest && e.target.closest('#rail, .pop')) return;
+  e.preventDefault();
+  const before = zoom;
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  zoom = Math.min(4, Math.max(0.25, zoom * factor));
+  if (zoom === before) return;
+  const k = zoom / before;
+  pan.x = e.clientX - (e.clientX - pan.x) * k;
+  pan.y = e.clientY - (e.clientY - pan.y) * k;
+  applyPan();
+}
+function report(msg) {
+  try { if (window.chrome && chrome.webview) chrome.webview.postMessage(msg); } catch (e) { }
+}
+function highlight(groupKey) {
+  const dim = !!groupKey;
+  for (const e of LINKELS) {
+    const on = dim && (e.c === groupKey || e.p === groupKey);
+    e.el.classList.toggle('hl', on);
+    e.el.classList.toggle('dim', dim && !on);
+  }
+}
+function shortName(key) {
+  const p = (key || '').split('_');
+  return p.length > 2 ? p.slice(-2).join('_') : (key || '');
+}
+function gkey(g) { return typeof g === 'string' ? g : g.unit_group; }
+
+/* ───────────── 浮动面板 ───────────── */
+// 「连线可点」这个类**必须现算**：以前的写法只在点「选择」按钮/开浮层时设一次，
+// 页面重载（切种族会重开画布）后就没人设过 → 表现就是"要先点一下兵牌，连线才点得动"。
+function syncLinkPick() {
+  const routeOpen = !document.getElementById('routePop').classList.contains('hidden');
+  document.getElementById('links').classList.toggle('pick', mode === 'select' || routeOpen);
+}
+function showPop(id) { document.getElementById(id).classList.remove('hidden'); syncLinkPick(); }
+function hidePop(id) { document.getElementById(id).classList.add('hidden'); if (id === 'routePop') syncLinkPick(); }
+
+// 这个组能升级到的组（路线表 base → target，画布数据里是 "base → target" 文本）
+function upgradeTargets(gk) {
+  const out = [];
+  for (const r of (DATA.routes || [])) {
+    const i = r.indexOf(' → ');
+    if (i > 0 && r.slice(0, i) === gk) out.push(r.slice(i + 3));
+  }
+  return out;
+}
+
+// 两端组不在同一页签 = 跨页：这种升级关系**只写路线表**（游戏面板按页签画坐标层，跨页的线画不出来）
+function crossPagePair(a, b) {
+  const ca = (GROUPS[a] || {}).category || '';
+  const cb = (GROUPS[b] || {}).category || '';
+  return ca !== cb;
+}
+
+function selectCard(group, unit) {
+  selected = { group: group, unit: unit };
+  for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('sel', 'conn', 'dimmed', 'upnext');
+  const targets = upgradeTargets(group);
+  for (const el of document.querySelectorAll('#tree .card')) {
+    const gk = el.dataset.group;
+    if (gk === group) { el.classList.add('sel'); continue; }
+    if (targets.includes(gk)) { el.classList.add('upnext'); continue; }   // 可以由本组升级而来 → 次高亮
+    el.classList.add('dimmed');                                          // 其余压暗，突出对比
+  }
+  showPop('cardPop');            // **先显示再刷新**：refreshCardPanel 在"面板藏着"时会早退（livePos 那条路要这个早退），
+  refreshCardPanel();            //   先刷新的话输入框会留着上一个兵的坐标（用户实测：点 A → 点空白 → 点 B，坐标还是 A 的）
+  hidePop('multiPop');           // 单选菜单和多选菜单是同一个位置：单选时收起多选那一块
+  hidePop('routePop');
+  applySkin();
+}
+
+// 卡片面板里的字段按**当前数据**重填（重新渲染/过滤之后也跟着变，不再显示旧坐标/旧页签）
+function refreshCardPanel() {
+  if (!selected || !selected.group) return;
+  const pop = document.getElementById('cardPop');
+  if (pop.classList.contains('hidden')) return;
+  const group = selected.group;
+  const unit = selected.unit;
+  const g = GROUPS[group] || { units: [] };
+  const cnOf = u => (DATA.names || {})[u] || shortName(u);
+  const title = document.getElementById('cpTitle');
+  title.textContent = '组 ' + (g.units && g.units[0] ? cnOf(g.units[0]) : '(空组)')
+                    + (g.units && g.units.length > 1 ? ' 等 ' + g.units.length + ' 个兵' : '')
+                    + '（' + (g.units || []).length + ' 个兵）';
+  title.title = '组 key：' + group;                       // 悬浮看真实 key
+  document.getElementById('cpUnits').innerHTML =
+    (g.units || []).map(u => '<span title="' + u + '" style="color:' + (u === unit ? '#E2B45F' : '#B0B6BC') + '">'
+                            + cnOf(u) + '</span>').join('');
+  document.getElementById('cpX').value = (g.x | 0);
+  document.getElementById('cpY').value = (g.y | 0);
+  // 只有一个兵就没什么可拆的 → 把按钮藏起来
+  document.getElementById('cpSplit').style.display = ((g.units || []).length > 1) ? '' : 'none';
+  const cat = document.getElementById('cpCat');
+  cat.innerHTML = '';
+  const opt = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; };
+  cat.appendChild(opt('', '（不写页签）'));
+  for (const p of (DATA.pages || [])) cat.appendChild(opt(p, p));
+  cat.value = g.category || '';
+}
+
+function pickConnect(group, unit) {
+  if (!connectFrom) {
+    connectFrom = { group: group, unit: unit };
+    connectFrom = connectFrom;
+    for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('conn');
+    (CARDSBYGROUP[group] || []).forEach(el => el.classList.add('conn'));
+    document.getElementById('barHint').textContent = '连接：起点已选（' + group + '）→ 现在点“升级后的组”';
+    return;
+  }
+  if (connectFrom.group === group) {                    // 点自己 = 取消
+    connectFrom = null;
+    for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('conn');
+    document.getElementById('barHint').textContent = '左键拖牌 · 中键拖画面 · Ctrl+拖牌到右边兵种库=删兵';
+    return;
+  }
+  const base = GROUPS[connectFrom.group], target = GROUPS[group];
+  const pos = positionsFor(base, target);
+  // 直接建链接：第一个点的是来源（base），第二个是结果（target）——和原版方向一致（parent=base, child=target）
+  // 跨页（两端不在同一页签）：只写路线表，不写界面连线（面板画不出跨页的线，写了就是垃圾行）
+  const cp = crossPagePair(connectFrom.group, group);
+  report({ type: 'addRoute', base: connectFrom.group, target: group, cost: '', rank: 2, sub: 0,
+           mutual: false, childPos: pos.childPos, parentPos: pos.parentPos, routeOnly: cp, hasLink: false,
+           mo: autoMidOffset(GROUPS[base], GROUPS[target], pos.parentPos, pos.childPos) });
+  connectFrom = null;
+  for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('conn');
+  document.getElementById('barHint').textContent = cp
+    ? '已建升级：' + base.unit_group + ' → ' + target.unit_group + '（跨页：只写路线表，不画连线）'
+    : '已建链接：' + base.unit_group + ' → ' + target.unit_group + '（点那条线可以改金额/等级/交换方向/删除）';
+}
+
+function selectLink(rec) {
+  linkSel = rec;
+  for (const e of LINKELS) e.el.classList.remove('sel');
+  rec.el.classList.add('sel');
+  showKnob(rec);                                   // 转点手柄（拖它 = 调 mid_link_offset）
+  const pos = positionsFor(GROUPS[rec.p], GROUPS[rec.c]);   // parent=base, child=target
+  routeDialog('编辑升级', {
+    base: rec.p, target: rec.c, key: rec.k,
+    cost: rec.rc, rank: rec.rr, sub: rec.rs,
+    childPos: rec.cp, parentPos: rec.pp,
+    hasLink: true,                                 // 从连线上点开的 → 一定有连线（对话框里给「取消连线」）
+    mo: rec.mo || 0,                               // 表里现在这个 mid_link_offset（拖过转点就变）
+    routeOnly: crossPagePair(rec.p, rec.c),        // 正常可见的连线都是同页；跨页连线只在数据里（画不出来）
+  });
+}
+
+// 成本 Key 选择器（自定义列表）：开/关 + 按钮点击
+let costListOpen = false;
+function showCostList(on) {
+  costListOpen = !!on;
+  const el = document.getElementById('rpCostList');
+  if (costListOpen) el.classList.remove('hidden'); else el.classList.add('hidden');
+}
+document.getElementById('rpCostBtn').onclick = () => showCostList(!costListOpen);
+
+function routeDialog(title, cur) {
+  const nmOf = k => { const gg = GROUPS[k]; const u0 = gg && gg.units && gg.units[0];
+                      return u0 ? ((DATA.names || {})[u0] || shortName(u0)) : k; };
+  const rp = document.getElementById('rpTitle');
+  rp.textContent = title + '：' + nmOf(cur.base) + ' → ' + nmOf(cur.target) + (cur.key ? '' : '（会新建）');
+  rp.title = '组 key：' + (cur.base || '') + ' → ' + (cur.target || '') + (cur.key ? '　升级 key：' + cur.key : '');
+  // 跨页/无连线的路由：交换方向与删除**只改路线表**（不写 ui_links），在对话框里明说一句
+  document.getElementById('rpPair').textContent =
+    nmOf(cur.base) + ' → ' + nmOf(cur.target) +
+    (cur.routeOnly ? '　（跨页/无连线：交换与删除只改路线表）' : '');
+  const sel = document.getElementById('rpCost');          // 隐藏 input：值照旧（rpOk / rpSwap 都读它）
+  const costBtn = document.getElementById('rpCostBtn');
+  const costText = document.getElementById('rpCostText');   // 可输入的成本框（打字只筛选、不新建）
+  const costList = document.getElementById('rpCostList');
+  costList.innerHTML = '';
+  const keys = (DATA.costKeys || []).map(x => (typeof x === 'string' ? { k: x, v: 0, pools: [] } : x));
+  // 成本后面带具体数值：金 = resource_costs_tables.treasury_cost（**负=消耗**）；
+  // pools = resource_cost_pooled_resource_junctions_tables 里的额外资源（a = 数量；r = 资源名、i = 资源图标 url）
+  const label = x => x.k + '（' + costDetail(x.v, x.pools) + '）';
+  // 成本属于**当前包**：写进下拉的第一条提示（多画布时一眼看出是不是看错包了）
+  const packTip = DATA.packName ? ('　当前包：' + DATA.packName) : '';
+  const costItem = (v, text, pools) => {
+    const it = document.createElement('div');
+    it.className = 'it';
+    it._k = v;                                            // 筛选用（打一半按 id/明细匹配）
+    for (const p of (pools || [])) {                      // 有资源图标就带上（原生 select 塞不了图片，才改成自定义列表）
+      if (!p || !p.i) continue;
+      const im = document.createElement('img'); im.src = p.i; it.appendChild(im);
+    }
+    const sp = document.createElement('span'); sp.textContent = text; it.appendChild(sp);
+    it.title = text;                                      // 悬浮也显示明细（离线测试也靠它读文本）
+    const pick = () => { sel.value = v; costText.value = v; showCostList(false); };
+    it.onclick = pick;
+    it.addEventListener('mousedown', ev => ev.preventDefault());   // 别让输入框失焦（否则 click 还没到列表就先收起了）
+    return it;
+  };
+  costList.appendChild(costItem('__new__', '★ 新建成本 Key（用右边金额）', null));   // 自定义金额放最上面
+  costList.appendChild(costItem('', '（不写成本）' + packTip, null));
+  for (const x of keys) costList.appendChild(costItem(x.k, label(x), x.pools));
+  const has = keys.some(x => x.k === cur.cost);
+  // **不认识的成本照实显示**：以前遇到"不在清单里的成本"直接落成「不写成本」，
+  // 看着像"改名后成本丢了"（其实是指着一个旧 id ✗）→ 现在把它当一条附加项列出来，一眼能看出指着谁
+  if (cur.cost && !has) {
+    const extra = costItem(cur.cost, cur.cost + '（不在当前包的成本清单里）', null);
+    costList.appendChild(extra);
+    keys.push({ k: cur.cost, v: 0, pools: [] });
+  }
+  sel.value = cur.cost || (keys[0] ? keys[0].k : '');
+  const pickIdx = sel.value === '__new__' ? 0 : (sel.value === '' ? 1 : 2 + keys.findIndex(x => x.k === sel.value));
+  if (costList.children[pickIdx]) costList.children[pickIdx].classList.add('on');
+  costText.value = sel.value;                            // 输入框里就是成本 id（打字筛选、**不新建**）
+  // 打字 = 只筛选列表（不改变已选中的成本；打一半没选中就保持原值）
+  costText.oninput = () => {
+    const t = costText.value.trim().toLowerCase();
+    for (const it of costList.children) {
+      const hit = t.length === 0 || String(it._k || '').toLowerCase().indexOf(t) >= 0
+                  || String(it.title || '').toLowerCase().indexOf(t) >= 0;
+      it.style.display = hit ? '' : 'none';
+    }
+    showCostList(true);                                  // 打字时自动展开（只查不改）
+  };
+  // **不要 onfocus 展开**：打开对话框那一下的点击常常正好落在输入框上 → 一开就自动展开、还盖住对话框
+  // （用户实测两次）。展开只有两个入口：打字（oninput）+ 右边 ▼ 按钮。
+  costText.onblur = () => setTimeout(() => showCostList(false), 150);   // 点到别处收起（留点时间给 ▼ 和列表项）
+  showCostList(false);
+  document.getElementById('rpRank').value = cur.rank;
+  document.getElementById('rpSub').value = cur.sub;
+  document.getElementById('rpMutual').checked = false;
+  document.getElementById('rpMutual').parentElement.style.display = cur.key ? 'none' : '';
+  // 「只升级不连线」：新建时可选；**跨页强制勾上**（跨页的线游戏里画不出来）；
+  // 改已有的升级不在这里动连线（要取消连线用旁边那个按钮，路线保留）
+  const nl = document.getElementById('rpNoLink');
+  nl.checked = !!cur.routeOnly;
+  nl.disabled = !!cur.key || !!cur.routeOnly;
+  document.getElementById('rpNoLinkRow').style.display = cur.key ? 'none' : '';
+  document.getElementById('rpNoLinkHint').textContent = cur.key ? ''
+      : (cur.routeOnly ? '跨页升级：自动取消连线（只写路线表）' : '勾上 = 只写升级、不画界面连线');
+  // 「取消连线」：只有"有路线行 + 确实有连线"时才有意义（只删 ui_links，升级关系保留）
+  document.getElementById('rpUnlink').style.display = (cur.key && cur.hasLink) ? '' : 'none';
+  // 「双向升级」：给这条升级补一条**反向**路线（反向还没有才显示）；界面连线不动（一对组只有一条线）
+  {
+    const btn2 = document.getElementById('rpMutual2');
+    const hasReverse = cur.key && (DATA.routeList || []).some(r => r.b === cur.target && r.t === cur.base);
+    btn2.style.display = (cur.key && !hasReverse) ? '' : 'none';
+    btn2.onclick = () => {
+      const c = routeCur; if (!c) return;
+      report({ type: 'addRoute', base: c.target, target: c.base, cost: c.cost, rank: c.rank, sub: c.sub,
+               mutual: false, childPos: 0, parentPos: 0, routeOnly: true, hasLink: false, mo: 0 });
+      hidePop('routePop');
+    };
+  }
+  // 「添加连线」：反过来 —— 有路线、没连线、且两端同页时出现（跨页的线游戏里画不出来）
+  {
+    const gb = GROUPS[cur.base] || {}, gt = GROUPS[cur.target] || {};
+    const samePage = (gb.category || '') === (gt.category || '');
+    const btn = document.getElementById('rpAddLink');
+    btn.style.display = (cur.key && !cur.hasLink && samePage) ? '' : 'none';
+    btn.onclick = () => {
+      const c = routeCur; if (!c) return;
+      const pos = positionsFor(GROUPS[c.base], GROUPS[c.target]);
+      report({ type: 'addLink', child: c.target, parent: c.base, childPos: pos.childPos, parentPos: pos.parentPos,
+               midOffset: autoMidOffset(GROUPS[c.base], GROUPS[c.target], pos.parentPos, pos.childPos) });
+      hidePop('routePop');
+    };
+  }
+  document.getElementById('rpLine').style.display = (cur.key && cur.hasLink) ? '' : 'none';
+  document.getElementById('rpOk').textContent = cur.key ? '保存修改' : '建立升级';
+  document.getElementById('rpDel').style.display = '';                       // 没有路线行也允许删（那就只删连线）
+  document.getElementById('rpDel').textContent = cur.key ? '删除这条升级' : '删除这条连线';
+  routeCur = cur;
+  showPop('routePop');
+  hidePop('cardPop');
+}
+
+let routeCur = null;
+function routePick(list, unit) {
+  return list.find(x => x.unit_group === unit) || unit;
+}
+document.getElementById('rpOk').onclick = () => {
+  const c = routeCur; if (!c) return;
+  const costSel = document.getElementById('rpCost').value;
+  const amount = parseInt(document.getElementById('rpAmount').value || '0', 10);
+  const cost = costSel === '__new__' ? '' : costSel;
+  const msg = {
+    type: c.key ? 'updateRoute' : 'addRoute',
+    key: c.key, base: c.base, target: c.target, cost: cost,
+    rank: parseInt(document.getElementById('rpRank').value || '0', 10),
+    sub: parseInt(document.getElementById('rpSub').value || '0', 10),
+    mutual: document.getElementById('rpMutual').checked,
+    childPos: c.childPos, parentPos: c.parentPos,
+    autoCost: costSel === '__new__' ? amount : 0,
+    // 新建：勾了「只升级不连线」（或跨页）就不写 ui_links；改已有的升级不看它（只改路线行）
+    routeOnly: !!c.routeOnly || (!c.key && document.getElementById('rpNoLink').checked),
+    // mid_link_offset：表里有就沿用（用户拖过转点），没有就按当前几何自动算一个（游戏里才对得上）
+    midOffset: typeof c.mo === 'number' ? c.mo : autoMidOffset(GROUPS[c.base], GROUPS[c.target], c.parentPos, c.childPos),
+  };
+  report(msg);
+  hidePop('routePop');
+  connectFrom = null;
+  for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('conn');
+};
+document.getElementById('rpSwap').onclick = () => {
+  const c = routeCur; if (!c || !c.key) return;
+  const pos = positionsFor(GROUPS[c.target], GROUPS[c.base]);
+  report({ type: 'swapRoute', key: c.key, base: c.base, target: c.target,
+           cost: document.getElementById('rpCost').value === '__new__' ? '' : document.getElementById('rpCost').value,
+           rank: parseInt(document.getElementById('rpRank').value || '0', 10),
+           sub: parseInt(document.getElementById('rpSub').value || '0', 10),
+           childPos: pos.childPos, parentPos: pos.parentPos,
+           midOffset: autoMidOffset(GROUPS[c.target], GROUPS[c.base], pos.parentPos, pos.childPos),   // 换方向 → 重新算
+           routeOnly: !!c.routeOnly });
+  hidePop('routePop');
+};
+document.getElementById('rpLine').onclick = () => {
+  const c = routeCur; if (!c) return;
+  hidePop('routePop');
+  openLinePop(c.base, c.target);        // 面板里可以看当前方向、点箭头改
+};
+document.getElementById('rpUnlink').onclick = () => {
+  const c = routeCur; if (!c) return;
+  // 只删界面连线（ui_links 里 child=target / parent=base 那条），升级路线（unit_upgrade_to_unit_groups）原样保留
+  report({ type: 'removeLink', child: c.target, parent: c.base });
+  hidePop('routePop');
+};
+document.getElementById('rpDel').onclick = () => {
+  const c = routeCur; if (!c) return;
+  if (!c.key) {
+    // 这条连线**找不到对应的路线行**（比如它只存在于 ui_links 里）→ 只删连线
+    report({ type: 'removeLink', child: c.target, parent: c.base });
+    hidePop('routePop');
+    return;
+  }
+  report({ type: 'removeRoute', key: c.key, base: c.base, target: c.target, routeOnly: !!c.routeOnly });
+  hidePop('routePop');
+};
+document.getElementById('rpClose').onclick = () => { hidePop('routePop'); };
+
+document.getElementById('cpDelCard').onclick = () => {
+  if (!selected) return;
+  const g = GROUPS[selected.group];
+  const n = (g && g.units ? g.units.length : 0);
+  if (n <= 1) report({ type: 'removeGroup', group: selected.group });
+  else report({ type: 'removeUnit', group: selected.group, unit: selected.unit });
+  hidePop('cardPop');
+};
+document.getElementById('cpSplit').onclick = () => {
+  if (!selected) return;
+  const g = GROUPS[selected.group];
+  if (!g || !g.units || g.units.length <= 1) return;
+  report({ type: 'splitGroup', group: selected.group, x: g.x | 0, y: g.y | 0, category: g.category || (activePage || '') });
+  hidePop('cardPop');
+};
+document.getElementById('cpDelGroup').onclick = () => {
+  if (!selected) return;
+  report({ type: 'removeGroup', group: selected.group });
+  hidePop('cardPop');
+};
+// (v0.27: 卡片面板不再有“以此为起点连接”；选两个组后用下方「链接」)
+document.getElementById('cpCatOk').onclick = () => {
+  if (!selected) return;
+  const g = GROUPS[selected.group] || { x: 0, y: 0 };
+  report({ type: 'setCategory', group: selected.group,
+           category: document.getElementById('cpCat').value, x: g.x | 0, y: g.y | 0 });
+  hidePop('cardPop');
+};
+document.getElementById('cpPosOk').onclick = () => {
+  if (!selected) return;
+  const x = parseInt(document.getElementById('cpX').value || '0', 10);
+  const y = parseInt(document.getElementById('cpY').value || '0', 10);
+  report({ type: 'setPos', group: selected.group, x: x, y: y });
+};
+document.getElementById('cpClose').onclick = () => hidePop('cardPop');
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('bSel').classList.toggle('on', m === 'select');
+
+  document.getElementById('barHint').textContent = m === 'connect'
+    ? '连接：先点“要升级的组”，再点“升级后的组”'
+    : '左键拖牌 · 中键拖画面 · Ctrl+拖牌到右边兵种库=删兵';
+  syncLinkPick();
+  connectFrom = null;
+  for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('conn');
+}
+document.getElementById('bSel').onclick = () => setMode('select');
+// 吸附：点按钮 → 右边展开三种模式；选一种就开启
+const snapMenu = document.getElementById('snapMenu');
+function paintSnap() {
+  document.getElementById('bSnap').classList.toggle('on', snapOn);
+  document.getElementById('bSnap').textContent =
+    '吸附' + (snapOn ? '：' + (snapMode === 'x' ? 'X' : snapMode === 'y' ? 'Y' : '顶点') : '');
+  for (const [id, m] of [['snapX', 'x'], ['snapY', 'y'], ['snapV', 'vertex']])
+    document.getElementById(id).classList.toggle('on', snapOn && snapMode === m);
+  document.getElementById('barHint').textContent = snapOn
+    ? '吸附：' + (snapMode === 'x' ? '只对齐 X（50 网格）' : snapMode === 'y' ? '只对齐 Y（50 网格）' : 'X/Y 都对齐到 50 网格顶点')
+    : '左键拖牌 · 中键拖画面 · 滚轮缩放 · Ctrl 点选/框选（按组）· Ctrl+拖牌到右边兵种库=删兵';
+}
+document.getElementById('bSnap').onclick = () => {
+  const open = snapMenu.style.display !== 'none' && snapMenu.style.display !== '';
+  snapMenu.style.display = open ? 'none' : 'flex';
+};
+for (const [id, m] of [['snapX', 'x'], ['snapY', 'y'], ['snapV', 'vertex']])
+  document.getElementById(id).onclick = () => {
+    // 再点一次当前模式 = **取消吸附**（以前只能选模式、关不掉）
+    if (snapOn && snapMode === m) snapOn = false;
+    else { snapMode = m; snapOn = true; }
+    snapMenu.style.display = 'none';
+    paintSnap();
+    report({ type: 'snap', on: snapOn, mode: snapMode });
+  };
+document.getElementById('snapOff').onclick = () => {
+  snapOn = false; snapMenu.style.display = 'none';
+  paintSnap();
+  report({ type: 'snap', on: false, mode: snapMode });
+};
+paintSnap();
+
+
+/* ───────────── 页签列 ───────────── */
+let activePage = null;
+function buildRail(pages) {
+  const list = document.getElementById('railList');
+  list.innerHTML = '';
+  const pageRaces = DATA.pageRaces || {};
+  const pageFactions = DATA.pageFactions || {};
+  // 页签归属 = 表单推导的并集（页签→组→兵→可用派系→种族）：选了谁就只列谁能用的页签
+  // 默认只列**当前种族/派系能用的**页签；「打开页签」加进来的（openedTabs）也列出来（打黄点）；
+  // 「新建页签」建的也列出来。没选种族/派系时列全部。
+  const scoped = p => filterRace && ((DATA.tabRaceScopes || {})[p] || []).indexOf(filterRace) >= 0;   // 手工归属也算
+  const isOurs = p => filterFaction ? (pageFactions[p] || []).indexOf(filterFaction) >= 0
+                   : (filterRace ? ((pageRaces[p] || []).indexOf(filterRace) >= 0 || scoped(p)) : true);
+  const opened = DATA.openedTabs || [];
+  const mine = (DATA.newTabs || []);
+  let shown = (pages || []).filter(p => isOurs(p) || opened.indexOf(p) >= 0 || mine.indexOf(p) >= 0);
+  for (const t of mine) if (shown.indexOf(t) < 0) shown = shown.concat([t]);
+  for (const t of opened) if (shown.indexOf(t) < 0) shown = shown.concat([t]);
+  const mk = (label, value, foreign) => {
+    const b = document.createElement('div');
+    b.className = 'rp' + ((activePage === value) ? ' on' : '') + (foreign ? ' foreign' : '');
+    b.textContent = label;
+    if (foreign) b.title = label + '：不属于当前种族/派系（里面的兵不写军事组授权，兵牌打黄标；可右键改军事组）';
+    b.onclick = () => { pagePinned = true; activePage = value; applyFilter(); applySkin(); buildRail(pages); };
+    if (value) b.oncontextmenu = ev => {                 // 右键页签 → 小菜单（重命名 / 应用到其他种族）
+      ev.preventDefault();
+      tmCategory = value;
+      document.getElementById('tmTitle').textContent = '页签 ' + value;
+      document.getElementById('tmRow1').style.display = '';
+      document.getElementById('tmRow2').style.display = 'none';
+      document.getElementById('tmRow3').style.display = 'none';
+      b.classList.add('on');
+      const m = document.getElementById('tabMenu');
+      m.style.left = Math.min(ev.clientX, window.innerWidth - 300) + 'px';
+      m.style.top = Math.min(ev.clientY, window.innerHeight - 220) + 'px';
+      m.classList.remove('hidden');
+    };
+    if (foreign) {                                   // 外来页签：加一个"收起"的小叉
+      const x = document.createElement('span');
+      x.textContent = ' ×';
+      x.title = '收起这个页签（只从画布上收起来，不动包）';
+      x.style.cssText = 'float:right;color:#858D95;cursor:pointer';
+      x.onclick = ev => { ev.stopPropagation(); report({ type: 'closeTab', category: value }); };
+      b.appendChild(x);
+    }
+    list.appendChild(b);
+  };
+  railTabs = shown.slice();                     // 当前页签列里可见的（= 已打开/可用），移动页签只能选这些
+  // **默认不进「全部」**：一打开就把所有页签的兵按各自坐标画在一起 → 全叠成一团（用户口径）。
+  // 没人手动点过页签、当前又是"全部"时 → 自动切到第一个可见页签；想全览再自己点「全部」。
+  if (!pagePinned && !activePage && shown.length > 0) activePage = shown[0];
+  if (!filterRace && !filterFaction) mk('全部', null, false);
+  for (const p of shown) mk(p, p, !isOurs(p));
+  if (shown.length === 0 && filterRace)
+    list.innerHTML = '<div class="rp" style="color:#858D95;cursor:default">'
+      + (filterFaction ? '这个派系还没有页签' : '这个种族还没有页签') + '（点下面「＋ 新建页签」）</div>';
+}
+// 种族/派系过滤：种族 = 组里任意一个兵属于该种族；派系 = 组里任意一个兵属于该派系
+function groupMatches(gk) {
+  if (!filterRace && !filterFaction) return true;
+  const races = (DATA.groupRaces || {})[gk];
+  const facs = (DATA.groupFactions || {})[gk];
+  // **查不到任何军事组授权（gR/gF 都空）→ 不隐藏**：它不属于"别的种族"，只是不在任何军事组里
+  //（角标会标"不在军事组"）。老行为是当"不属于当前种族"直接滤掉 → 用户以为"移出军事组把单位弄没了"。
+  const known = (races && races.length > 0) || (facs && facs.length > 0);
+  if (!known) return true;
+  if (filterFaction) return !!facs && facs.indexOf(filterFaction) >= 0;
+  return !!races && races.indexOf(filterRace) >= 0;
+}
+// 黄标（"不属于当前军事组"）/ 专属角标：**按当前 filterRace / filterFaction 实时算**。
+// 触发条件：① 选了种族/派系而组确实不属于它；② 页签是「打开页签」进来的（设计上跳过范围过滤、打黄标提示）。
+// 只在"确实知道这个组属于谁"（gR/gF 非空）时才判，免得把查不到授权的兵误标成不属于当前军事组。
+function updateBadges() {
+  for (const el of document.querySelectorAll('#tree .card')) {
+    const host = el.querySelector('.bdg');
+    if (!host) continue;                                   // 空组占位框没有角标位
+    const gR = el._gR || [], gF = el._gF || [];
+    const known = gF.length > 0 || gR.length > 0;
+    const foreign = known && ((filterFaction && gF.indexOf(filterFaction) < 0)
+                 || (!filterFaction && filterRace && gR.indexOf(filterRace) < 0));
+    // 一个军事组都没有（gR/gF 全空）→ 标"不在军事组"：**这种组不隐藏**（见 groupMatches），
+    // 角标告诉用户"它不在任何军事组里，游戏里该军事组下不会出现；右键可以加回来"
+    const nomil = !known;
+    el.classList.toggle('foreign', !!foreign);
+    el.classList.toggle('nomil', nomil);
+    host.innerHTML = nomil
+      ? '<div class="ex nm"></div><div class="exTxt nmTxt">不在军事组（游戏里该军事组下不会出现；右键可加回）</div>'
+      : (foreign
+        ? '<div class="ex"></div><div class="exTxt">不属于当前军事组（可右键添加到当前军事组）</div>'
+        : (el._excl ? '<div class="ex"></div><div class="exTxt">专属：' +
+                      (Array.isArray(el._excl) ? el._excl.join(' / ') : '部分派系') + '</div>' : ''));
+  }
+}
+
+function applyFilter() {
+  updateBadges();          // 黄标/专属角标先按**当前过滤**重算（别让上一次选择的标挂着）
+  // 页签背景 / 左侧 UI 区也跟着刷 —— 以前只在 renderWarband 和"点兵牌/点页签"时刷，
+  // 表现就是"切种族自动换了页签，背景却要再点一下才更新"
+  applySkin();
+  refreshCardPanel();
+  // 「打开页签」/「新建页签」进来的页签：**不再按当前种族/派系过滤**，
+  // 否则那些组不属于当前种族 → 全被滤掉，页签点开就是一片空白。
+  const openedTab = activePage && ((DATA.openedTabs || []).includes(activePage)
+                                || (DATA.newTabs || []).includes(activePage));
+  let shown = 0;
+  for (const el of document.querySelectorAll('#tree .card')) {
+    const okPage = !activePage || el.dataset.cat === activePage;
+    const okScope = openedTab ? true : groupMatches(el.dataset.group);
+    const ok = okPage && okScope;
+    el.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  }
+  let linksShown = 0;
+  for (const p of document.querySelectorAll('#links path')) {
+    const cats = (p.dataset.cat || '').split('|');
+    const okPage = !activePage || (cats[0] === activePage && cats[1] === activePage);
+    const okScope = openedTab ? true : (groupMatches(p.dataset.c) || groupMatches(p.dataset.p));
+    const ok = okPage && okScope;
+    p.style.display = ok ? '' : 'none';
+    if (ok && !p.classList.contains('nolink')) linksShown++;      // 虚线是临时可视化，不算"连线"计数
+  }
+  // 黄标（"不属于当前军事组"）有两个来源、容易被当成工具判错，所以把数量一起回报：
+  //   ① 选了种族/派系而组确实不属于它；② 这个页签是「打开页签」加进来的（设计上跳过范围过滤、故意打黄标）。
+  let foreign = 0, nomil = 0;
+  for (const el of document.querySelectorAll('#tree .card.foreign')) if (el.style.display !== 'none') foreign++;
+  for (const el of document.querySelectorAll('#tree .card.nomil')) if (el.style.display !== 'none') nomil++;
+  const scope = filterFaction ? ('派系 ' + filterFaction) : (filterRace ? ('种族 ' + filterRace) : '全部');
+  report({ type: 'filter', page: activePage || '(全部)', scope: scope, shown: shown, linksShown: linksShown,
+           foreign: foreign, nomil: nomil,
+           foreignTab: !!(activePage && ((DATA.newTabs || []).includes(activePage) || (DATA.openedTabs || []).includes(activePage))) });
+  document.getElementById('xy').textContent =
+    '当前页签：' + (activePage || '全部') + '　范围：' + scope + '　显示 ' + shown + ' 张牌 / ' + linksShown + ' 条连线' +
+    (foreign > 0 ? '　（黄标 ' + foreign + '）' : '');
+}
+
+// 右上选种族/派系 → 过滤 + 自动切到该种族的页签（页签→种族是后端按组里的兵算出来的）
+function canvasFilterBy(msg) {
+  filterRace = msg.race || '';
+  filterFaction = msg.faction || '';
+  const pageRaces = DATA.pageRaces || {};
+  const pageFactions = DATA.pageFactions || {};
+  const has = (arr, v) => (arr || []).indexOf(v) >= 0;
+  let best = null;
+  if (filterFaction) { for (const cat in pageFactions) if (has(pageFactions[cat], filterFaction)) { best = cat; break; } }
+  if (!best && filterRace) { for (const cat in pageRaces) if (has(pageRaces[cat], filterRace)) { best = cat; break; } }
+  if (!best && filterRace) { for (const cat in (DATA.tabRaceScopes || {})) if (has(DATA.tabRaceScopes[cat], filterRace)) { best = cat; break; } }
+  if (best) activePage = best;
+  buildRail(DATA.pages || []);
+  applyFilter();
+}
+
+// 页签背景图 / UI 区素材（旧工坊那套背景 UI）
+function applySkin() {
+  const bg = (DATA.pageBg || {})[activePage] || '';
+  const el = document.getElementById('bg');
+  if (bg) { el.src = bg; el.style.display = ''; } else { el.removeAttribute('src'); el.style.display = 'none'; }
+  const skin = DATA.skin || {};
+  const card = document.getElementById('uzCard');
+  if (skin.cardHover) card.style.backgroundImage = 'url("' + skin.cardHover + '")';
+  const nm = document.getElementById('uzName');
+  if (skin.panelTitle) nm.style.backgroundImage = 'url("' + skin.panelTitle + '")';
+  const cost = document.getElementById('uzCost');
+  if (skin.treasury) cost.innerHTML = '<img src="' + skin.treasury + '"><span>升级资金 / 等级</span>';
+  // 选中兵卡时，左侧 UI 区跟着显示它的立绘与名字
+  const sel = selected && selected.unit ? selected.unit : null;
+  card.style.backgroundImage = sel && (DATA.icons || {})[sel]
+    ? 'url("' + DATA.icons[sel] + '")'
+    : (skin.cardHover ? 'url("' + skin.cardHover + '")' : 'none');
+  nm.textContent = sel ? shortName(sel) : '兵种名';
+}
+
+/* ───────────── 兵种库双击/拖入 ───────────── */
+// 加兵的**统一入口**：这个兵已经在别的组里 → 先问一句；确认继续就"覆盖之前的表单"（后端把旧 junction 删掉）。
+// 双击（canvasAddUnit）与三种拖入都走这里，规则只有一份。
+function groupsOfUnit(unit) {
+  const out = [];
+  for (const g of (DATA.groups || [])) if ((g.units || []).indexOf(unit) >= 0) out.push(g);
+  return out;
+}
+function reportAddUnit(unit, x, y, isNew, category, group) {
+  if (!unit) return false;
+  const tgt = group || '';
+  const used = groupsOfUnit(unit).filter(g => g.unit_group !== tgt);
+  let overwrite = false;
+  if (used.length > 0) {
+    const where = used.map(g => '「' + groupName(g.unit_group) + '」' + (g.category ? '（页签 ' + g.category + '）' : '（无页签）')).join('、');
+    if (!confirm('这个兵已经被使用：' + where +
+                 '\n\n继续加入会覆盖之前的表单 —— 把它从上面这些组里移出来，只保留这次加入的位置。' +
+                 '\n（选「取消」= 这次不加入）')) return false;
+    overwrite = true;
+  }
+  const msg = { type: 'addUnit', unit: unit, x: Math.round(x), y: Math.round(y),
+                isNew: !!isNew, category: category || '', overwrite: overwrite };
+  if (tgt) msg.group = tgt;                 // 新建组时不带 group，由后端生成组名
+  report(msg);
+  return true;
+}
+let newGroupSeq = 0;
+function canvasAddUnit(msg) {
+  const unit = msg.unit;
+  if (!unit) return;
+  const seq = newGroupSeq + 1;
+  const x = 40 + ((seq - 1) % 8) * 60, y = 40 + Math.floor((seq - 1) / 8) * 105;
+  if (!reportAddUnit(unit, x, y, true, activePage || '', '')) return;
+  newGroupSeq = seq;
+  document.getElementById('xy').textContent =
+    '兵种库加兵：「' + unit + '」→ 新组（页签 ' + (activePage || '全部') + '，游戏坐标 ' + x + ', ' + y + '）';
+}
+// 从兵种库拖进来：落在哪就在哪开一个新组
+addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+addEventListener('drop', e => {
+  e.preventDefault();
+  const text = e.dataTransfer.getData('text/plain') || '';
+  if (!text || text.startsWith('{')) return;             // 卡→兵种库 的回拖不在这里处理
+  const t = document.getElementById('tree').getBoundingClientRect();
+  const gx = Math.round((e.clientX - t.left) / zoom), gy = Math.round((e.clientY - t.top) / zoom);
+  if (!activePage) {                                  // 没有页签：先建页签，再放兵
+    pendingDrop = { unit: text.trim(), x: gx - CARD_W / 2, y: gy - CARD_H / 2 };
+    openNewPop('tab');
+    document.getElementById('barHint').textContent = '这个种族还没有页签：先建一个，建好后兵会自动放进去';
+    return;
+  }
+  const hit = groupAt(gx, gy);                        // 落进某个组里 → 加到这个组
+  if (hit) reportAddUnit(text.trim(), hit.x, hit.y, false, '', hit.unit_group);
+  else reportAddUnit(text.trim(), gx - CARD_W / 2, gy - CARD_H / 2, true, activePage || '', '');
+});
+addEventListener('wheel', onWheel, { passive: false });
+
+// 拖动过程中实时刷新左下弹窗里的坐标（原来要松手才更新）
+function livePos(gk) {
+  const pop = document.getElementById('cardPop');
+  if (pop.classList.contains('hidden')) return;
+  if (selected && selected.group && selected.group !== gk) return;   // 只刷当前选中的那个组
+  const g = GROUPS[gk]; if (!g) return;
+  document.getElementById('cpX').value = Math.round(g.x);
+  document.getElementById('cpY').value = Math.round(g.y);
+}
+
+// 点在哪个组的框里（含空组占位框、含边缘 6px 宽容）
+function groupAt(x, y) {
+  for (const g of (DATA.groups || [])) {
+    // 只认**当前页签**上的组：否则别的页签里恰好同位置的组会把兵抢走
+    if (activePage && (g.category || '') !== activePage) continue;
+    const b = box(g);
+    if (x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y - 6 && y <= b.y + b.h + 6) return g;
+  }
+  return null;
+}
+
+/* ───────────── 多选（Ctrl 点选 / Ctrl+A / 框选）───────────── */
+function addMulti(group) {
+  if (!multiGroups.includes(group)) multiGroups.push(group);
+}
+function toggleMulti(group) {
+  const i = multiGroups.indexOf(group);
+  if (i >= 0) multiGroups.splice(i, 1); else addMulti(group);
+  paintMulti();
+}
+function groupName(gk) {
+  const g = GROUPS[gk];
+  const u = g && g.units && g.units[0];
+  const cn = u ? ((DATA.names || {})[u] || shortName(u)) : '(空组)';
+  return cn + (g && g.units && g.units.length > 1 ? ' 等 ' + g.units.length + ' 个兵' : '');
+}
+function paintMulti() {
+  for (const el of document.querySelectorAll('#tree .card'))
+    el.classList.toggle('msel', multiGroups.includes(el.dataset.group));
+  const bar = document.getElementById('barHint');
+  if (multiGroups.length === 0) {
+    bar.textContent = '左键拖牌 · 中键拖画面 · 滚轮缩放 · Ctrl 点选/框选（按组）· Ctrl+拖牌到右边兵种库=删兵';
+    hidePop('multiPop');
+    return;
+  }
+  const host = document.getElementById('mBody');
+  const b = document.getElementById('mButtons');
+  b.innerHTML = '';
+  const mk = (label, cls, fn) => {
+    const el = document.createElement('button');
+    el.textContent = label; if (cls) el.className = cls; el.onclick = fn;
+    b.appendChild(el);
+  };
+  if (multiGroups.length === 1) {
+    host.innerHTML = '已选组：<b>' + groupName(multiGroups[0]) + '</b>';
+    const g0 = GROUPS[multiGroups[0]];
+    if (g0 && g0.units && g0.units.length > 1)
+      mk('拆开成单兵组', '', () => { report({ type: 'splitGroup', group: multiGroups[0], x: g0.x, y: g0.y, category: activePage || '' }); multiGroups = []; paintMulti(); });
+    mk('删除这个组', 'danger', () => { report({ type: 'removeGroup', group: multiGroups[0] }); multiGroups = []; paintMulti(); });
+    mk('清空选择', '', () => { multiGroups = []; paintMulti(); });
+  } else if (multiGroups.length === 2) {
+    // 先选好两个组 → 这里显示"A → B"；**链接按钮看这两个组现在是什么关系**：
+    //   没关系 → 建立升级（弹新建升级对话框）；已有连线 → 删除连线（只删 ui_links）；有路线没线 → 添加连线
+    host.innerHTML = '<b>' + groupName(multiGroups[0]) + '</b> → <b>' + groupName(multiGroups[1]) + '</b>';
+    const rel = routeOfPair(multiGroups[0], multiGroups[1]);
+    if (rel && rel.link) {
+      mk('删除连线', 'danger', () => {
+        report({ type: 'removeLink', child: rel.t, parent: rel.b });
+        multiGroups = []; paintMulti();
+      });
+      // 移动后线折起来了 → 自动按当前相对位置重算出入口（不用删了重连）
+      mk('自动调整画线', '', () => {
+        const pos = positionsFor(GROUPS[rel.b], GROUPS[rel.t]);
+        report({ type: 'adjustLink', child: rel.t, parent: rel.b,
+                 childPos: pos.childPos, parentPos: pos.parentPos,
+                 midOffset: autoMidOffset(GROUPS[rel.b], GROUPS[rel.t], pos.parentPos, pos.childPos) });
+      });
+      // 「升级设置…」：直接进这条升级的编辑对话框（成本/等级/交换方向/删除；和点连线、点无连线虚线是同一条路）
+      mk('升级设置…', '', () => openRouteEdit(rel));
+      mk('手动调整画线', '', () => openLinePop(rel.b, rel.t));
+    } else if (rel) {
+      mk('添加连线', 'primary', () => {
+        const pos = positionsFor(GROUPS[rel.b], GROUPS[rel.t]);
+        report({ type: 'addLink', child: rel.t, parent: rel.b,
+                 childPos: pos.childPos, parentPos: pos.parentPos,
+                 midOffset: autoMidOffset(GROUPS[rel.b], GROUPS[rel.t], pos.parentPos, pos.childPos) });
+      });
+      mk('升级设置…', '', () => openRouteEdit(rel));            // 有路线没连线：也能直接进去改成本/等级
+      mk('手动调整画线', '', () => openLinePop(rel.b, rel.t));   // 先定出入口再补线
+    } else {
+      mk('链接', 'primary', () => {
+        const A = GROUPS[multiGroups[0]], B = GROUPS[multiGroups[1]];
+        const pos = positionsFor(A, B);
+        routeDialog('新建升级', { base: multiGroups[0], target: multiGroups[1], key: '',
+                                  cost: (DATA.costKeys || [])[0] ? ((DATA.costKeys || [])[0].k || (DATA.costKeys || [])[0]) : '',
+                                  rank: 2, sub: 0,
+                                  childPos: pos.childPos, parentPos: pos.parentPos,
+                                  routeOnly: crossPagePair(multiGroups[0], multiGroups[1]) });
+      });
+    }
+    mk('合并组', '', () => {
+      const A2 = GROUPS[multiGroups[0]], B2 = GROUPS[multiGroups[1]];
+      const ca = (A2 && A2.category) || '', cb = (B2 && B2.category) || '';
+      // 跨页签合并先说清楚：兵牌会跟着「保留的那个组」走，在另一个页签里就看不见了
+      if (ca !== cb && !confirm('这两个组不在同一页签（' + (ca || '无') + ' / ' + (cb || '无') + '）。合并后兵牌会归到「' + (ca || '无') + '」这一页，另一个页签里就看不到了。继续？')) return;
+      report({ type: 'mergeGroups', keep: multiGroups[0], drop: multiGroups[1] });
+      multiGroups = []; paintMulti();
+    });
+    mk('删除这两个组', 'danger', () => {
+      report({ type: 'removeGroup', group: multiGroups[0] });
+      report({ type: 'removeGroup', group: multiGroups[1] });
+      multiGroups = []; paintMulti();
+    });
+    mk('清空选择', '', () => { multiGroups = []; paintMulti(); });
+  } else {
+    host.innerHTML = '已选 <b>' + multiGroups.length + '</b> 个组';
+    mk('合并成一个组', 'primary', () => {
+      const key = 'studio_group_' + Date.now().toString().slice(-6);
+      const n = (DATA.groups || []).length;
+      report({ type: 'mergeMany', group: key, groups: multiGroups.slice(),
+               x: 40 + (n % 10) * 60, y: 40 + Math.floor(n / 10) * 105, category: activePage || '' });
+      multiGroups = []; paintMulti();
+    });
+    mk('删除这些组', 'danger', () => {
+      for (const g of multiGroups.slice()) report({ type: 'removeGroup', group: g });
+      multiGroups = []; paintMulti();
+    });
+    mk('清空选择', '', () => { multiGroups = []; paintMulti(); });
+  }
+  // 多选统一坐标（≥2 个组）：**单轴应用** —— X / Y 各一个输入框 + 应用按钮，
+  // 只统一你想统一的那个轴，另一个轴各自保留（单选那种 x/y 一起写会把各组不同的另一轴也抹平）。
+  if (multiGroups.length >= 2)
+  {
+    const vals = axis => multiGroups.map(k => (GROUPS[k] || {})[axis]).filter(v => typeof v === 'number');
+    const same = a => a.length > 0 && a.every(v => v === a[0]);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px';
+    const mkAxis = (label, axis) => {
+      const vs = vals(axis);
+      const lab = document.createElement('span');
+      lab.textContent = label; lab.style.color = '#B0B6BC';
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.style.width = '70px';
+      inp.value = same(vs) ? String(vs[0]) : '';
+      inp.placeholder = same(vs) ? '' : '各自不同';
+      const btn = document.createElement('button');
+      btn.textContent = '应用' + label;
+      btn.title = '把选中的 ' + multiGroups.length + ' 个组的 ' + label + ' 统一成这个值（另一个轴各自保留）';
+      btn.onclick = () => {
+        const v = parseInt(inp.value || '', 10);
+        if (isNaN(v)) { alert('先填一个 ' + label + ' 值'); return; }
+        report({ type: 'setAxis', axis: axis, value: v, groups: multiGroups.slice() });
+      };
+      row.appendChild(lab); row.appendChild(inp); row.appendChild(btn);
+    };
+    mkAxis('X', 'x');
+    mkAxis('Y', 'y');
+    host.appendChild(row);
+  }
+  hidePop('cardPop');            // 多选时自动关掉单选面板（同一个位置，不能叠着）
+  showPop('multiPop');
+}
+
+/* ───────────── 新建分组 / 新建页签 ───────────── */
+let npMode = 'group';
+let npArt = { bg: '', btn: '' };
+let npTargetCat = null;      // 「换图…」从页签右键菜单进来时，要换的那个页签   // 选择器里的选择：'' = 保持当前，'__donor__' = 跟母版一样，其余 = 素材 file
+function openNewPop(mode) {
+  npMode = mode;
+  const cat = document.getElementById('npCat');
+  cat.innerHTML = '';
+  const opt = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; };
+  cat.appendChild(opt('', '（不写页签）'));
+  for (const p of (DATA.pages || [])) cat.appendChild(opt(p, p));
+  cat.value = activePage || '';
+  const donor = null;
+
+  // 母版不再让用户选（工具自动挑一个自由页签克隆结构）
+  // 素材库：背景图 / 按钮图（来源 = **本地素材库**：内置 WUU+雪乃 + 导入的；file 是本地路径）
+  const lib = DATA.artLibrary || [];
+  // 目标页签：从页签右键菜单进来的「换图」是**被右键的那个**（npTargetCat），其余情况是当前页签
+  const curCat = (mode === 'art' && npTargetCat) ? npTargetCat : (activePage || '');   // 注意别和上面的 npCat 变量撞名（cat）
+  // 当前这个页签正在用的图（换图对话框要"显示现在的样子"，而不是只说跟母版一样）
+  const curName = kind => kind + (curCat ? curCat.toLowerCase() : '') + '.png';
+  const curUrl = kind => kind === 'background_images_'
+    ? ((DATA.pageBg || {})[curCat] || '') : ((DATA.pageBtn || {})[curCat] || '');
+  // ── 素材选择器：缩略图 + 文件名，从下往上弹（背景一行 3 个、按钮一行 4 个）──
+  // 列表 = **当前画布对应的包**里的图（+ 待导出新增），不再是本地素材库（素材库在左下那一页）
+  npArt = { bg: '', btn: '' };
+  // 换图的目标页签：右键菜单进来时是**被右键的那个**（不用先把画布切过去）
+  let artCat = npTargetCat || activePage;
+  npTargetCat = null;
+  const pickerOf = kind => kind === 'btn'
+    ? { pick: 'npBtnPick', panel: 'npBtnPanel', grid: 'npBtnGrid', prev: 'npBtnPrev' }
+    : { pick: 'npBgPick', panel: 'npBgPanel', grid: 'npBgGrid', prev: 'npBgPrev' };
+  const stageOfKind = kind => kind === 'btn' ? 'button_upgrade_' : 'background_images_';
+  function buildArtPicker(kind) {
+    const u = pickerOf(kind), prefix = stageOfKind(kind);
+    const entries = lib.filter(a => a.kind === kind);
+    const grid = document.getElementById(u.grid);
+    while (grid.firstChild) grid.removeChild(grid.firstChild);   // 清空（不用 innerHTML：离线测试的桩也能对上）
+    const cell = (file, name, url, note, extraClass) => {
+      const c = document.createElement('div');
+      c.className = 'artCell' + ((npArt[kind] || '') === file ? ' on' : '') + (extraClass ? ' ' + extraClass : '');
+      c.title = name + (note || '');
+      c.innerHTML = (url ? '<img src="' + url + '" loading="lazy">' : '<img>') +
+                    '<span>' + name + '</span>';
+      c.onclick = () => { pickArt(kind, file); };
+      grid.appendChild(c);
+    };
+    // 第一格永远是「保持当前」（= 这个页签现在用的那张，来自当前包）
+    const cur = (kind === 'btn' ? (DATA.pageBtn || {})[curCat] : (DATA.pageBg || {})[curCat]) || '';
+    cell('', curCat ? ('保持当前：' + prefix + curCat.toLowerCase() + '.png') : '保持当前', cur, '　（这张来自当前包）');
+    if (looksLikeKeep(prefix)) cell('__donor__', '跟默认母版一样', '', '　（新建页签没选图时用它）');
+    for (const a of entries)
+    {
+      // usedBy = 后台给的"在用"标记（哪个页签在用这张图）。用它给**别的**页签换图时工具会**复制一张**
+      // （写成目标页签自己的名字），不会动原来那张 —— 格子上直接写出来，省得误以为会把它换掉。
+      const use = a.usedBy || '';
+      const mine = use !== '' && mode === 'art' && use.toUpperCase() === String(curCat).toUpperCase();
+      const tag = use === '' ? '' : (mine ? '｜本页在用' : '｜' + use + ' 在用');
+      const note = (a.pending ? '　还在待导出里' : '') +
+                   (use !== '' && !mine ? '　这张正被 ' + use + ' 页签用着：换到本页签会复制一张，不动它' : '');
+      cell(a.file, a.name + (a.pending ? '（待导出）' : '') + tag, a.url, note, use !== '' ? 'use' : '');
+    }
+    const btn = document.getElementById(u.pick);
+    const hit = entries.find(a => a.file === npArt[kind]);
+    btn.textContent = npArt[kind] === '' ? '（保持当前）'
+                    : npArt[kind] === '__donor__' ? '（跟默认母版一样）'
+                    : (hit ? hit.name + (hit.usedBy && hit.usedBy.toUpperCase() !== String(curCat).toUpperCase()
+                                          ? '（' + hit.usedBy + ' 在用→会复制一张）' : '')
+                           : (npArt[kind] || '').split(/[\/]/).pop());
+    const img = document.getElementById(u.prev);
+    const url = npArt[kind] === '' ? cur : (hit ? hit.url : '');
+    img.src = url || ''; img.style.display = url ? '' : 'none';
+    img.title = url ? '' : '（这张没有预览）';
+  }
+  const looksLikeKeep = () => mode === 'tab';   // 只有新建页签才给「跟默认母版一样」这一格
+  function pickArt(kind, file) {
+    npArt[kind] = file;
+    document.getElementById(pickerOf(kind).panel).classList.remove('open');
+    buildArtPicker(kind);
+  }
+  document.getElementById('npBgPick').onclick = () => {
+    const p = document.getElementById('npBgPanel');
+    const open = p.classList.contains('open');
+    document.getElementById('npBtnPanel').classList.remove('open');
+    p.classList.toggle('open', !open);
+  };
+  document.getElementById('npBtnPick').onclick = () => {
+    const p = document.getElementById('npBtnPanel');
+    const open = p.classList.contains('open');
+    document.getElementById('npBgPanel').classList.remove('open');
+    p.classList.toggle('open', !open);
+  };
+  npArt = { bg: mode === 'tab' ? '__donor__' : '', btn: mode === 'tab' ? '__donor__' : '' };
+  buildArtPicker('bg');
+  buildArtPicker('btn');
+  window.pickArt = pickArt;                  // 离线测试要能直接调它（DOM 桩点不了缩略图）
+  window.buildArtPicker = buildArtPicker;
+  document.getElementById('npGroupRow').style.display = mode === 'group' ? '' : 'none';
+  document.getElementById('npTabRow').style.display = mode === 'tab' ? '' : 'none';
+  document.getElementById('npArtRow').style.display = mode === 'group' ? 'none' : '';
+  document.getElementById('npTitle').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '换图（' + (artCat || '') + '）');
+  document.getElementById('npOk').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '应用换图');
+  if (mode === 'group')
+    document.getElementById('npGroupKey').value = 'studio_group_' + Date.now().toString().slice(-6);
+  showPop('newPop');
+  hidePop('cardPop'); hidePop('routePop');
+}
+// 换图入口已挪到页签右键菜单（见 tmArt）
+document.getElementById('bTabOpen').onclick = () => {
+  const host = document.getElementById('opList');
+  host.innerHTML = '';
+  // 列出**包里所有页签**（含别种族的，它们有内容才是你要的）；每组后面标"几组"，空页签标灰
+  const stats = DATA.tabStats || {};
+  const opened = new Set(DATA.openedTabs || []);
+  const mine2 = new Set(DATA.newTabs || []);
+  const isOurs2 = p => filterFaction ? ((DATA.pageFactions || {})[p] || []).indexOf(filterFaction) >= 0
+                    : (filterRace ? ((DATA.pageRaces || {})[p] || []).indexOf(filterRace) >= 0 : true);
+  const keys = Object.keys(stats).concat((DATA.tabKeys || []).filter(k => !(k in stats)));
+  keys.sort((a, b) => (stats[b] || 0) - (stats[a] || 0) || a.localeCompare(b));
+  for (const k of keys) {
+    const n = stats[k] || 0;
+    if (isOurs2(k) || opened.has(k) || mine2.has(k)) continue;      // 已经能看见的不用再开
+    const id = 'op_' + k;
+    const lab = document.createElement('label');
+    lab.style.color = n > 0 ? '#B0B6BC' : '#5A6470';
+    lab.innerHTML = '<input type="checkbox" id="' + id + '" value="' + k + '"> ' + k +
+                    '（' + (n > 0 ? n + ' 组' : '空页签') + '）';
+    host.appendChild(lab);
+  }
+  if (host.children.length === 0) host.textContent = '（没有别的可打开的页签了）';
+  showPop('openPop');
+};
+document.getElementById('opClose').onclick = () => hidePop('openPop');
+document.getElementById('opOk').onclick = () => {
+  const tabs = [];
+  for (const cb of document.querySelectorAll('#opList input[type=checkbox]')) if (cb.checked) tabs.push(cb.value);
+  if (tabs.length > 0) report({ type: 'openTabs', tabs: tabs });
+  hidePop('openPop');
+};
+document.getElementById('bNewTab').onclick = () => openNewPop('tab');
+document.getElementById('npClose').onclick = () => hidePop('newPop');
+document.getElementById('npOk').onclick = () => {
+  if (npMode === 'group') {
+    const key = (document.getElementById('npGroupKey').value || '').trim();
+    if (!key) return;
+    const n = (DATA.groups || []).length;
+    const x = 40 + (n % 10) * 60, y = 40 + Math.floor(n / 10) * 105;
+    report({ type: 'newGroup', group: key, x: x, y: y, category: document.getElementById('npCat').value });
+  } else if (npMode === 'tab') {
+    const key = (document.getElementById('npTabKey').value || '').trim().toUpperCase();
+    if (!key) return;
+    report({ type: 'newTab', key: key, donor: '',
+             bg: (npArt.bg && npArt.bg !== '__donor__') ? npArt.bg : '', btn: (npArt.btn && npArt.btn !== '__donor__') ? npArt.btn : '' });
+    if (pendingDrop) {                                  // 建完页签把刚才拖进来的兵放进去
+      const pd = pendingDrop; pendingDrop = null;
+      activePage = key;
+      setTimeout(() => reportAddUnit(pd.unit, pd.x, pd.y, true, key, ''), 300);
+    }
+  } else {
+    // 换图：当前页签
+    if (!activePage) { alert('先选一个页签'); return; }
+    report({ type: 'setTabArt', category: artCat || activePage,
+             bg: npArt.bg || '', btn: npArt.btn || '' });
+  }
+  hidePop('newPop');
+};
+
+/* ───────────── 组右键：军事组 ───────────── */
+let ctxUnits = [], ctxGroup = '', ctxGroups = [];
+document.getElementById('ctxAdd').onclick = () => {
+  report({ type: 'addToMilGroup', units: ctxUnits });
+  document.getElementById('ctxMenu').classList.add('hidden');
+};
+document.getElementById('ctxDel').onclick = () => {
+  report({ type: 'removeFromMilGroup', units: ctxUnits });
+  document.getElementById('ctxMenu').classList.add('hidden');
+};
+document.getElementById('ctxSplit').onclick = () => {
+  // 右键菜单里的"拆分成单兵组"：第一个兵留在原组（保住连线/路线），其余各自成组
+  let n = 0;
+  for (const k of ctxGroups) {
+    const g = GROUPS[k];
+    if (g && g.units && g.units.length > 1) {
+      report({ type: 'splitGroup', group: k, x: g.x | 0, y: g.y | 0, category: g.category || (activePage || '') });
+      n++;
+    }
+  }
+  document.getElementById('ctxMenu').classList.add('hidden');
+  if (n === 0) document.getElementById('xy').textContent = '这个组只有一个兵，不用拆';
+  else document.getElementById('xy').textContent = '已拆分 ' + n + ' 个组（待导出）';
+};
+document.getElementById('ctxClose').onclick = () => {
+  document.getElementById('ctxMenu').classList.add('hidden');
+  document.getElementById('ctxRow2').style.display = 'none';
+  document.getElementById('ctxRow1').style.display = '';
+};
+document.getElementById('ctxMove').onclick = () => {
+  const host = document.getElementById('ctxRow2');
+  host.innerHTML = '';
+  const add = (label, cat) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => {
+      for (const k of ctxGroups) {
+        const gg = GROUPS[k]; if (!gg) continue;
+        report({ type: 'setCategory', group: k, category: cat, x: gg.x | 0, y: gg.y | 0 });
+      }
+      document.getElementById('ctxMenu').classList.add('hidden');
+      host.style.display = 'none';
+      document.getElementById('ctxRow1').style.display = '';
+    };
+    host.appendChild(b);
+  };
+  const here = (GROUPS[ctxGroups[0]] || {}).category || '';
+  for (const t of railTabs) if (t !== here) add(t, t);        // 只能移到**已打开**的页签（页签列里可见的那些）
+  if (host.children.length === 0) host.textContent = '（没有别的已打开页签可移）';
+  document.getElementById('ctxRow1').style.display = 'none';
+  host.style.display = '';
+};
+
+/* ───────────── 已有升级面板（右键兵牌 → 查看已有升级）───────────── */
+// 列出选中组作为 base（→ 可升级到对方）与作为 target（← 由对方升级而来）的全部升级关系。
+// 「跨页」或「无连线」的关系：交换方向 / 删除**只改路线表**（不写 ui_links）—— 游戏按页签画线，跨页的线画不出来。
+let upgGroups = [];
+// 成本明细：金 + 额外资源。v = treasury_cost（负=消耗）；pools = [{f: 资源因子, a: 数量}]
+function costDetail(v, pools) {
+  const parts = [];
+  if (v) parts.push(Math.round(v) + ' 金');
+  // 额外资源：优先显示**资源名**（r；工具建的池名是 <资源>_warband_upgrade，显示池名不好看），老数据退回池名（f）
+  for (const p of (pools || [])) parts.push(Math.round(p.a) + ' ' + (p.r || p.f));
+  return parts.length > 0 ? parts.join(' · ') : '0';
+}
+// 这两个组之间现在是什么关系？**两个方向都算**（一对组只允许有一条线/一条路线）。
+// 多选菜单的三态按钮、自动/手动调整画线都靠它。
+function linkOfPair(a, b) {
+  return (DATA.links || []).find(L => (L.c === a && L.p === b) || (L.c === b && L.p === a)) || null;
+}
+function routeOfPair(a, b) {
+  return (DATA.routeList || []).find(r => (r.b === a && r.t === b) || (r.b === b && r.t === a)) || null;
+}
+function costText(k, v) {
+  if (!k) return '（无成本）';
+  const meta = (DATA.costKeys || []).find(x => x && typeof x !== 'string' && x.k === k);
+  const detail = costDetail(v, meta ? meta.pools : null);
+  return k + (detail !== '0' ? '（' + detail + '）' : '');
+}
+function upgradeRowsFor(gk) {
+  const out = [];
+  for (const r of (DATA.routeList || [])) {
+    let dir = '';
+    if (r.b === gk) dir = 'out'; else if (r.t === gk) dir = 'in';
+    if (!dir) continue;
+    const hasLink = r.link === true;
+    const cp = crossPagePair(r.b, r.t);
+    out.push({ r: r, dir: dir, other: (dir === 'out' ? r.t : r.b),
+               crossPage: cp, hasLink: hasLink, routeOnly: cp || !hasLink });
+  }
+  return out;
+}
+// ── 手动调整画线：左侧 = 起始兵牌（升级的 base，线从这里出发 = parent_link_position），
+//    右侧 = 指向兵牌（升级的 target，线落到这里 = child_link_position）。
+//    箭头方向 ↔ ui_links 的 position：1=上 2=右 3=下 4=左（和 canvas 的 DIR 一致）。
+//    点箭头立刻应用（adjustLink）；同一对只留一条线，所以反方向那条会被归一掉。
+let lineCur = null;                     // { base, target, childPos, parentPos }
+function openLinePop(base, target) {
+  const rel = routeOfPair(base, target);
+  if (!rel) { alert('这两个组之间没有升级关系 —— 先在多选菜单里「链接」建立升级，才能调整画线。'); return; }
+  const L = linkOfPair(rel.b, rel.t);
+  const norm = !L || L.p === rel.b;     // 连线记的方向是不是"parent = 升级来源"
+  lineCur = { base: rel.b, target: rel.t,
+              childPos: L ? (norm ? L.cp : L.pp) : 0,     // 归一化成 child = 升级目标
+              parentPos: L ? (norm ? L.pp : L.cp) : 0 };
+  buildLinePop();
+}
+function buildLinePop() {
+  if (!lineCur) return;
+  const nmOf = k => { const g = GROUPS[k]; const u0 = g && g.units && g.units[0];
+                      return u0 ? ((DATA.names || {})[u0] || shortName(u0)) : k; };
+  document.getElementById('lineTitle').textContent =
+    '调整画线：' + nmOf(lineCur.base) + '（起始）→ ' + nmOf(lineCur.target) + '（指向）';
+  const side = (hostId, gk, isFrom) => {
+    const host = document.getElementById(hostId);
+    host.innerHTML = ''; host.className = 'lineSide';
+    const mk = (label, pos, area, tip) => {
+      const b = document.createElement('button');
+      b.textContent = label; b.title = tip; b.className = area;
+      if ((isFrom ? lineCur.parentPos : lineCur.childPos) === pos) b.classList.add('on');
+      b.onclick = () => {
+        if (isFrom) lineCur.parentPos = pos; else lineCur.childPos = pos;
+        report({ type: 'adjustLink', child: lineCur.target, parent: lineCur.base,
+                 childPos: lineCur.childPos, parentPos: lineCur.parentPos,
+                 midOffset: autoMidOffset(GROUPS[lineCur.base], GROUPS[lineCur.target], lineCur.parentPos, lineCur.childPos) });
+      };
+      host.appendChild(b);
+    };
+    mk('↑', 1, 'lsUp', '这一端从**正上方**出发');
+    mk('←', 4, 'lsLeft', '这一端从**左边**出发');
+    mk('→', 2, 'lsRight', '这一端从**右边**出发');
+    mk('↓', 3, 'lsDown', '这一端从**正下方**出发');
+    const card = document.createElement('div');
+    card.className = 'lsCard';
+    const g = GROUPS[gk] || {};
+    const u0 = (g.units || [])[0] || '';
+    const url = (DATA.icons || {})[u0] || '';
+    card.innerHTML = (url ? '<img src="' + url + '">' : '') +
+                     '<div style="font-size:10px;color:#B0B6BC;text-align:center">' + nmOf(gk) + '</div>';
+    host.appendChild(card);
+    const nm = document.createElement('div');
+    nm.className = 'lsName';
+    nm.textContent = (isFrom ? '起始：' : '指向：') + nmOf(gk) + '（' + gk + '）';
+    host.appendChild(nm);
+  };
+  side('lineFrom', lineCur.base, true);
+  side('lineTo', lineCur.target, false);
+  document.getElementById('lineHint').textContent =
+    '点箭头 = 这一端改到那个方向出发（立刻应用）。当前：起始 ' + (lineCur.parentPos || '自动') +
+    ' / 指向 ' + (lineCur.childPos || '自动') + '（1上 2右 3下 4左）';
+  showPop('linePop');
+}
+document.getElementById('lineClose').onclick = () => { lineCur = null; hidePop('linePop'); };
+
+function upgBtn(host, label, title, cls, fn) {
+  const b = document.createElement('button');
+  b.textContent = label; b.title = title; if (cls) b.className = cls;
+  b.onclick = fn;
+  host.appendChild(b);
+}
+function locateGroup(gk) {                     // 点对方名字 = 切到它所在页签并选中它
+  const g = GROUPS[gk];
+  if (!g) return;
+  if (g.category) { activePage = g.category; buildRail(DATA.pages || []); applyFilter(); }
+  selectCard(gk, (g.units || [])[0] || '');
+}
+function upgRow(row) {
+  const r = row.r;
+  const el = document.createElement('div');
+  el.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;' +
+                     'background:#212529;border:1px solid #343A40;border-radius:4px;padding:3px 6px';
+  const dir = document.createElement('span');
+  dir.textContent = row.dir === 'out' ? '→' : '←';
+  dir.style.cssText = 'color:#E2B45F;font-weight:700;width:14px;text-align:center';
+  dir.title = row.dir === 'out' ? '本组升级为对方（本组是 base）' : '对方升级为本组（本组是 target）';
+  el.appendChild(dir);
+  const oc = (GROUPS[row.other] || {}).category || '';
+  const nm = document.createElement('span');
+  nm.style.cssText = 'min-width:180px;cursor:pointer';
+  nm.title = '对方组 key：' + row.other + '（页签 ' + (oc || '无') + '；点名字 = 定位到它）'
+           + (row.crossPage ? '　跨页关系：只改路线表，不写界面连线' : '');
+  nm.innerHTML = groupName(row.other) +
+                 ' <span style="color:#64A9E2">[' + (oc || '无页签') + ']</span>' +
+                 (row.crossPage ? ' <span style="color:#E2B45F">跨页</span>' : '') +
+                 (row.hasLink ? '' : ' <span style="color:#E17979">无连线</span>');
+  nm.onclick = () => locateGroup(row.other);
+  el.appendChild(nm);
+  const info = document.createElement('span');
+  info.style.cssText = 'color:#B0B6BC;flex-basis:100%';
+  info.textContent = costText(r.c, r.ca) + '　等级 ' + r.rr + ' / 扣 ' + r.rs;
+  info.title = '升级 key：' + r.k;
+  el.appendChild(info);
+  // 按钮**统一提行**（单独一层 flex-basis:100% 的容器）：以前它们跟在成本/等级后面飘，
+  // 文本一长就换行、短就挤在同一行 —— 现在每行都是"第一行信息 + 第二行按钮"，一眼扫下来对齐
+  const btns = document.createElement('div');
+  btns.style.cssText = 'flex-basis:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+  el.appendChild(btns);
+  upgBtn(btns, '改金额/等级', '打开升级对话框改这条（成本 Key / 最低等级 / 扣除等级）', '', () => {
+    const gb = GROUPS[r.b] || { x: 0, y: 0, units: [] };
+    const gt = GROUPS[r.t] || { x: 0, y: 0, units: [] };
+    const pos = positionsFor(gb, gt);
+    const lk = linkOfPair(r.b, r.t);
+    routeDialog('编辑升级', { base: r.b, target: r.t, key: r.k, cost: r.c, rank: r.rr, sub: r.rs,
+                              childPos: pos.childPos, parentPos: pos.parentPos, routeOnly: row.routeOnly,
+                              mo: lk ? (lk.p === r.b ? lk.mo : -lk.mo) : undefined,
+                              hasLink: row.hasLink });
+  });
+  if (row.hasLink)
+    upgBtn(btns, '取消连线', '只删界面连线（ui_links），升级关系保留（以后想加回来：多选两个组 → 添加连线）', '', () => {
+      report({ type: 'removeLink', child: r.t, parent: r.b });
+    });
+  upgBtn(btns, '⇄ 交换方向', row.routeOnly ? '交换路线方向（跨页/无连线：只改路线表）' : '交换路线方向（连线跟着翻）', '', () => {
+    const gb = GROUPS[r.b] || { x: 0, y: 0, units: [] };
+    const gt = GROUPS[r.t] || { x: 0, y: 0, units: [] };
+    const pos = positionsFor(gt, gb);          // 交换后新 parent = 原 target
+    report({ type: 'swapRoute', key: r.k, base: r.b, target: r.t, cost: r.c, rank: r.rr, sub: r.rs,
+             childPos: pos.childPos, parentPos: pos.parentPos, routeOnly: row.routeOnly });
+  });
+  upgBtn(btns, '删除', row.routeOnly ? '删除这条升级（跨页/无连线：只删路线表）' : '删除这条升级（路线 + 对应连线）', 'danger', () => {
+    if (!confirm('删除这条升级？\n\n' + groupName(r.b) + ' → ' + groupName(r.t) +
+                 (row.routeOnly ? '\n（跨页/无连线：只删路线表，不动界面连线）' : '\n（路线与对应连线一起删）'))) return;
+    report({ type: 'removeRoute', key: r.k, base: r.b, target: r.t, routeOnly: row.routeOnly });
+  });
+  return el;
+}
+function buildUpgPanel() {
+  const host = document.getElementById('upBody');
+  host.innerHTML = '';
+  let total = 0;
+  for (const gk of upgGroups) {
+    const rows = upgradeRowsFor(gk);
+    total += rows.length;
+    const head = document.createElement('div');
+    head.style.cssText = 'color:#9C9CAA';
+    head.textContent = '组 ' + groupName(gk) + '：' + rows.length + ' 条升级关系';
+    head.title = '组 key：' + gk;
+    host.appendChild(head);
+    if (rows.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:#5A6470;padding-left:12px';
+      empty.textContent = '（没有升级关系：Ctrl 选两个组 → 下方面板「链接」可以建一条）';
+      host.appendChild(empty);
+    } else for (const r of rows) host.appendChild(upgRow(r));
+  }
+  document.getElementById('upTitle').textContent = '已有升级：' + upgGroups.length + ' 个组 / ' + total + ' 条';
+  document.getElementById('upHint').textContent =
+    '「跨页」或「无连线」的关系：交换/删除只改路线表（unit_upgrade_to_unit_groups_tables）';
+  showPop('upgPop');
+}
+document.getElementById('ctxUpg').onclick = () => {
+  upgGroups = ctxGroups.slice();
+  document.getElementById('ctxMenu').classList.add('hidden');
+  hidePop('cardPop');
+  buildUpgPanel();
+};
+document.getElementById('upClose').onclick = () => hidePop('upgPop');
+
+/* ───────────── 页签右键菜单 ───────────── */
+let tmCategory = '';
+document.getElementById('tmRename').onclick = () => {
+  const nk = prompt('重命名页签（' + tmCategory + ' → 新 key；会同时改 categories 行、组的 category、twui 与两张图）', tmCategory);
+  document.getElementById('tabMenu').classList.add('hidden');
+  if (!nk) return;
+  report({ type: 'renameTab', old: tmCategory, new: nk.trim().toUpperCase() });
+};
+document.getElementById('tmClose').onclick = () => document.getElementById('tabMenu').classList.add('hidden');
+// 换图：目标 = 被右键的这个页签（不切换当前画布页签）
+document.getElementById('tmArt').onclick = () => {
+  npTargetCat = tmCategory;
+  document.getElementById('tabMenu').classList.add('hidden');
+  openNewPop('art');
+};
+// 从其他已加载的 mod 导入页签
+document.getElementById('tmImport').onclick = () => {
+  document.getElementById('tabMenu').classList.add('hidden');
+  openImportPop();
+};
+function openImportPop() {
+  const src = DATA.modTabs || [];                     // [{pack, name, tabs:[...]}]
+  const sel = document.getElementById('impPack');
+  sel.innerHTML = '';
+  const opt = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; };
+  if (src.length === 0) opt('', '（没有其他已加载的包）');
+  for (const p of src) sel.appendChild(opt(p.pack, p.name + '（' + (p.tabs || []).length + ' 个页签）'));
+  if (src.length > 0) sel.value = src[0].pack;      // 默认选第一个来源包（离线 DOM 桩不会自动选第一项）
+  const draw = () => {
+    const host = document.getElementById('impList');
+    host.innerHTML = '';
+    const p = src.find(x => x.pack === sel.value);
+    if (!p) return;
+    for (const t of (p.tabs || [])) {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:inline-flex;align-items:center;gap:3px;margin:0 8px 4px 0;color:#B0B6BC';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.value = t;
+      lab.appendChild(cb);
+      const sp = document.createElement('span');      // 命名文本用 span（离线 DOM 桩没有 createTextNode）
+      sp.textContent = t;
+      lab.appendChild(sp);
+      host.appendChild(lab);
+    }
+  };
+  sel.onchange = draw;
+  draw();
+  showPop('impPop');
+}
+document.getElementById('impClose').onclick = () => hidePop('impPop');
+document.getElementById('impOk').onclick = () => {
+  const pack = document.getElementById('impPack').value;
+  // 收集勾选的页签：直接遍历（不用 `:checked` 选择器，离线 DOM 桩不支持伪类）
+  const keys = [];
+  for (const lab of Array.from(document.getElementById('impList').children))
+    for (const cb of Array.from(lab.children)) if (cb.tagName === 'input' && cb.checked) keys.push(cb.value);
+  if (pack && keys.length > 0) report({ type: 'importTab', pack: pack, keys: keys });
+  hidePop('impPop');
+};
+document.getElementById('tmScope').onclick = () => {
+  const host = document.getElementById('tmRow2');
+  host.innerHTML = '';
+  const cur = ((DATA.tabRaceScopes || {})[tmCategory] || []);
+  const list = DATA.allRaces || [];
+  for (const r of list) {
+    const lab = document.createElement('label');
+    lab.style.cssText = 'color:#B0B6BC;font-size:11px;white-space:nowrap';
+    lab.innerHTML = '<input type="checkbox" value="' + r.r + '"' + (cur.indexOf(r.r) >= 0 ? ' checked' : '') + '> ' + r.n;
+    lab.title = r.r;
+    host.appendChild(lab);
+  }
+  if (list.length === 0) host.textContent = '（种族列表还没读出来，稍后再试）';
+  document.getElementById('tmRow1').style.display = 'none';
+  host.style.display = '';
+  document.getElementById('tmRow3').style.display = '';
+};
+document.getElementById('tmScopeCancel').onclick = () => {
+  document.getElementById('tmRow2').style.display = 'none';
+  document.getElementById('tmRow3').style.display = 'none';
+  document.getElementById('tmRow1').style.display = '';
+};
+document.getElementById('tmScopeOk').onclick = () => {
+  const races = [];
+  for (const cb of document.querySelectorAll('#tmRow2 input[type=checkbox]')) if (cb.checked) races.push(cb.value);
+  report({ type: 'applyTabToRaces', category: tmCategory, races: races });
+  document.getElementById('tabMenu').classList.add('hidden');
+  document.getElementById('tmRow2').style.display = 'none';
+  document.getElementById('tmRow3').style.display = 'none';
+  document.getElementById('tmRow1').style.display = '';
+};
+
+/* ───────────── 鼠标 ───────────── */
+addEventListener('mousemove', e => {
+  if (panning) {
+    pan.x = panning.px + (e.clientX - panning.sx);
+    pan.y = panning.py + (e.clientY - panning.sy);
+    applyPan();
+    return;
+  }
+  if (band) {
+    const b = document.getElementById('band');
+    const x = Math.min(band.sx, e.clientX), y = Math.min(band.sy, e.clientY);
+    b.style.left = x + 'px'; b.style.top = y + 'px';
+    b.style.width = Math.abs(e.clientX - band.sx) + 'px';
+    b.style.height = Math.abs(e.clientY - band.sy) + 'px';
+    return;
+  }
+  if (drag) {
+    // 真的动了才算"拖动"：没有这一步，mouseup 里的"回报坐标"分支永远不成立 ——
+    // 表现就是"拖了坐标不落表，下一次重推画布（加兵/撤销等）又弹回原位"。
+    // 防误触：按下后 ~0.2 秒内的位移**不算拖动**（点选兵牌时手抖常带出几像素位移，用户实测）；之后照旧 2px 阈值
+    if (!drag.moved && (Math.abs(e.clientX - drag.sx) > 2 || Math.abs(e.clientY - drag.sy) > 2)
+        && Date.now() - (drag.t0 || 0) >= 200) drag.moved = true;
+    // Shift = 精调（位移打 0.25 折）。必须**增量**累加：中途按下/松开 Shift 若整段重算，兵牌会被拽回起点
+    const slow = e.shiftKey ? 0.25 : 1;
+    const stepX = (e.clientX - drag.lastX) / zoom * slow, stepY = (e.clientY - drag.lastY) / zoom * slow;
+    drag.lastX = e.clientX; drag.lastY = e.clientY;
+    drag.curX = (drag.curX ?? drag.x) + stepX;
+    drag.curY = (drag.curY ?? drag.y) + stepY;
+    const nx = drag.curX, ny = drag.curY;
+    if (drag.groups && drag.groups.length > 1) {
+      // 多选：整批按同一个位移走（之前只动了被点住的那个组）
+      const dx = drag.curX - drag.x, dy = drag.curY - drag.y;   // 用增量结果（上面已按 Shift 速度算好）
+      for (const it of drag.groups) {
+        const pair = snapPair(it.x + dx, it.y + dy);
+        const gx2 = pair[0], gy2 = pair[1];
+        const gg = GROUPS[it.k]; if (!gg) continue;
+        gg.x = gx2; gg.y = gy2;
+        (CARDSBYGROUP[it.k] || []).forEach((el2, k2) => {
+          el2.style.left = (gx2 + k2 * SLOT) + 'px'; el2.style.top = gy2 + 'px';
+        });
+        redrawLinksFor(it.k);
+      }
+      livePos(drag.g);
+      document.getElementById('xy').textContent =
+        '拖动中（' + drag.groups.length + ' 个组一起）' + (snapOn ? '　吸附 50 网格' : '');
+    } else {
+      // 组是绑在一起的：同组的所有牌一起走
+      const pair0 = snapPair(nx - drag.i * SLOT, ny);
+      const sx2 = pair0[0], sy2 = pair0[1];
+      (CARDSBYGROUP[drag.g] || [drag.el]).forEach((el, k) => {
+        el.style.left = (sx2 + k * SLOT) + 'px';
+        el.style.top = sy2 + 'px';
+      });
+      const g = GROUPS[drag.g];
+      if (g) { g.x = sx2; g.y = sy2; redrawLinksFor(drag.g); livePos(drag.g); }
+    }
+    {   // 状态栏也显示**吸完的组坐标**（和落表的一致），不然读到的数和实际落的不一样
+      const gg0 = GROUPS[drag.g];
+      const px = gg0 ? gg0.x : nx, py = gg0 ? gg0.y : ny;
+      document.getElementById('xy').textContent =
+        '拖动中 游戏坐标 (' + Math.round(px) + ', ' + Math.round(py) + ')  →  面板像素 (' +
+        Math.round(px + 316) + ', ' + Math.round(py + 43) + ')　缩放 ' + Math.round(zoom * 100) + '%' +
+        (snapOn ? '　吸附 50 网格' : '');
+    }
+  } else {
+    const t = document.getElementById('tree').getBoundingClientRect();
+    document.getElementById('xy').textContent =
+      '鼠标 游戏坐标 (' + Math.round((e.clientX - t.left) / zoom) + ', ' + Math.round((e.clientY - t.top) / zoom) + ')' +
+      (pan.x || pan.y || zoom !== 1 ? '　画面偏移 (' + Math.round(pan.x) + ', ' + Math.round(pan.y) + ') 缩放 ' + Math.round(zoom * 100) + '%' : '');
+  }
+});
+addEventListener('mouseup', e => {
+  if (panning) { panning = null; return; }
+  if (band) {
+    const b = document.getElementById('band');
+    b.style.display = 'none';
+    const x1 = Math.min(band.sx, e.clientX), y1 = Math.min(band.sy, e.clientY);
+    const x2 = Math.max(band.sx, e.clientX), y2 = Math.max(band.sy, e.clientY);
+    band = null;
+    if (x2 - x1 <= 6 && y2 - y1 <= 6) {
+      // 画布空白处**单击**（不是拖框）→ 取消所有选择（页签栏/浮动面板不在此列，按下时已排除）
+      multiGroups = []; selected = null; connectFrom = null; linkSel = null;
+      for (const el of document.querySelectorAll('#tree .card'))
+        el.classList.remove('sel', 'msel', 'dimmed', 'upnext', 'conn');
+      for (const L of LINKELS) L.el.classList.remove('sel');
+      linkSel = null; hideKnob();                   // 反选：连线的高亮和转点手柄一起收
+      hidePop('cardPop'); hidePop('multiPop'); hidePop('routePop');
+      document.getElementById('ctxMenu').classList.add('hidden');
+      drag = null; band = null;                     // 反选要把拖动/框选状态一起清掉（不然防误触/拖动状态会残留到下一次）
+      paintMulti();
+      report({ type: 'deselect' });
+      return;
+    }
+    if (x2 - x1 > 6 || y2 - y1 > 6) {                      // 框太小当点击处理
+      for (const el of document.querySelectorAll('#tree .card')) {
+        if (el.style.display === 'none' || el.dataset.empty === '1') continue;
+        const r = el.getBoundingClientRect();
+        // 只要**部分**落在框里就算（之前要求完全框住，太难选）
+        if (r.left < x2 && r.right > x1 && r.top < y2 && r.bottom > y1)
+          addMulti(el.dataset.group);
+      }
+      report({ type: 'band', count: multi.length });
+    }
+    paintMulti();
+    return;
+  }
+  if (drag && drag.moved && drag.groups && drag.groups.length > 1) {
+    // 多选整批拖动：**一条消息**带全部组（后端一次落完再统一重推画布，避免多次重绘）
+    const moved = [];
+    for (const it of drag.groups) {
+      const gg = GROUPS[it.k]; if (!gg) continue;
+      moved.push({ group: it.k, x: Math.round(gg.x), y: Math.round(gg.y) });
+    }
+    if (moved.length > 0) report({ type: 'moveMany', groups: moved });
+    document.getElementById('xy').textContent = '已移动 ' + moved.length + ' 个组（已应用，待导出）';
+    refreshCardPanel();            // 坐标框立刻显示新坐标（拖动即应用，不用再点"应用坐标"）
+    drag = null;
+    return;
+  }
+  if (drag && drag.moved) {
+    // **上报画布上真正的坐标**（GROUPS[k].x/y，mousemove 里已经按吸附吸过），
+    // 而不是指针累加的 drag.curX/curY —— 否则"吸附拖到顶点、一松手又跳回非顶点"（模型里存的是原始值）。
+    const gg1 = GROUPS[drag.g];
+    const gx = gg1 ? Math.round(gg1.x) : Math.round((drag.curX ?? drag.x) - drag.i * SLOT);
+    const gy = gg1 ? Math.round(gg1.y) : Math.round(drag.curY ?? drag.y);
+    report({ type: 'move', group: drag.g, unit: drag.el.title.split(' ')[0], x: gx, y: gy });
+    document.getElementById('xy').textContent =
+      '组「' + drag.g + '」→ 游戏坐标 (' + gx + ', ' + gy + ')　（已应用：拖动即生效，导出时写入；不用再点「应用坐标」）';
+    refreshCardPanel();            // 坐标框立刻同步（避免"框里是旧值 → 点应用坐标把旧值写回去"）
+  }
+  if (drag) drag.el.draggable = false;
+  drag = null;
+});
+addEventListener('mousedown', e => {
+  if (e.button === 1) {
+    panning = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y };
+    e.preventDefault();
+    return;
+  }
+  if (e.button !== 0 || e.target.closest('.card, #rail, .pop, #bar, #linkKnob')) return;
+  // 空白处按下 → 框选（松开时把框到的兵卡加入多选）
+  band = { sx: e.clientX, sy: e.clientY };
+  const b = document.getElementById('band');
+  b.style.display = 'block';
+  b.style.left = e.clientX + 'px'; b.style.top = e.clientY + 'px';
+  b.style.width = '0px'; b.style.height = '0px';
+  if (!e.ctrlKey && !e.metaKey) { multi = []; paintMulti(); }
+});
+addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+addEventListener('keydown', e => {
+  // **焦点在输入框里就别抢键**：多选面板的 X/Y、成本/搜索等输入框里按 Backspace、方向键是在编辑文字，
+  // 不能被当成"删除选中的组 / 微调坐标"（用户实测：多选编辑共同坐标时按退格，兵牌直接被删）
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  // —— 常规快捷键（画布有焦点时） ——
+  // 删除选中的组
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (multiGroups.length > 0) {
+      e.preventDefault();
+      for (const gk of multiGroups.slice()) report({ type: 'removeGroup', group: gk });
+      multiGroups = []; paintMulti();
+    }
+    return;
+  }
+  // 方向键微调 1px（Shift = 10px）
+  if (e.key.startsWith('Arrow') && multiGroups.length > 0 && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    for (const gk of multiGroups) {
+      const gg = GROUPS[gk]; if (!gg) continue;
+      report({ type: 'setPos', group: gk, x: Math.round(gg.x + dx), y: Math.round(gg.y + dy) });
+    }
+    return;
+  }
+  // Ctrl+G 合并 / Ctrl+Shift+G 拆组
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
+    e.preventDefault();
+    if (multiGroups.length >= 2) {
+      report({ type: 'mergeGroups', keep: multiGroups[0], drop: multiGroups[1] });
+      multiGroups = []; paintMulti();
+    } else if (multiGroups.length === 1) {
+      report({ type: 'splitGroup', group: multiGroups[0], x: GROUPS[multiGroups[0]] ? GROUPS[multiGroups[0]].x : 0,
+               y: GROUPS[multiGroups[0]] ? GROUPS[multiGroups[0]].y : 0, category: activePage || '' });
+      multiGroups = []; paintMulti();
+    }
+    return;
+  }
+  // L：用选中的两个组直接建链接（弹升级对话框）
+  if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey && multiGroups.length === 2) {
+    e.preventDefault();
+    const A = GROUPS[multiGroups[0]], B = GROUPS[multiGroups[1]];
+    const pos = positionsFor(A, B);
+    routeDialog('新建升级', { base: multiGroups[0], target: multiGroups[1], key: '',
+                              cost: (DATA.costKeys || [])[0] ? ((DATA.costKeys || [])[0].k || '') : '', rank: 2, sub: 0,
+                              childPos: pos.childPos, parentPos: pos.parentPos,
+                              routeOnly: crossPagePair(multiGroups[0], multiGroups[1]) });
+    return;
+  }
+  // Ctrl+S 保存 / Ctrl+Shift+S 另存为；Ctrl+Tab 切画布
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault(); report({ type: 'hotkey', key: e.shiftKey ? 'saveAs' : 'save' }); return;
+  }
+  if (e.ctrlKey && e.key === 'Tab') {
+    e.preventDefault(); report({ type: 'hotkey', key: e.shiftKey ? 'prevTab' : 'nextTab' }); return;
+  }
+  // Ctrl+Z 撤销 / Ctrl+Y（或 Ctrl+Shift+Z）重做
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault(); report({ type: e.shiftKey ? 'redo' : 'undo' }); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault(); report({ type: 'redo' }); return;
+  }
+  if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {          // Ctrl+A：选中当前页面上可见的兵卡
+    e.preventDefault();
+    multiGroups = [];
+    for (const el of document.querySelectorAll('#tree .card')) {
+      if (el.style.display === 'none') continue;
+      addMulti(el.dataset.group);
+    }
+    paintMulti();
+    report({ type: 'selectAll', groups: multiGroups.length });
+    return;
+  }
+  if (e.key === '0' && !e.ctrlKey && !e.altKey) resetPan();
+  if (e.key === 'Escape') {
+    hidePop('cardPop'); hidePop('routePop'); hidePop('multiPop'); hidePop('newPop'); hidePop('openPop'); hidePop('upgPop');
+    hidePop('linePop'); lineCur = null;
+    const cm = document.getElementById('ctxMenu'); if (cm) cm.classList.add('hidden');
+    const sm = document.getElementById('snapMenu'); if (sm) sm.style.display = 'none';
+    multiGroups = []; selected = null; connectFrom = null; linkSel = null;
+    for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('sel','msel','dimmed','upnext','conn');
+    for (const L of LINKELS) L.el.classList.remove('sel');
+    paintMulti();
+  }
+});
+</script>
+</body>
+</html>

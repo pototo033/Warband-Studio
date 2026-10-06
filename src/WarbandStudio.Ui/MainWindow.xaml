@@ -1,0 +1,727 @@
+﻿<Window x:Class="WarbandStudio.Ui.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:WarbandStudio.Ui.ViewModels"
+        xmlns:views="clr-namespace:WarbandStudio.Ui.Views"
+        Title="战帮树工坊 WarbandStudio" Height="900" Width="1560"
+        Background="{DynamicResource Bg.Window}"
+        Foreground="{DynamicResource Text.Primary}"
+        FontFamily="{DynamicResource AppFont}"
+        WindowStartupLocation="CenterScreen">
+    <!--
+        三栏壳：
+          左上 Pack 文件树（战帮相关默认展开）；左下 分页面板（① 全局选项 ② 诊断·引用）
+          中   Tab 编辑区（画布等阶段 2 接 WebView2）
+          右   派系 + 兵种库（阶段 2 起接）
+    -->
+    <Window.Resources>
+        <!-- 深色右键菜单：默认 MenuItem 模板的悬停/边框是浅色的，在这套界面里会露出白色块 -->
+        <Style x:Key="DarkMenuItem" TargetType="MenuItem">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="B" Background="{TemplateBinding Background}" CornerRadius="3" Padding="9,4">
+                            <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="#263A4B" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#5A6470" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 菜单本体（弹层底色/边框）也套上：默认模板在深色界面里会露白 -->
+        <Style x:Key="DarkContextMenu" TargetType="ContextMenu">
+            <Setter Property="Background" Value="{DynamicResource Bg.Panel}" />
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Line}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="5" Padding="3">
+                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 菜单 -->
+        <Menu Grid.Row="0" Background="{DynamicResource Bg.Header}"
+              Foreground="{DynamicResource Text.Primary}">
+            <MenuItem Header="Pack 文件(_P)">
+                <MenuItem Header="打开 Pack（加载为战帮）…" InputGestureText="Ctrl+O"
+                          Command="{Binding OpenPackCommand}" />
+                <MenuItem Header="加载兵种 mod（参考包：图标/中文名/兵种库）…"
+                          Command="{Binding OpenUnitPackCommand}" />
+                <MenuItem Header="关闭 Pack" Command="{Binding ClosePackCommand}" />
+                <Separator />
+                <MenuItem Header="保存 Pack" InputGestureText="Ctrl+S" Command="{Binding SavePackCommand}" />
+                <MenuItem Header="另存为…" Command="{Binding SavePackAsCommand}" />
+                <Separator />
+                <MenuItem Header="退出" Click="OnExit" />
+            </MenuItem>
+            <MenuItem Header="视图(_V)" IsEnabled="False" />
+            <MenuItem Header="工具(_T)" IsEnabled="False" />
+            <MenuItem Header="帮助(_H)" IsEnabled="False" />
+        </Menu>
+
+        <!-- 工具栏 -->
+        <Border Grid.Row="1" Background="{DynamicResource Bg.Panel}"
+                BorderBrush="{DynamicResource Border.Line}" BorderThickness="0,1,0,1"
+                Padding="6,4">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="打开战帮" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenPackCommand}"
+                        ToolTip="打开一个战帮 .pack：进左侧文件树、占画布、可编辑" />
+                <Button Content="加载兵种mod" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenUnitPackCommand}"
+                        ToolTip="加载一个兵种 mod 当参考包：图标/中文名/右上「mod 兵种」页读它；不进战帮树、不占画布" />
+                <Button Content="保存" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" />
+                <Button Content="另存为" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackAsCommand}" />
+                <Button Content="关闭 Pack" Padding="10,3" Margin="0,0,12,0" Command="{Binding ClosePackCommand}" />
+                <Button Content="跑诊断" Padding="10,3" Margin="0,0,6,0" Command="{Binding DiagnosticsCommand}" />
+                <Button Content="教程" Padding="10,3" Margin="0,0,10,0" VerticalAlignment="Center"
+                        Click="OnStartTour" ToolTip="再看一遍使用教程（PPT 式指引）" />
+                <CheckBox Content="自动保存" VerticalAlignment="Center" Margin="0,0,10,0"
+                          IsChecked="{Binding AutoSave}"
+                          Foreground="{DynamicResource Text.Secondary}"
+                          ToolTip="打开后：每次编辑停下来约 2 秒自动写回原包（RPFM 那种随时保存的手感；原文件会留 .bak 备份）" />
+                <TextBlock VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12"
+                           Foreground="{DynamicResource Text.Secondary}" Text="{Binding Status}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 主区 -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320" MinWidth="220" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="*" MinWidth="420" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="260" MinWidth="180" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左栏 -->
+            <Grid Grid.Column="0" Background="{DynamicResource Bg.Panel}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" MinHeight="150" />
+                    <RowDefinition Height="4" />
+                    <RowDefinition Height="300" MinHeight="120" />
+                </Grid.RowDefinitions>
+
+                <!-- 左上：Pack 文件树 -->
+                <DockPanel Grid.Row="0">
+                    <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="?" Padding="6,0" Margin="4,0,0,0" FontSize="11"
+                                    Click="OnHelpTree" ToolTip="这个面板是干嘛的" />
+                            <TextBlock Text="Pack 文件（战帮相关默认展开）" Style="{StaticResource PanelHeaderText}" />
+                        </DockPanel>
+                    </Border>
+                    <TreeView x:Name="TreeFiles" ItemsSource="{Binding TreeRoots}" Background="Transparent"
+                              MouseDoubleClick="OnTreeDoubleClick"
+                              BorderThickness="0" Foreground="{DynamicResource Text.Primary}"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <TreeView.ContextMenu>
+                            <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                <ContextMenu.Resources>
+                                    <Style TargetType="MenuItem" BasedOn="{StaticResource DarkMenuItem}" />
+                                    <Style TargetType="Separator">
+                                        <Setter Property="Background" Value="{DynamicResource Border.Line}" />
+                                    </Style>
+                                </ContextMenu.Resources>
+                                <MenuItem Header="在新画布中打开该包" Click="OnOpenCanvasForNode" />
+                                <Separator />
+                                <MenuItem Header="打开所在文件夹" Click="OnTreeOpenFolder" />
+                                <MenuItem Header="重命名…（这个文件）" Click="OnTreeRenameFile" />
+                                <MenuItem Header="删除（这个文件）" Click="OnTreeDeleteFile" />
+                            </ContextMenu>
+                        </TreeView.ContextMenu>
+                        <TreeView.ItemContainerStyle>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Foreground" Value="{DynamicResource AeBrush.Accent}" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TreeView.ItemContainerStyle>
+                        <TreeView.ItemTemplate>
+                            <HierarchicalDataTemplate DataType="{x:Type vm:TreeItem}" ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Name}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding WarbandRelated}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+                                                    </DataTrigger>
+                                                    <!-- 这次编辑会动到这个文件 → 标红（像 RPFM 的"已修改"） -->
+                                                    <DataTrigger Binding="{Binding IsEdited}" Value="True">
+                                                        <Setter Property="Foreground" Value="#E17979" />
+                                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Tag}" Margin="8,0,0,0" FontSize="11"
+                                               Foreground="{DynamicResource Text.Secondary}" />
+                                </StackPanel>
+                            </HierarchicalDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </DockPanel>
+
+                <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch"
+                              Background="{DynamicResource Border.Line}" />
+
+                <!-- 左下：分页面板 -->
+                <TabControl x:Name="LeftTabs" Grid.Row="2" Background="{DynamicResource Bg.Panel}" BorderThickness="0">
+                    <TabItem Header="全局选项">
+                        <StackPanel Margin="8">
+                            <TextBlock Text="游戏目录（含 data 那一层）" FontSize="12"
+                                       Foreground="{DynamicResource Text.Secondary}" />
+                            <TextBox Text="{Binding GameDir, UpdateSourceTrigger=PropertyChanged}"
+                                     Margin="0,4,0,6" Padding="4,3"
+                                     Background="{DynamicResource Bg.Window}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     BorderBrush="{DynamicResource Border.Line}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="选择目录…" Padding="10,3" Margin="0,0,6,0"
+                                        Command="{Binding ChooseGameDirCommand}" />
+                                <Button Content="应用" Padding="10,3" Command="{Binding ApplyGameCommand}" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="再看教程" Padding="10,3" Margin="0,0,0,6" Click="OnStartTour" />
+                                <Button Content="检查更新" Padding="10,3" Margin="0,0,0,6" Click="OnCheckUpdates" />
+                                <TextBlock Text="{Binding AppVersion}" VerticalAlignment="Center" Margin="4,0,0,0"
+                                           Foreground="{DynamicResource Text.Secondary}" />
+                            </StackPanel>
+                            <TextBlock Text="备份文件夹（保存写回原包时，原文件备份到这里；每次带时间戳，不覆盖旧的）"
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Secondary}" />
+                            <TextBox Text="{Binding BackupDir, UpdateSourceTrigger=PropertyChanged}"
+                                     Margin="0,4,0,6" Padding="4,3"
+                                     Background="{DynamicResource Bg.Window}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     BorderBrush="{DynamicResource Border.Line}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="选择文件夹…" Padding="10,3" Margin="0,0,6,0" Click="OnChooseBackupDir" />
+                                <Button Content="打开备份文件夹" Padding="10,3" Click="OnOpenBackupDir" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding SchemaText}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                            <TextBlock Text="RPFM 引擎（随包内置 rpfm_cli 4.7.4）"
+                                       FontSize="12" Margin="0,8,0,2" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Secondary}" />
+                            <TextBlock Text="{Binding ServerText}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                            <TextBlock Style="{StaticResource AeText.Caption}" Margin="0,4,0,8"
+                                       TextWrapping="Wrap"
+                                       Text="引擎与 schema 都随本工具发布，不需要额外安装。游戏目录只在「诊断」「依赖缓存」时用到。" />
+                            <TextBlock Text="后端日志（排查用）" FontSize="12"
+                                       Foreground="{DynamicResource Text.Secondary}" />
+                            <ListBox ItemsSource="{Binding LogLines}" Height="110" Margin="0,4,0,0"
+                                     FontSize="11" Background="{DynamicResource Bg.Window}"
+                                     Foreground="{DynamicResource Text.Secondary}"
+                                     BorderBrush="{DynamicResource Border.Line}" />
+                        </StackPanel>
+                    </TabItem>
+                    <TabItem Header="诊断 · 引用">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button Content="跑一遍诊断" Padding="10,3" Command="{Binding DiagnosticsCommand}" />
+                                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="12"
+                                           Foreground="{DynamicResource Text.Secondary}"
+                                           Text="（rpfm DiagnosticsCheck：坏引用 / 非法枚举 / 空 key…）" />
+                            </StackPanel>
+                            <ListBox ItemsSource="{Binding DiagnosticsLines}" FontSize="11"
+                                     Background="{DynamicResource Bg.Window}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     BorderBrush="{DynamicResource Border.Line}" />
+                        </DockPanel>
+                    </TabItem>
+                    <TabItem Header="UI 素材库">
+                        <DockPanel Margin="8">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button Content="刷新" Padding="10,3" Command="{Binding LoadUiAssetsCommand}" />
+                                <Button Content="导入背景图…" Padding="10,3" Margin="6,0,0,0" Click="OnUiAssetImport" Tag="bg"
+                                        ToolTip="选一张或多张 .png 作为**背景图**加进本地素材库（导入时先改成 background_images_new_added&lt;N&gt;.png，用到页签上再改成 background_images_&lt;页签key&gt;.png）" />
+                                <Button Content="导入按钮图…" Padding="10,3" Margin="6,0,0,0" Click="OnUiAssetImport" Tag="btn"
+                                        ToolTip="选一张或多张 .png 作为**按钮图**加进本地素材库（导入时先改成 button_upgrade_new_added&lt;N&gt;.png，用到页签上再改成 button_upgrade_&lt;页签key&gt;.png）" />
+                                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="11"
+                                           Foreground="{DynamicResource Text.Secondary}"
+                                           Text="本地素材库（内置 WUU+雪乃 + 你导入的）；右键一张图 →「添加到当前包」= 导出时写进你编辑的 pack（不动画布）" />
+                            </StackPanel>
+                            <TextBox DockPanel.Dock="Top" Margin="0,0,0,6" Padding="4,3"
+                                     Text="{Binding UiAssetFilter, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="按文件名过滤，例如 background_images_ / button_upgrade_ / subtitle"
+                                     Background="{DynamicResource Bg.Window}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     BorderBrush="{DynamicResource Border.Line}" />
+                            <!-- 不要写死高度：跟着左下窗口伸缩（写死 300 会顶出窗口，缩略图点到都点不到） -->
+                            <ListBox ItemsSource="{Binding UiAssets}" Background="{DynamicResource Bg.Window}"
+                                     BorderBrush="{DynamicResource Border.Line}"
+                                     MinHeight="120" VerticalAlignment="Stretch"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ListBox.GroupStyle>
+                                    <GroupStyle>
+                                        <GroupStyle.HeaderTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="11"
+                                                           Margin="2,6,0,2"
+                                                           Foreground="{DynamicResource Text.Secondary}" />
+                                            </DataTemplate>
+                                        </GroupStyle.HeaderTemplate>
+                                    </GroupStyle>
+                                </ListBox.GroupStyle>
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Width="120" Margin="3" ToolTip="{Binding Tip}">
+                                            <StackPanel.ContextMenu>
+                                                <!-- 右键菜单跟着主题走（默认模板是浅色的，在这套深色界面里会露白） -->
+                                                <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                                    <ContextMenu.Resources>
+                                                        <Style TargetType="MenuItem" BasedOn="{StaticResource DarkMenuItem}" />
+                                                        <Style TargetType="Separator">
+                                                            <Setter Property="Background" Value="{DynamicResource Border.Line}" />
+                                                        </Style>
+                                                    </ContextMenu.Resources>
+                                                    <MenuItem Style="{StaticResource DarkMenuItem}" Header="添加到当前包" Click="OnUiAssetAddToPack" Tag="{Binding}"
+                                                              Foreground="{DynamicResource Text.Primary}" />
+                                                    <MenuItem Style="{StaticResource DarkMenuItem}" Header="重命名…" Click="OnUiAssetRename" Tag="{Binding}"
+                                                              Foreground="{DynamicResource Text.Primary}" />
+                                                    <MenuItem Style="{StaticResource DarkMenuItem}" Header="复制写进包时的路径" Click="OnUiAssetCopyPath" Tag="{Binding}"
+                                                              Foreground="{DynamicResource Text.Primary}" />
+                                                    <Separator Background="{DynamicResource Border.Line}" />
+                                                    <MenuItem Style="{StaticResource DarkMenuItem}" Header="从素材库移除" Click="OnUiAssetRemove" Tag="{Binding}"
+                                                              Foreground="{DynamicResource Text.Primary}" />
+                                                </ContextMenu>
+                                            </StackPanel.ContextMenu>
+                                            <Image Source="{Binding PreviewFile}" Width="114" Height="62" Stretch="Uniform" />
+                                            <TextBlock Text="{Binding Name}" FontSize="10" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource Text.Primary}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </TabItem>
+                </TabControl>
+            </Grid>
+
+            <GridSplitter Grid.Column="1" Width="6" VerticalAlignment="Stretch"
+                          Background="{DynamicResource Border.Line}"
+                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                          DragCompleted="OnSplitterDragCompleted" />
+
+            <!-- 中栏：画布（WebView2 覆盖层）+ 表视图。ClipToBounds：别让 WebView2 的合成面画到左右栏上面 -->
+            <Grid Grid.Column="2" ClipToBounds="True">
+            <TabControl Background="{DynamicResource Bg.Panel}" BorderThickness="0"
+                        ItemsSource="{Binding CenterTabs}" SelectedItem="{Binding ActiveCenterTab}">
+                <TabControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Header}" VerticalAlignment="Center" />
+                            <Button Content="×" Margin="6,0,0,0" Padding="4,0" FontSize="12"
+                                    Background="Transparent" BorderThickness="0"
+                                    Foreground="{DynamicResource Text.Secondary}"
+                                    ToolTip="关闭这个页签（有未导出的编辑会先问你）"
+                                    Click="OnCloseTab" Tag="{Binding}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TabControl.ItemTemplate>
+                <TabControl.Resources>
+                    <DataTemplate DataType="{x:Type vm:CanvasTab}">
+                        <Grid Background="{DynamicResource Bg.Window}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:TableTab}">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" Text="{Binding Info}" Margin="8,5,8,4"
+                                       Style="{StaticResource AeText.Caption}" />
+                            <DataGrid ItemsSource="{Binding View}" AutoGenerateColumns="True" IsReadOnly="True"
+                                      CanUserAddRows="False" CanUserDeleteRows="False"
+                                      Background="{DynamicResource AeBrush.Canvas}"
+                                      Foreground="{DynamicResource AeBrush.TextPrimary}"
+                                      RowBackground="Transparent"
+                                      AlternatingRowBackground="{DynamicResource AeBrush.Surface1}"
+                                      BorderBrush="{DynamicResource AeBrush.Border}" BorderThickness="1"
+                                      GridLinesVisibility="All"
+                                      HorizontalGridLinesBrush="{DynamicResource AeBrush.Border}"
+                                      VerticalGridLinesBrush="{DynamicResource AeBrush.Border}"
+                                      FontSize="11" FontFamily="{DynamicResource AeFont.Technical}" />
+                        </DockPanel>
+                    </DataTemplate>
+                </TabControl.Resources>
+            </TabControl>
+                <!-- 战帮画布：WebView2 覆盖在中间栏（留出页签条高度），只在画布页签选中时显示 -->
+                <views:WarbandCanvas x:Name="CanvasHost" Margin="0,28,0,0"
+                                     Visibility="{Binding IsCanvasActive, Converter={StaticResource BoolToVisibility}}" />
+
+                <!--
+                    模块槽位（都在画布容器上，按 docs/UI模块与空间约定.md）：
+                      · CanvasTabRail  画布内右侧 **悬空页签列**（切页签只画该页签的组）
+                      · TopSlotHost    顶部预留（多 pack 标签栏）
+                      · BottomSlotHost 底部预留（详情 / 引用面板）
+                    接新功能时直接往对应的命名容器里放内容，不要改整体布局。
+                -->
+                <Border x:Name="TopSlotHost" VerticalAlignment="Top" Visibility="Collapsed" />
+                <Border x:Name="BottomSlotHost" VerticalAlignment="Bottom" Visibility="Collapsed" />
+            </Grid>
+
+            <GridSplitter Grid.Column="3" Width="6" VerticalAlignment="Stretch"
+                          Background="{DynamicResource Border.Line}"
+                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                          DragCompleted="OnSplitterDragCompleted" />
+
+            <!-- 右栏两页：①种族/派系（+兵种库）②成本工坊（新建战帮升级成本，写三张表） -->
+            <TabControl x:Name="RightTabs" Grid.Column="4" Background="{DynamicResource Bg.Panel}" BorderThickness="0"
+                        Foreground="{DynamicResource Text.Primary}" SelectionChanged="OnRightTabsChanged">
+                <TabItem Header="种族 / 派系">
+            <Grid Background="{DynamicResource Bg.Panel}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="3*" MinHeight="80" />
+                    <RowDefinition Height="4" />
+                    <!-- 兵种库整块（标题 + 搜索 + 列表）都是一个 * 行：拖分隔条放大的是**内容**，
+                         老写法把库的高度写死 300、标题是 Auto，拖出来的空间全给了标题那一行 -->
+                    <RowDefinition Height="2*" MinHeight="150" />
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Style="{StaticResource PanelHeader}">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="?" Padding="6,0" Margin="4,0,0,0" FontSize="11"
+                                Click="OnHelpFaction" ToolTip="这个面板是干嘛的" />
+                        <TextBlock Text="种族 / 派系（实时读 DB）" Style="{StaticResource PanelHeaderText}" />
+                    </DockPanel>
+                </Border>
+                <TreeView x:Name="TreeFactions" Grid.Row="1" ItemsSource="{Binding Factions}"
+                          Background="Transparent" BorderThickness="0"
+                          Foreground="{DynamicResource Text.Primary}"
+                          SelectedItemChanged="OnFactionSelected"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <TreeView.ItemTemplate>
+                        <HierarchicalDataTemplate DataType="{x:Type vm:FactionNode}" ItemsSource="{Binding Children}">
+                            <TextBlock Text="{Binding Label}" ToolTip="{Binding Tip}"
+                                       AutomationProperties.HelpText="{Binding Tip}"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                        </HierarchicalDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
+                <GridSplitter Grid.Row="2" Height="4" HorizontalAlignment="Stretch"
+                              Background="{DynamicResource Border.Line}" />
+                <Border Grid.Row="3" Background="{DynamicResource Bg.Panel}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="?" Padding="6,0" Margin="4,0,0,0" FontSize="11"
+                                        Click="OnHelpLibrary" ToolTip="这个面板是干嘛的" />
+                                <TextBlock Text="{Binding LibraryTitle}" Style="{StaticResource PanelHeaderText}" />
+                            </DockPanel>
+                        </Border>
+                        <TextBox DockPanel.Dock="Top" Margin="4,2,4,2"
+                                 Text="{Binding LibrarySearch, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="搜索兵种库：key 和中文名都能搜（留空 = 全部）" />
+                        <TextBlock DockPanel.Dock="Bottom" Margin="4,0,4,2" FontSize="11"
+                                   Foreground="{DynamicResource Text.Secondary}"
+                                   Text="搜索：key / 中文名都能搜；拖动或双击卡片 = 加到画布" />
+                        <ListBox x:Name="ListLibrary" ItemsSource="{Binding Library}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         MouseDoubleClick="OnLibraryDoubleClick"
+                         AllowDrop="True" Drop="OnLibraryDrop"
+                         PreviewMouseLeftButtonDown="OnLibraryDragStart"
+                         PreviewMouseMove="OnLibraryMouseMove">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:UnitCard}">
+                            <StackPanel Width="62" Margin="2" ToolTip="{Binding Key}">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding InTree}" Value="True">
+                                                <Setter Property="Opacity" Value="0.28" />
+                                                <Setter Property="ToolTip" Value="已经在画布上了（再拖会重复）" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <Border Height="87" Background="{DynamicResource Bg.Window}"
+                                        BorderBrush="{DynamicResource Border.Line}" BorderThickness="1"
+                                        CornerRadius="3">
+                                    <Image Source="{Binding Icon}" Stretch="Uniform" />
+                                </Border>
+                                <TextBlock Text="{Binding Name}" FontSize="10" Margin="0,2,0,0"
+                                           Foreground="{DynamicResource Text.Secondary}"
+                                           TextTrimming="CharacterEllipsis" MaxHeight="26"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+            </Grid>
+                </TabItem>
+                <TabItem Header="mod 兵种">
+                    <Grid Background="{DynamicResource Bg.Panel}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="3*" MinHeight="70" />
+                            <RowDefinition Height="4" />
+                            <RowDefinition Height="2*" MinHeight="150" />
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource PanelHeader}">
+                            <TextBlock Text="mod（打开的包；选一个看它新加的兵）" Style="{StaticResource PanelHeaderText}" />
+                        </Border>
+                        <!-- 树：包 → 它的 main_units 表文件（选哪个文件就显示哪个文件的兵） -->
+                        <TreeView x:Name="TreeMods" Grid.Row="1" ItemsSource="{Binding Mods}"
+                                  Background="Transparent" BorderThickness="0"
+                                  Foreground="{DynamicResource Text.Primary}"
+                                  SelectedItemChanged="OnModSelected">
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+                                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=OneWay}" />
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate DataType="{x:Type vm:MainViewModel+ModItem}" ItemsSource="{Binding Children}">
+                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"
+                                               ToolTip="{Binding TablePath}" />
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                        </TreeView>
+                        <GridSplitter Grid.Row="2" Height="4" HorizontalAlignment="Stretch"
+                                      Background="{DynamicResource Border.Line}" />
+                        <Border Grid.Row="3" Background="{DynamicResource Bg.Panel}">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+                                    <TextBlock Text="{Binding ModLibraryTitle}" Style="{StaticResource PanelHeaderText}" />
+                                </Border>
+                                <TextBox DockPanel.Dock="Top" Margin="4,2,4,2"
+                                         Text="{Binding ModLibrarySearch, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="搜索 mod 兵种：key 和中文名都能搜（留空 = 全部）" />
+                                <TextBlock DockPanel.Dock="Bottom" Margin="4,0,4,2" FontSize="11"
+                                           Foreground="{DynamicResource Text.Secondary}"
+                                           Text="这些是包里新增的兵（原版没有的 key）；拖动或双击 = 加到画布" />
+                                <ListBox x:Name="ListModLibrary" ItemsSource="{Binding ModLibrary}"
+                                         Background="Transparent" BorderThickness="0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         MouseDoubleClick="OnLibraryDoubleClick"
+                                         AllowDrop="True" Drop="OnLibraryDrop"
+                                         PreviewMouseLeftButtonDown="OnLibraryDragStart"
+                                         PreviewMouseMove="OnLibraryMouseMove">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type vm:UnitCard}">
+                                            <StackPanel Width="62" Margin="2" ToolTip="{Binding Key}">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding InTree}" Value="True">
+                                                                <Setter Property="Opacity" Value="0.28" />
+                                                                <Setter Property="ToolTip" Value="已经在画布上了（再拖会重复）" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <Border Height="87" Background="{DynamicResource Bg.Window}"
+                                                        BorderBrush="{DynamicResource Border.Line}" BorderThickness="1"
+                                                        CornerRadius="3">
+                                                    <Image Source="{Binding Icon}" Stretch="Uniform" />
+                                                </Border>
+                                                <TextBlock Text="{Binding Name}" FontSize="10" Margin="0,2,0,0"
+                                                           Foreground="{DynamicResource Text.Secondary}"
+                                                           TextTrimming="CharacterEllipsis" MaxHeight="26"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+                <TabItem x:Name="CostTab" Header="成本工坊">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Background="{DynamicResource Bg.Panel}">
+                        <StackPanel Margin="10">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="?" Padding="6,0" Margin="4,0,0,0" FontSize="11"
+                                        Click="OnHelpCost" ToolTip="这个面板是干嘛的" />
+                                <TextBlock Text="新建战帮升级成本" Style="{StaticResource PanelHeaderText}" />
+                            </DockPanel>
+                            <!-- 成本写进**当前包**：把包名摆在这儿（切画布页签就会换包；实测踩过"保存写进了参考包"） -->
+                            <TextBlock Text="{Binding CostPackLine}" TextWrapping="Wrap" FontSize="11" Margin="0,4,0,0"
+                                       Foreground="{DynamicResource AeBrush.Warning}" />
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,4,0,0"
+                                       Foreground="{DynamicResource Text.Secondary}"
+                                       Text="一次写三张表：resource_costs_tables（成本 id + 金币）、pooled_resource_factor_junctions_tables（资源池）、resource_cost_pooled_resource_junctions_tables（成本 ↔ 池）。末尾列照抄包里已有行。" />
+
+                            <TextBlock Text="① 成本 id（只列打开包里的成本；打字筛选，打新的就是新建）" Margin="0,10,0,2"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                            <DockPanel>
+                                <Button x:Name="BtnCostRename" DockPanel.Dock="Right" Content="重命名…" Click="OnRenameCost"
+                                        Padding="8,2" Margin="6,0,0,0"
+                                        ToolTip="把当前成本 id 改成新名字：保存后旧 id 那条会被删掉（资源关联一起搬过去）" />
+                                <ComboBox x:Name="CmbCostId" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                      TextSearch.TextPath="Id"
+                                      ItemsSource="{Binding CostListShown}"
+                                      Text="{Binding CostId, UpdateSourceTrigger=PropertyChanged}"
+                                      PreviewMouseLeftButtonDown="OnComboArrowDown"
+                                      SelectionChanged="OnCostPickChanged">
+                                <ComboBox.ItemTemplate>
+                                    <!-- 形式：成本id　金币（金额）　[资源图标]（金额）；没有额外资源就只显示前两段 -->
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Foreground="{DynamicResource Text.Primary}">
+                                                <Run Text="{Binding Id, Mode=OneWay}" />
+                                                <Run Text="　金币（" Foreground="{DynamicResource Text.Secondary}" />
+                                                <Run Text="{Binding Gold, Mode=OneWay}" />
+                                                <Run Text="）" Foreground="{DynamicResource Text.Secondary}" />
+                                            </TextBlock>
+                                            <StackPanel Orientation="Horizontal">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Style.Triggers>
+                                                            <!-- PoolId 空 = 这条成本没有额外资源 → 整块收起 -->
+                                                            <DataTrigger Binding="{Binding PoolId}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <Image Source="{Binding ResourceIcon}" Width="16" Height="16" Margin="8,0,2,0"
+                                                       RenderOptions.BitmapScalingMode="HighQuality">
+                                                    <Image.Style>
+                                                        <Style TargetType="Image">
+                                                            <Style.Triggers>
+                                                                <!-- 图标没解析出来（少见）：收起图片，数量文字照旧显示 -->
+                                                                <DataTrigger Binding="{Binding ResourceIcon}" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Image.Style>
+                                                </Image>
+                                                <TextBlock Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center">
+                                                    <Run Text="（" /><Run Text="{Binding ResourceAmount, Mode=OneWay}" /><Run Text="）" />
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </DockPanel>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Text.Secondary}"
+                                       Text="选到已有成本会自动带上它的金币/资源（按钮变成「保存修改」）；例：Yukino_Brt_Upgrade_Cost_T6" />
+
+                            <TextBlock Text="② 金币消耗（带符号：负 = 消耗 / 正 = 获得）" Margin="0,10,0,2"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                            <TextBox Text="{Binding CostGold, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Text.Secondary}"
+                                       Text="原样写进 resource_costs_tables.treasury_cost；另外四列（expenditure/income）是标签，照抄包里写法。" />
+
+                            <TextBlock Text="③ 选用其他资源（可空）" Margin="0,10,0,2"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,2,0,2"
+                                       Foreground="{DynamicResource AeBrush.Warning}"
+                                       Text="⚠ 请先确定你所要用的资源id" />
+                            <!-- 默认**空**（不用其他资源）；打字按名称/key 筛选，选一项才用 -->
+                            <ComboBox x:Name="CmbCostRes" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                      TextSearch.TextPath="Name"
+                                      ItemsSource="{Binding PooledResShown}"
+                                      Text="{Binding CostResText, UpdateSourceTrigger=PropertyChanged}"
+                                      PreviewMouseLeftButtonDown="OnComboArrowDown"
+                                      SelectionChanged="OnCostResPickChanged"
+                                      HorizontalContentAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Image Source="{Binding IconFile}" Width="18" Height="18" Margin="0,0,6,0"
+                                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                                            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"
+                                                       ToolTip="{Binding Key}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <TextBlock Text="数额（负 = 消耗 / 正 = 获得）" Margin="0,6,0,2" Foreground="{DynamicResource Text.Primary}" />
+                            <TextBox Text="{Binding CostResAmount, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Text.Secondary}"
+                                       Text="选了资源就自动建资源池：id = &lt;资源名&gt;_warband_upgrade、factor = other、min/max = ∓2147483647、sort_order = 0（表里其它列留空/照抄）。" />
+
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="{Binding CostActionText}" Click="OnCreateCost" Padding="10,4" />
+                                <Button x:Name="BtnCostDelete" Content="删除成本" Click="OnDeleteCost" Padding="10,4" Margin="8,0,0,0"
+                                        Foreground="#E17979" IsEnabled="{Binding CostIsExisting}" />
+                                <Button Content="刷新清单" Click="OnRefreshResources" Padding="10,4" Margin="8,0,0,0" />
+                            </StackPanel>
+
+                            <Border Margin="0,12,0,0" Padding="6" Background="{DynamicResource Bg.Window}"
+                                    BorderBrush="{DynamicResource Border.Line}" BorderThickness="1" CornerRadius="4">
+                                <TextBlock Text="{Binding CostPreview}" TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{DynamicResource Text.Secondary}" />
+                            </Border>
+                            <TextBlock Text="{Binding CostStatus}" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,0"
+                                       Foreground="{DynamicResource Text.Primary}" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+        </Grid>
+
+        <!-- 状态栏 -->
+        <Border Grid.Row="3" Background="{DynamicResource Bg.Header}"
+                BorderBrush="{DynamicResource Border.Line}" BorderThickness="0,1,0,0"
+                Padding="8,3">
+            <DockPanel>
+                <ProgressBar DockPanel.Dock="Right" Width="90" Height="12" Margin="8,0,0,0"
+                             IsIndeterminate="True" Visibility="{Binding IsBusy,
+                             Converter={StaticResource BoolToVisibility}}" />
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding ServerText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
+                    <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
+                    <TextBlock Text="{Binding PackText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
+                    <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
+                    <TextBlock Text="{Binding SchemaText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

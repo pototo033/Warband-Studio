@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    随包带一份战锤3的 schema（rpfm-schemas，MIT）：没装过 RPFM 的机器
+    配置目录里是空的，rpfm_server 会报 "There is no Schema for the Game Selected"。
+    首跑时由 SchemaInstaller 检查并按需补进 rpfm 的配置目录（已有就绝不覆盖）。
+    引用本项目的 Ui / Probe 输出目录里也会有，随发布一起走。
+  -->
+  <ItemGroup>
+    <None Update="schemas\schema_wh3.ron" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="schemas\LICENSE-rpfm-schemas.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!--
+      随包内置 RPFM 4.7.4 的 rpfm_cli.exe（22MB，自包含，MIT）——
+      本工具靠它读写 pack、编译表（TSV↔二进制），命令行直接指 schema，
+      所以既不依赖用户装没装 RPFM，也没有"首跑装 schema"这一步。
+    -->
+    <None Update="rpfm\rpfm_cli.exe" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

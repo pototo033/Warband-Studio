@@ -1,0 +1,8 @@
+﻿<UserControl x:Class="WarbandStudio.Ui.Views.WarbandCanvas"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf">
+    <Grid Background="{DynamicResource AeBrush.Canvas}">
+        <wv2:WebView2 x:Name="View" />
+    </Grid>
+</UserControl>

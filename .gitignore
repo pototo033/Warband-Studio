@@ -1,0 +1,28 @@
+# ── 构建产物（体积大头：每个 release 目录 ~262MB，绝不进 git）──
+release/
+**/bin/
+**/obj/
+*.user
+.vs/
+
+# ── 临时/工作目录 ──
+.tmp/
+*.saving
+*.bak
+*.pretidy.bak
+*.newtab.bak
+*.addcost.bak
+*.setfile.bak
+*.dedupe.bak
+*.v1fix.bak
+
+# ── 本机生成的源包（每次启动按游戏目录重建；不进 git）──
+packs/
+**/packs/
+*.src.txt
+
+# ── 说明：src/WarbandStudio.Ui/bundled/ 是**随工具分发**的素材（WUU/WUF 的 UI 框架包 + 内置素材库），
+#    工具要靠它生成"WUU战帮升级"参考包 —— 要发公开仓库的话，先确认原作者的分发许可；
+#    不想带就把下面两行取消注释（功能会退回"用用户自己装的 mod 建参考包"）。
+# src/WarbandStudio.Ui/bundled/wuu/
+# src/WarbandStudio.Ui/bundled/uilibrary/
