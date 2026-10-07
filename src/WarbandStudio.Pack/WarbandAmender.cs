@@ -937,7 +937,8 @@ public static class WarbandAmender
             }
             if (bad.Count > 0)
                 notes.Add($"⚠ 页签体检：{string.Join("、", bad.Take(8))}{(bad.Count > 8 ? " 等" : "")} 有组在用，但 categories 行或 twui 块缺着" +
-                          " → 游戏里这些页签不会显示。用「新建页签」把 key 填成同名（放到这一页的组会自动归到它底下）就能补齐。");
+                          " → 游戏里这些页签不会显示。**改一次名**（换成别的 key）会自动补全结构（holder/按钮/背景状态/图条目）" +
+                          "并把图挪成新名字；也可以「新建页签」把 key 填成同名（放到这一页的组会自动归到它底下）。");
         }
         catch { }
 

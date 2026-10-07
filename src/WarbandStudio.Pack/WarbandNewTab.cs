@@ -233,6 +233,15 @@ public static class WarbandNewTab
                 continue;
             }
             var want = tPath.Contains("background_images_", StringComparison.OrdinalIgnoreCase) ? bgSource : btnSource;
+            // **目标名已经在包里**（名字撞上了别人的图 / 重建同名页签）：不覆盖它 ——
+            // 以前这里会把母版那张写进这个名字，等于**把别人正在用的图顶掉**（§7.95 那类事故）。
+            // 用户明确选了来源（want）才覆盖；没选就沿用包里那张（页签指向的名字不变，图还是它原来的）。
+            if (string.IsNullOrWhiteSpace(want) && FindLoose(pack, tPath) is not null)
+            {
+                notes.Add($"页签 {key} 的 {Path.GetFileName(tPath)} 包里已经有了 → **沿用包里那张，不覆盖**" +
+                          "（想换它用「换图」，或在新建时指定来源图）");
+                continue;
+            }
             // 来源有两种：**本地素材库的文件**（v0.92 起选素材就是本地路径）或包内路径（老用法/母版）
             byte[]? bytes = null;
             var fromLib = false;
