@@ -1263,18 +1263,50 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             if (owners.Count > 0)
                 Log?.Invoke($"换图：源图 {Path.GetFileName(src!)} 正被 {string.Join("、", owners)} 页签用着 → 只复制一张给 {category}，不动原来那张。");
         }
+        // **换图顺带"正名"**（用户 2026-10-07 要的）：这个页签的图名和标准命名（<前缀><key 小写>.png）
+        // 不一致（历史遗留：SKV2 页签用着 skvg.png）时，保存时顺手把图**挪成标准名**——走"同名改名"编辑
+        // （TabRenames 记 (key, key)，Amender 6d 只挪图 + 对齐 twui，不动 categories/infos），
+        // 撞名按"正名优先"让位规则处理。图被**别的页签**共用就不动它（免得影响别人）。
+        var renamed = new List<string>();                          // 日志用
+        var renamedKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void MaybeRename(string label, string prefix, string inner)
+        {
+            var conv = TwuiTabs.ConventionName(prefix, category);
+            if (Path.GetFileName(inner).Equals(conv, StringComparison.OrdinalIgnoreCase)) return;
+            if (TabsUsing(inner).Any(t => !t.Equals(category, StringComparison.OrdinalIgnoreCase)))
+            {
+                Log?.Invoke($"换图：页签 {category} 的{label}图 {Path.GetFileName(inner)} 还被别的页签用着 → 图名保持不动" +
+                            "（换图照旧写这个文件；名字不齐整不影响使用）。");
+                return;
+            }
+            if (!Edits.TabRenames.Any(x => x.Old.Equals(category, StringComparison.OrdinalIgnoreCase)
+                                        && x.New.Equals(category, StringComparison.OrdinalIgnoreCase)))
+                Edits.TabRenames.Add((category, category));        // 同名"改名" = 只做图名对齐
+            renamed.Add($"{label} {Path.GetFileName(inner)} → {conv}");
+            renamedKinds.Add(label);
+        }
+        if (!string.IsNullOrWhiteSpace(bg)) MaybeRename("背景", "background_images_", bgInner);
+        if (!string.IsNullOrWhiteSpace(btn)) MaybeRename("按钮", "button_upgrade_", btnInner);
+
         var did = new List<string>();
         foreach (var (label, src, inner, name) in new[] { ("背景", bg, bgInner, bgName), ("按钮", btn, btnInner, btnName) })
         {
             if (string.IsNullOrWhiteSpace(src)) continue;
             if (SameArt(src!, inner))
             {
-                Log?.Invoke($"换图：页签 {category} 的{label} 选的那张和页签现在用的内容一样 → 没变化，不记改动。");
+                // 内容一样但**图名会顺带归正**时别说"没变化"——那条正名编辑还挂着（用户实测：
+                // 选了一张内容相同的图 → 看着"没生效"，其实真正要的是把引用名换成正名）。
+                Log?.Invoke(renamedKinds.Contains(label)
+                    ? $"换图：页签 {category} 的{label} 选的那张和现在的内容一样 —— 不写内容，只把**图名**归正（保存时落盘）。"
+                    : $"换图：页签 {category} 的{label} 选的那张和页签现在用的内容一样 → 没变化，不记改动。");
                 continue;
             }
             Edits.FileReplacements.Add((inner, src!));
             did.Add($"{label} ← {Path.GetFileName(src!)}（写到 {name}）");
         }
+        if (renamed.Count > 0)
+            Log?.Invoke($"换图：页签 {category} 的图名和页签 key 不一致（历史遗留）→ 保存时会一并改成标准命名：" +
+                        string.Join("；", renamed) + "（撞名按「正名优先」让位，不覆盖别人的图）。");
         // 画布预览：先清掉这个页签的旧缓存（否则会显示上一次/别处留下的图），再把来源图抽成**实际用的名字**
         try
         {
@@ -1297,20 +1329,26 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             Log?.Invoke($"换图：页签 {category} 已改 {did.Count} 处 —— {string.Join("；", did)}　待导出（保存/导出后游戏里才生效）");
             var bgConv = TwuiTabs.ConventionName("background_images_", category);
             var btnConv = TwuiTabs.ConventionName("button_upgrade_", category);
-            if ((bg is not null && !bgName.Equals(bgConv, StringComparison.OrdinalIgnoreCase)) ||
-                (btn is not null && !btnName.Equals(btnConv, StringComparison.OrdinalIgnoreCase)))
+            if (renamed.Count == 0 &&
+                ((bg is not null && !bgName.Equals(bgConv, StringComparison.OrdinalIgnoreCase)) ||
+                 (btn is not null && !btnName.Equals(btnConv, StringComparison.OrdinalIgnoreCase))))
                 Log?.Invoke($"提示：页签 {category} 在 twui 里用的图名是 {bgName} / {btnName}（和页签 key 不一致，多半是以前改名的遗留）" +
                             "—— 换图已按**实际文件名**写，游戏里会生效；名字不齐整不影响使用。");
         }
         else
         {
-            Log?.Invoke($"换图：页签 {category} 没有任何改动（没选图，或选的那张和现在这张一样）。");
+            Log?.Invoke(renamed.Count > 0
+                ? $"换图：页签 {category} 内容没变 —— 只把图名改成标准命名（见上一行）　待导出（保存后生效）。"
+                : $"换图：页签 {category} 没有任何改动（没选图，或选的那张和现在这张一样）。");
         }
         // 换图只换"这张图"；页签本身要存在才算数 —— 包里没有 categories 行 / twui 块时，
         // 换了图游戏里也不会出现这个页签（用户实测：SKVG 建过一回但结构没落进包 → 进游戏页签直接没有）。
+        // （本次要顺带"正名"的页签会走 6d：没结构时顺手按母版补全一整套 → 就不用报这条了。）
         if (!TabHasStructure(category))
-            Log?.Invoke($"⚠ 页签 {category} 在包里没有结构（categories 行 / twui 块都没有）——游戏里这个页签不会显示。" +
-                        $"要用它请先「新建页签」，key 填 {category}（已经放到这一页的组会自动归到它底下）。");
+            Log?.Invoke(renamed.Count > 0
+                ? $"页签 {category} 在 twui 里还没有结构 —— 保存时会顺手补全（按母版克隆一整套），游戏里就能显示了。"
+                : $"⚠ 页签 {category} 在包里没有结构（categories 行 / twui 块都没有）——游戏里这个页签不会显示。" +
+                  $"要用它请先「新建页签」，key 填 {category}（已经放到这一页的组会自动归到它底下）。");
     }
 
     /// <summary>自检（--ui-selftest）⑭：换图**预览缓存**回归 —— 来源选**包内**的图时，抽成目标名之后

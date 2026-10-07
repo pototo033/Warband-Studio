@@ -615,13 +615,19 @@ public static class WarbandAmender
         {
             const string Cats = "unit_upgrade_group_ui_categories_tables";
             const string Infos2 = "unit_upgrade_group_ui_infos_tables";
-            // categories：加新行、删旧行
-            changed += AddRows(pack, vanilla, Cats, schema, repl, notes,
-                new[] { new Dictionary<string, object> { [CatColumn(pack, vanilla, schema)] = newKey } });
-            changed += RewriteDropping(pack, Cats, schema, repl, notes,
-                (t, i) => Cell(t, i, CatColumn(pack, vanilla, schema)).Equals(oldKey, StringComparison.OrdinalIgnoreCase));
-            // infos.category：把该页签的组改成新 key（改原文件里那一列的值）
-            changed += RewriteChanging(pack, Infos2, schema, repl, notes, "category", oldKey, newKey);
+            // **同名（old == new）= "只把图名归正"**（换图时顺带触发，见 Backend.SetTabArt）：
+            // 页签 key 没变，跳过 categories/infos 那三步（删旧行会把页签本体删掉 ✗），只做"图挪成标准名 + twui 图路径/状态对齐"。
+            var sameKey = oldKey.Equals(newKey, StringComparison.OrdinalIgnoreCase);
+            if (!sameKey)
+            {
+                // categories：加新行、删旧行
+                changed += AddRows(pack, vanilla, Cats, schema, repl, notes,
+                    new[] { new Dictionary<string, object> { [CatColumn(pack, vanilla, schema)] = newKey } });
+                changed += RewriteDropping(pack, Cats, schema, repl, notes,
+                    (t, i) => Cell(t, i, CatColumn(pack, vanilla, schema)).Equals(oldKey, StringComparison.OrdinalIgnoreCase));
+                // infos.category：把该页签的组改成新 key（改原文件里那一列的值）
+                changed += RewriteChanging(pack, Infos2, schema, repl, notes, "category", oldKey, newKey);
+            }
             // **两张图 + twui 里的图路径/组件名/背景状态**（先定下图片的"真实新名字"，再拿它去改 twui）
             //   · 源名按 **twui 里实际引用的名字**取，不按约定名猜 —— 老版本改名只改了 holder_tab，
             //     页签的按钮组件/背景状态还叫旧 key，图也就还是旧名（写约定名 = 改到页签不看的文件上 ✗）；
@@ -792,7 +798,9 @@ public static class WarbandAmender
                 else notes.Add($"重命名：页签 {newKey} 的结构补全失败（{r.Error}）——游戏里这个页签不会显示，" +
                                "用「新建页签」把 key 填成同名也能补。");
             }
-            notes.Add($"页签重命名：{oldKey} → {newKey}");
+            notes.Add(sameKey
+                ? $"图名归正：{oldKey}（页签 key 没变，只把图挪成标准名）"
+                : $"页签重命名：{oldKey} → {newKey}");
         }
 
         // ── 6d-2) 页签背景状态自愈：**状态名必须 = 页签 key** ──
