@@ -246,6 +246,31 @@ chk('按钮图默认「保持当前」并预览当前包里的按钮',
     vm.runInContext("npArt.btn", ctx) === '' && byId['npBtnPrev'].src === 'http://skins.local/pack/button_upgrade_skv4.png',
     { v: vm.runInContext("npArt.btn", ctx), src: byId['npBtnPrev'].src });
 
+console.log('⑦b 换图「应用」必须真的发出 setTabArt（回归：artCat 未定义 → 点了没反应）');
+clear();
+let npThrew = null;
+try { vm.runInContext("npTargetCat = 'SKV2'; activePage = 'ART'; openNewPop('art');", ctx); }
+catch (e) { npThrew = e; }
+chk('右键菜单入口打开换图：标题用被右键的页签（不是当前页签）',
+    !npThrew && byId['npTitle'].textContent === '换图（SKV2）',
+    { e: npThrew && npThrew.message, t: byId['npTitle'].textContent });
+vm.runInContext("pickArt('bg', 'C:/lib/bg/background_images_mod1.png')", ctx);
+npThrew = null;
+try { vm.runInContext("document.getElementById('npOk').onclick()", ctx); }
+catch (e) { npThrew = e; }
+chk('点「应用换图」不抛异常（曾经 ReferenceError: artCat is not defined）',
+    !npThrew, npThrew && (npThrew.message || String(npThrew)));
+const artM = last();
+chk('点「应用换图」→ 发出 setTabArt 消息', artM && artM.type === 'setTabArt', artM);
+chk('setTabArt 的 category = 被右键的目标页签', artM && artM.category === 'SKV2', artM && artM.category);
+chk('setTabArt 带上选好的图', artM && artM.bg === 'C:/lib/bg/background_images_mod1.png', artM && artM.bg);
+clear();
+vm.runInContext("activePage = 'SKV4'; npTargetCat = null; openNewPop('art');", ctx);
+vm.runInContext("document.getElementById('npOk').onclick()", ctx);
+const artM2 = last();
+chk('没有右键目标时（普通入口）：category 回退到当前页签',
+    artM2 && artM2.type === 'setTabArt' && artM2.category === 'SKV4', artM2);
+
 console.log('⑧ 黄标跟着过滤实时重算（v0.91 修的场景：切换种族后旧标不会挂着）');
 vm.runInContext(`
   DATA = {

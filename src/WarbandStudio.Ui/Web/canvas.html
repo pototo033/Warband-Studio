@@ -1668,8 +1668,9 @@ function paintMulti() {
 
 /* ───────────── 新建分组 / 新建页签 ───────────── */
 let npMode = 'group';
-let npArt = { bg: '', btn: '' };
-let npTargetCat = null;      // 「换图…」从页签右键菜单进来时，要换的那个页签   // 选择器里的选择：'' = 保持当前，'__donor__' = 跟母版一样，其余 = 素材 file
+let npArt = { bg: '', btn: '' };   // 选择器里的选择：'' = 保持当前，'__donor__' = 跟母版一样，其余 = 素材 file
+let npTargetCat = null;      // 「换图…」从页签右键菜单进来时，要换的那个页签
+let npArtCat = null;         // 「换图」对话框本次的目标页签；**必须是全局** —— "应用换图"按钮在 openNewPop 外面绑定
 function openNewPop(mode) {
   npMode = mode;
   const cat = document.getElementById('npCat');
@@ -1699,7 +1700,9 @@ function openNewPop(mode) {
   // 列表 = **当前画布对应的包**里的图（+ 待导出新增），不再是本地素材库（素材库在左下那一页）
   npArt = { bg: '', btn: '' };
   // 换图的目标页签：右键菜单进来时是**被右键的那个**（不用先把画布切过去）
-  let artCat = npTargetCat || activePage;
+  // **存全局 npArtCat**：「应用换图」按钮的 onclick 在这个函数**外面**绑定（见下方），
+  // 用函数内局部变量会 ReferenceError（用户实测"换图界面没法应用换图" / 日志 artCat is not defined）✗
+  npArtCat = npTargetCat || activePage;
   npTargetCat = null;
   const pickerOf = kind => kind === 'btn'
     ? { pick: 'npBtnPick', panel: 'npBtnPanel', grid: 'npBtnGrid', prev: 'npBtnPrev' }
@@ -1772,7 +1775,7 @@ function openNewPop(mode) {
   document.getElementById('npGroupRow').style.display = mode === 'group' ? '' : 'none';
   document.getElementById('npTabRow').style.display = mode === 'tab' ? '' : 'none';
   document.getElementById('npArtRow').style.display = mode === 'group' ? 'none' : '';
-  document.getElementById('npTitle').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '换图（' + (artCat || '') + '）');
+  document.getElementById('npTitle').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '换图（' + (npArtCat || '') + '）');
   document.getElementById('npOk').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '应用换图');
   if (mode === 'group')
     document.getElementById('npGroupKey').value = 'studio_group_' + Date.now().toString().slice(-6);
@@ -1831,9 +1834,9 @@ document.getElementById('npOk').onclick = () => {
       setTimeout(() => reportAddUnit(pd.unit, pd.x, pd.y, true, key, ''), 300);
     }
   } else {
-    // 换图：当前页签
+    // 换图：目标页签（右键菜单进来的 = 被右键那个；否则当前页签）—— 用全局 npArtCat（外层绑定，见声明处）
     if (!activePage) { alert('先选一个页签'); return; }
-    report({ type: 'setTabArt', category: artCat || activePage,
+    report({ type: 'setTabArt', category: npArtCat || activePage,
              bg: npArt.bg || '', btn: npArt.btn || '' });
   }
   hidePop('newPop');
