@@ -1,4 +1,4 @@
-# publish_github.ps1 —— **手动**发布某个版本到 GitHub Release（不自动、由你挑版本）
+﻿# publish_github.ps1 —— **手动**发布某个版本到 GitHub Release（不自动、由你挑版本）
 #
 #   用法：powershell ./tools/publish_github.ps1 -Version 1.3.2 [-Notes "更新说明…"] [-DryRun]
 #
@@ -79,14 +79,24 @@ Remove-Item $appTmp -Recurse -Force
 Write-Host ("[✓] 程序包：{0:N1} MB" -f ((Get-Item $appZip).Length / 1MB)) -ForegroundColor Green
 
 # ④ 上传（gh CLI）
-$gh = Get-Command gh -ErrorAction SilentlyContinue
+# gh：优先用工作区里的（<工作区>\tools\gh\gh.exe，和 build.ps1 找 dotnet 一个路子），没有就退回 PATH
+$gh = Join-Path (Split-Path $Root) "gh\gh.exe"
+if (-not (Test-Path $gh)) { $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source }
+# gh 是 Go 程序，**不读 Windows 系统代理** —— 把系统代理转成 HTTPS_PROXY（Clash 这类）；不然 github.com 直连超时
+if (-not $env:HTTPS_PROXY) {
+    $ps = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
+    if ($ps -and $ps.ProxyEnable -eq 1 -and $ps.ProxyServer) {
+        $env:HTTPS_PROXY = "http://$($ps.ProxyServer)"
+        Write-Host "[i] 已套用系统代理：$env:HTTPS_PROXY" -ForegroundColor Cyan
+    }
+}
 $cmd = "gh release create $tag `"$fullZip`" `"$appZip`" --repo $repo --title `"WarbandStudio $tag`" --notes `"$Notes`""
 if ($gh) {
     if (-not $Notes) { $Notes = "WarbandStudio $tag" }
-    & gh release create $tag $fullZip $appZip --repo $repo --title "WarbandStudio $tag" --notes $Notes
+    & $gh release create $tag $fullZip $appZip --repo $repo --title "WarbandStudio $tag" --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw "gh 上传失败（exit $LASTEXITCODE）；也可以手动跑下面这条：`n$cmd" }
     Write-Host "[✓] 已发布：https://github.com/$repo/releases/tag/$tag" -ForegroundColor Green
 } else {
-    Write-Host "[i] 没找到 gh CLI —— 装一个（winget install GitHub.cli 然后 gh auth login），或手动执行：" -ForegroundColor Yellow
+    Write-Host "[i] 没找到 gh —— 把 gh.exe 放到 <工作区>\tools\gh\（或 winget install GitHub.cli），或手动执行：" -ForegroundColor Yellow
     Write-Host "    $cmd"
 }
