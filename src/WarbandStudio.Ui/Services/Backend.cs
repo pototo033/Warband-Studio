@@ -1285,8 +1285,13 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             renamed.Add($"{label} {Path.GetFileName(inner)} → {conv}");
             renamedKinds.Add(label);
         }
-        if (!string.IsNullOrWhiteSpace(bg)) MaybeRename("背景", "background_images_", bgInner);
-        if (!string.IsNullOrWhiteSpace(btn)) MaybeRename("按钮", "button_upgrade_", btnInner);
+        // 两张都检查 —— 落表 6d 一旦触发会把**两张**图都对齐正名（背景/按钮一起归齐），日志要如实；
+        // 但"什么都没选就点应用"不触发，免得没换图也把文件名改了。
+        if (!string.IsNullOrWhiteSpace(bg) || !string.IsNullOrWhiteSpace(btn))
+        {
+            MaybeRename("背景", "background_images_", bgInner);
+            MaybeRename("按钮", "button_upgrade_", btnInner);
+        }
 
         var did = new List<string>();
         foreach (var (label, src, inner, name) in new[] { ("背景", bg, bgInner, bgName), ("按钮", btn, btnInner, btnName) })
