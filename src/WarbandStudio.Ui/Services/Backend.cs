@@ -1098,7 +1098,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             if (!string.IsNullOrWhiteSpace(f)) return TwuiTabs.SkinDir + f;
         }
         // 这个页签在 twui 里**没有结构**（"建了一半"的页签：有 categories 行/组/图，就是没落 twui）——
-        // 若本会话给它改过名，落表会**挪图 + 补全结构**（TwuiTabs.PlanTargetName 同一套规则）→
+        // 若本会话给它改过名，落表会**挪图 + 补全结构**（和落表共用 TwuiTabs.PlanRename）→
         // 这里按**计划名**解析，换图/在用标记才指得到那个页签真正会用的文件。
         if (Edits.TabRenames.Any(x => x.New.Equals(category, StringComparison.OrdinalIgnoreCase)))
         {
@@ -1106,7 +1106,11 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             bool Taken(string n) =>
                 pack?.Find(TwuiTabs.SkinDir + n) is not null
                 || Edits.FileReplacements.Any(f => f.Target.Equals(TwuiTabs.SkinDir + n, StringComparison.OrdinalIgnoreCase));
-            return TwuiTabs.SkinDir + TwuiTabs.PlanTargetName(prefix, category, Taken);
+            // "正名优先"要看占用者能不能让位：判据和 Amender 一致 —— 名字在 twui 文本里出现 = 有引用、不让位。
+            var xml = TwuiText();
+            bool Evictable(string n) => xml is null || xml.IndexOf(n, StringComparison.OrdinalIgnoreCase) < 0;
+            var (name, _, _) = TwuiTabs.PlanRename(prefix, category, Taken, Evictable);
+            return TwuiTabs.SkinDir + name;
         }
         var scan = TwuiTabs.ScanName(TwuiText(), prefix, key);
         return TwuiTabs.SkinDir + (scan ?? TwuiTabs.ConventionName(prefix, key));
@@ -1224,7 +1228,10 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         bool Taken(string n) =>
             pack?.Find(TwuiTabs.SkinDir + n) is not null
             || Edits.FileReplacements.Any(f => f.Target.Equals(TwuiTabs.SkinDir + n, StringComparison.OrdinalIgnoreCase));
-        return TwuiTabs.SkinDir + TwuiTabs.PlanTargetName(prefix, newKey, Taken);
+        var xml = TwuiText();
+        bool Evictable(string n) => xml is null || xml.IndexOf(n, StringComparison.OrdinalIgnoreCase) < 0;
+        var (name, _, _) = TwuiTabs.PlanRename(prefix, newKey, Taken, Evictable);
+        return TwuiTabs.SkinDir + name;
     }
 
     /// <summary>兼容旧调用（同路径替换）。</summary>

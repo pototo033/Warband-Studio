@@ -678,9 +678,35 @@ public static class WarbandAmender
                               $"{newKey} 的页签会继续用它，换图也照旧写这个文件。");
                     continue;
                 }
-                // 新名字（撞名 _1/_2…，绝不覆盖）—— 和 UI 解析共用同一条规则（TwuiTabs.PlanTargetName）
-                var newLowFile = TwuiTabs.PlanTargetName(kind, newKey,
-                    n => InPackOrRepl(pack, repl, $"ui/skins/default/warband_upgrades/{n}"));
+                // 新名字：**正名优先**（<前缀><新key>.png，用户 2026-10-07 定的规则，TwuiTabs.PlanRename）——
+                // 正名被一张**没人引用**的图占着 → 它让位成 <正名>_1（真·挪，内容不丢），自己的图用回正名；
+                // 占用者在 twui 里有人引用 → 不动它，自己的图退回 _1（旧行为，免得动到别人的图）。
+                // evictable 判据 = 文件名**不在 twui 文本里出现**（出现 = 有 component/状态引用它）。
+                var (newLowFile, evictFrom, evictTo) = TwuiTabs.PlanRename(kind, newKey,
+                    n => InPackOrRepl(pack, repl, $"ui/skins/default/warband_upgrades/{n}"),
+                    n => xml is null || xml.IndexOf(n, StringComparison.OrdinalIgnoreCase) < 0);
+                if (evictFrom is not null && evictTo is not null)
+                {
+                    var fromPath = $"ui/skins/default/warband_upgrades/{evictFrom}";
+                    var toPath = $"ui/skins/default/warband_upgrades/{evictTo}";
+                    var parked = CurrentBytes(pack, repl, fromPath);
+                    if (parked is not null)
+                    {
+                        repl[toPath] = parked;                 // 让位：老图挪到 _1（和"自己改名"同构：真·挪，不复制）
+                        DropRepl(repl, fromPath);
+                        if (pack.Find(fromPath) is not null && !e.RemoveFiles.Contains(fromPath, StringComparer.OrdinalIgnoreCase))
+                            e.RemoveFiles.Add(fromPath);
+                        changed++;
+                        notes.Add($"重命名：正名 {evictFrom} 原来被一张没人引用的图占着 → 它挪成 {evictTo}（内容不丢）；" +
+                                  $"{newKey} 的图直接占正名。");
+                    }
+                    else
+                    {   // 读不到内容就当没让位（不该发生）：退回"自己带 _1"的旧行为
+                        newLowFile = TwuiTabs.PlanTargetName(kind, newKey,
+                            n => InPackOrRepl(pack, repl, $"ui/skins/default/warband_upgrades/{n}"));
+                        notes.Add($"重命名：{evictFrom} 读不到内容，让位跳过（改名后的图用 {newLowFile}）。");
+                    }
+                }
                 var dstPath = $"ui/skins/default/warband_upgrades/{newLowFile}";
                 repl[dstPath] = srcBytes;
                 DropRepl(repl, srcPath);
@@ -941,6 +967,14 @@ public static class WarbandAmender
                           "并把图挪成新名字；也可以「新建页签」把 key 填成同名（放到这一页的组会自动归到它底下）。");
         }
         catch { }
+
+        // **本轮写入赢过"删除名单"**：同一路径既在 RemoveFiles 又要在 repl 里写新内容时，不能把它一起跳过
+        //（PackWriter 的 drop 判断在替换之前）。改名"正名优先"让位时就会撞上：让位者把正名加进删除名单、
+        //  自己的图又写进同一个正名 —— 曾经导出后正名图整个丢失（v1.4.3 用 probe tab-art 实测到）。
+        {
+            var writing = new HashSet<string>(repl.Keys.Select(k => k.Replace((char)92, '/')), StringComparer.OrdinalIgnoreCase);
+            e.RemoveFiles.RemoveAll(p => writing.Contains(p.Replace((char)92, '/')));
+        }
 
         return changed;
     }

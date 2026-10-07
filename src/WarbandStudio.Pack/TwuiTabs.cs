@@ -41,6 +41,35 @@ public static class TwuiTabs
         return name;
     }
 
+    /// <summary>
+    /// 改名后这张图**应该叫什么**（用户 2026-10-07 定的"正名优先"规则；改名流程一律用它，别再单用 PlanTargetName）：
+    /// · 正名 <c>&lt;前缀&gt;&lt;新 key 小写&gt;.png</c> 空着 → 自己的图就用正名；
+    /// · 正名被**别的图**占着、且那张图**可以被挤走**（<paramref name="evictable"/>：没有人引用它）→
+    ///   它挪去 <c>&lt;正名&gt;_1.png</c>（依次 _2… 找空位），**自己的图占正名**
+    ///   （用户原话："将 SKVG 重命名为 SKV2……还有一个原名叫 skv2 的图，此时要将原 skv2 图重命名为 _1，
+    ///   防止图像丢失" —— 而不是让自己的图变成 skv2_1）；
+    /// · 正名被占用、占用者动不得（有引用）→ 自己的图退回 <c>&lt;正名&gt;_1.png</c>（旧行为，免得动到别人的图）。
+    /// 返回：（自己要用的名字，让位者从哪个名字挪走，挪到哪个名字）—— 没有让位时后两项为 null。
+    /// **UI 解析和落表共用这一条规则**（和 PlanTargetName 一个道理，两边各算一次就会打架）。
+    /// </summary>
+    public static (string NewName, string? EvictFrom, string? EvictTo) PlanRename(
+        string prefix, string newKey, Func<string, bool> taken, Func<string, bool> evictable)
+    {
+        var baseName = prefix + newKey.ToLowerInvariant();
+        var name = baseName + ".png";
+        if (!taken(name)) return (name, null, null);
+        if (evictable(name))
+        {
+            for (var k = 1; k <= 99; k++)
+            {
+                var cand = $"{baseName}_{k}.png";
+                if (!taken(cand)) return (name, name, cand);   // 自己占正名，占用者让到 cand
+            }
+        }
+        for (var k = 1; k <= 99 && taken(name); k++) name = $"{baseName}_{k}.png";
+        return (name, null, null);
+    }
+
     /// <summary>从一段 twui 文本解析出"页签 key（原样大小写）→ 图信息"。解析不了的部分留 null，由调用方兜底。</summary>
     public static Dictionary<string, TabArt> Parse(string? twuiXml)
     {
