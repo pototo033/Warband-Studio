@@ -1,0 +1,23 @@
+child_key	parent_key	child_link_position	parent_link_position	parent_link_position_offset	child_link_position_offset	mid_link_offset
+#unit_upgrade_group_ui_links_tables;2;db/unit_upgrade_group_ui_links_tables/Yukino_Upgrade_Grn_Orc						
+Yukino_Grn_Inf_Black_Orcs_RoR	Yukino_Grn_Inf_Black_Orcs	2	4	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Black_Orcs	Yukino_Grn_Inf_Orc_Big_Uns	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Orc_Big_Uns	Yukino_Grn_Inf_Orc_Boyz_2	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Cav_Orc_Boar_Boy_Big_Uns	Yukino_Grn_Inf_Orc_Big_Uns	4	2	0.0000	0.0000	0.0000
+Yukino_Grn_Cav_Orc_Boar_Boy_Big_Uns	Yukino_Grn_Cav_Orc_Boar_Boyz	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Cav_Orc_Boar_Boy_Big_Uns_RoR	Yukino_Grn_Cav_Orc_Boar_Boy_Big_Uns	4	2	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Black_Orcs_RoR	Yukino_Grn_Inf_Orc_Boyz_1	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Orcs_Arrer_Boyz_RoR	Yukino_Grn_Inf_Orc_Boyz_1	1	3	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Orc_Boyz_1	Yukino_Grn_Inf_Orc_Boyz_2	2	4	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Orc_Boyz_2	Yukino_Grn_Inf_Orc_Boyz_1	4	2	0.0000	0.0000	0.0000
+Yukino_Grn_Cav_Orc_Boar_Boyz	Yukino_Grn_Inf_Orc_Boyz_2	4	2	0.0000	0.0000	0.0000
+Yukino_Grn_Veh_Orc_Boar	Yukino_Grn_Cav_Orc_Boar_Boyz	4	2	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Orcs_Arrer_Boyz	Yukino_Grn_Inf_Orc_Boyz_2	1	3	0.0000	0.0000	0.0000
+Yukino_Grn_Inf_Orcs_Arrer_Boyz_RoR	Yukino_Grn_Inf_Orcs_Arrer_Boyz	2	4	0.0000	0.0000	0.0000
+Yukino_Grn_Rogue_Idol_RoR	Yukino_Grn_Rogue_Idol	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Rogue_Idol	Yukino_Grn_Mon_Giant	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Rogue_Idol	Yukino_Grn_Mon_Trolls_3	4	1	0.0000	0.0000	0.0000
+Yukino_Grn_Mon_Trolls_3	Yukino_Grn_Mon_Trolls_2	3	1	0.0000	0.0000	0.0000
+Yukino_Grn_Mon_Trolls_2	Yukino_Grn_Mon_Trolls_3	1	3	0.0000	0.0000	0.0000
+Yukino_Grn_Mon_Trolls_2_RoR	Yukino_Grn_Mon_Trolls_2	4	2	0.0000	0.0000	0.0000
+Yukino_Grn_Mon_Trolls_2	Yukino_Grn_Mon_Trolls_1	3	1	0.0000	0.0000	0.0000

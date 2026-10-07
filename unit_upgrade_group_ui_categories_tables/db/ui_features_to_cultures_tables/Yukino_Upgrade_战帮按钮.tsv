@@ -1,0 +1,26 @@
+culture	ui_feature
+#ui_features_to_cultures_tables;0;db/ui_features_to_cultures_tables/Yukino_Upgrade_战帮按钮	
+wh_main_brt_bretonnia	WARBANDS
+wh_main_emp_empire	WARBANDS
+wh3_main_ksl_kislev	WARBANDS
+wh3_main_cth_cathay	WARBANDS
+wh2_main_hef_high_elves	WARBANDS
+wh_dlc05_wef_wood_elves	WARBANDS
+wh2_main_def_dark_elves	WARBANDS
+wh_main_dwf_dwarfs	WARBANDS
+wh3_main_ogr_ogre_kingdoms	WARBANDS
+wh_main_grn_greenskins	WARBANDS
+wh_main_vmp_vampire_counts	WARBANDS
+wh2_dlc11_cst_vampire_coast	WARBANDS
+wh2_main_lzd_lizardmen	WARBANDS
+wh2_dlc09_tmb_tomb_kings	WARBANDS
+wh_dlc08_nor_norsca	WARBANDS
+wh_dlc03_bst_beastmen	WARBANDS
+wh2_main_skv_skaven	WARBANDS
+wh3_main_dae_daemons	WARBANDS
+wh3_main_kho_khorne	WARBANDS
+wh3_main_nur_nurgle	WARBANDS
+wh3_main_sla_slaanesh	WARBANDS
+wh3_main_tze_tzeentch	WARBANDS
+wh3_dlc23_chd_chaos_dwarfs	WARBANDS
+wh3_dlc29_nag_undead_legions	WARBANDS

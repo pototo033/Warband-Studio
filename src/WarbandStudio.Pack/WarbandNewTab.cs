@@ -33,7 +33,8 @@ public static class WarbandNewTab
 
     public static NewTabReport Build(PackArchive pack, string key, string? donorKey,
                                      Dictionary<string, byte[]> repl, List<string> notes,
-                                     string? bgSource = null, string? btnSource = null)
+                                     string? bgSource = null, string? btnSource = null,
+                                     string? bgTargetName = null, string? btnTargetName = null)
     {
         key = (key ?? "").Trim().ToUpperInvariant();
         if (key.Length == 0 || !Regex.IsMatch(key, "^[A-Z0-9_]{2,16}$"))
@@ -106,6 +107,10 @@ public static class WarbandNewTab
 
         var lower = key.ToLowerInvariant();
         var donorLow = donor.ToLowerInvariant();
+        // 目标图名：默认约定名 `<前缀><key 小写>.png`；**改名补结构**那条路会传"已经改好的真实名字"
+        // （撞名时是 `<key>_1.png` —— 页签引用的图名必须和文件对得上）
+        var bgName = string.IsNullOrWhiteSpace(bgTargetName) ? $"background_images_{lower}.png" : bgTargetName!;
+        var btnName = string.IsNullOrWhiteSpace(btnTargetName) ? $"button_upgrade_{lower}.png" : btnTargetName!;
         // 计数用的"母版范围"= 上面五处合起来：只在这里出现的 GUID 就是母版自己的（克隆时要换新），
         // 在别处也出现的（selected_frame_general / button_flame / icon 之类）是共享组件，保持原值。
         var donorScope = string.Join("\n", new[] { donorBody, donorHier ?? "", donorBtn ?? "", donorBg ?? "", donorBgEntry ?? "" });
@@ -133,8 +138,8 @@ public static class WarbandNewTab
             t = Regex.Replace(t, "<(/?)(?:" + Regex.Escape(donor) + ")(?=[\\s/>])", "<$1" + lower, RegexOptions.IgnoreCase);
             t = t.Replace("name=\"" + donor + "\"", "name=\"" + lower + "\"", StringComparison.OrdinalIgnoreCase);
             t = t.Replace("value=\"" + donor + "\"", "value=\"" + key + "\"", StringComparison.OrdinalIgnoreCase);
-            t = t.Replace("background_images_" + donorLow + ".png", "background_images_" + lower + ".png", StringComparison.OrdinalIgnoreCase);
-            t = t.Replace("button_upgrade_" + donorLow + ".png", "button_upgrade_" + lower + ".png", StringComparison.OrdinalIgnoreCase);
+            t = t.Replace("background_images_" + donorLow + ".png", bgName, StringComparison.OrdinalIgnoreCase);
+            t = t.Replace("button_upgrade_" + donorLow + ".png", btnName, StringComparison.OrdinalIgnoreCase);
             return t;
         }
         string Clone(string text) => Sub(Regex.Replace(text, GuidPattern, m => NewGuid(m.Value)));
@@ -217,8 +222,8 @@ public static class WarbandNewTab
         // 两张图：把字节复制进包（twui 侧的引用已经由克隆带过去了；用「换图」先准备好的不覆盖）
         var pairs = new[]
         {
-            ($"{SkinDir}background_images_{donorLow}.png", $"{SkinDir}background_images_{lower}.png"),
-            ($"{SkinDir}button_upgrade_{donorLow}.png", $"{SkinDir}button_upgrade_{lower}.png"),
+            ($"{SkinDir}background_images_{donorLow}.png", $"{SkinDir}{bgName}"),
+            ($"{SkinDir}button_upgrade_{donorLow}.png", $"{SkinDir}{btnName}"),
         };
         foreach (var (dPath, tPath) in pairs)
         {

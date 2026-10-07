@@ -1865,6 +1865,20 @@ public sealed class MainViewModel : ObservableObject
         return (arts, swap);
     }
 
+    /// <summary>自检（--ui-selftest）⑬：改名的"计划名"规则 —— 图跟新 key 走，撞名自动 _1/_2（不覆盖别人的图）。</summary>
+    public List<string> SelfTestPlanArt()
+    {
+        var lines = new List<string>();
+        try
+        {
+            foreach (var k in _backend.TabKeys().Take(2))
+                lines.Add($"{k}：改名为 {k}X → {Path.GetFileName(_backend.PlannedArtPathOf(k + "X", true))}；" +
+                          $"名字被占用时（拿 {k} 自己当例子）→ {Path.GetFileName(_backend.PlannedArtPathOf(k, true))}");
+        }
+        catch (Exception ex) { lines.Add("(读取失败：" + ex.Message + ")"); }
+        return lines;
+    }
+
     /// <summary>诊断 ───────────────────────────────────────────</summary>
     private async Task RunDiagnosticsAsync()
     {

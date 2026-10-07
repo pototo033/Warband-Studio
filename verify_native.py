@@ -459,8 +459,8 @@ def main():
 
             # 换图：导出包里目标条目的字节应当与来源一致。
             # **注意（v1.4 起）**：这一轮同时还有"页签改名 BRT → BRTREN"，改名会把页签实际用的那张图
-            # 跟着改成新名字（用户要的语义：图跟新 key 走，撞名才加 _N）—— 所以"换的图"落在**新名字**上，
-            # 旧名字（background_images_brt.png）保持包里原样（真·改名：加新名 + 旧名不动）。
+            # **挪**成新名字（用户口径："直接把原图重命名，不是复制一张留着旧的"）—— 所以：
+            #   · 换的图落在**新名字**上；· **旧名字从包里删掉**（真·改名）。
             if plan.get("artTarget"):
                 artdir = os.path.join(TMP, "art")
                 renamed_target = f"ui/skins/default/warband_upgrades/background_images_{plan['renameNew'].lower()}.png"
@@ -478,9 +478,9 @@ def main():
                 check("换图：换的图跟着页签改名落到新名字上（图跟新 key 走）",
                       newname in got and src in got and got[newname] == got[src],
                       detail=f"新名 {len(got.get(newname, b''))} 字节 / 来源 {len(got.get(src, b''))} 字节")
-                check("换图：旧名字那张保持包里原样（改名是加新名，不覆盖/不删旧名）",
-                      tgt in got and got[tgt] != got[src],
-                      detail=f"旧名 {len(got.get(tgt, b''))} 字节 / 来源 {len(got.get(src, b''))} 字节")
+                check("换图：旧名字那张已从包里删掉（真·改名 = 挪走，不复制、不覆盖）",
+                      tgt not in got,
+                      detail=f"旧名 {tgt} {'还在 ✗' if tgt in got else '已删掉 ✓'}")
 
             # 页签表（新建页签要往里加一行；先读出来给下面的分支用）
             cats = os.path.join(ex, "cats")

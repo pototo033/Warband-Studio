@@ -28,6 +28,19 @@ public static class TwuiTabs
     /// <summary>约定名：`background_images_&lt;key 小写&gt;.png` / `button_upgrade_&lt;key 小写&gt;.png`。</summary>
     public static string ConventionName(string prefix, string key) => prefix + key.ToLowerInvariant() + ".png";
 
+    /// <summary>
+    /// 改名后这张图**应该叫什么**：`&lt;前缀&gt;&lt;新 key 小写&gt;.png`；被占用就 `_1`、`_2`…（绝不覆盖）。
+    /// <paramref name="taken"/> 由调用方给（包里有的 + 本轮待导出会新增的都算"占用"）。
+    /// **UI 解析和落表共用这一条规则** —— 两边各算一次就会出现"界面说这张、包里改成那张"。
+    /// </summary>
+    public static string PlanTargetName(string prefix, string newKey, Func<string, bool> taken)
+    {
+        var baseName = prefix + newKey.ToLowerInvariant();
+        var name = baseName + ".png";
+        for (var k = 1; k <= 99 && taken(name); k++) name = $"{baseName}_{k}.png";
+        return name;
+    }
+
     /// <summary>从一段 twui 文本解析出"页签 key（原样大小写）→ 图信息"。解析不了的部分留 null，由调用方兜底。</summary>
     public static Dictionary<string, TabArt> Parse(string? twuiXml)
     {
@@ -130,6 +143,11 @@ public static class TwuiTabs
     /// <summary>某个页签的图信息（key 大小写不敏感）。</summary>
     public static TabArt? Of(string? twuiXml, string key) =>
         Parse(twuiXml).TryGetValue(key, out var a) ? a : null;
+
+    /// <summary>这个页签在 twui 里有没有结构（`holder_tab_&lt;key&gt;`）。没有 = 建了一半的页签（游戏里不显示）。</summary>
+    public static bool HasStructure(string? twuiXml, string key) =>
+        !string.IsNullOrWhiteSpace(twuiXml) && !string.IsNullOrWhiteSpace(key)
+        && Regex.IsMatch(twuiXml, "id=\"holder_tab_" + Regex.Escape(key) + "\"", RegexOptions.IgnoreCase);
 
     /// <summary>取路径里的文件名（`ui/…\button_upgrade_x.png` → `button_upgrade_x.png`）。</summary>
     public static string FileName(string? path) =>

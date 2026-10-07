@@ -1,0 +1,16 @@
+child_key	parent_key	child_link_position	parent_link_position	parent_link_position_offset	child_link_position_offset	mid_link_offset
+#unit_upgrade_group_ui_links_tables;2;db/unit_upgrade_group_ui_links_tables/Yukino_Upgrade_Emp_RoR						
+Yukino_Emp_Cav_Demigryph_Knights_1_Supply	Yukino_Emp_Cav_Reiksguard_Supply	4	2	0.0000	0.0000	0.0000
+Yukino_Emp_Cav_Outriders_RoR	Yukino_Emp_Cav_Pistoliers_RoR	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Cav_Outriders_RoR	Yukino_Emp_Cav_Outriders_2_Supply	2	4	0.0000	0.0000	0.0000
+Yukino_Emp_Cav_Outriders_2_Supply	Yukino_Emp_Cav_Pistoliers_1_Supply	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Cav_Pistoliers_RoR	Yukino_Emp_Cav_Pistoliers_1_Supply	2	4	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Greatswords_RoR	Yukino_Emp_Inf_Swordsmen_RoR_1	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Halberdiers_RoR	Yukino_Emp_Inf_Spearmen_RoR_1	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Swordsmen_RoR_2	Yukino_Emp_Inf_Swordsmen_RoR_1	1	3	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Spearmen_RoR_2	Yukino_Emp_Inf_Spearmen_RoR_1	1	3	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Huntsmen_RoR	Yukino_Emp_Inf_Huntsmen_Supply	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Handgunners_RoR_2	Yukino_Emp_Inf_Handgunners_RoR_1	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Handgunners_RoR_1	Yukino_Emp_Inf_Handgunners_Supply	3	1	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Handgunners_RoR_1	Yukino_Emp_Inf_Crossbowmen_RoR	4	2	0.0000	0.0000	0.0000
+Yukino_Emp_Inf_Crossbowmen_RoR	Yukino_Emp_Inf_Handgunners_RoR_1	2	4	0.0000	0.0000	0.0000

@@ -1,0 +1,9 @@
+child_key	parent_key	child_link_position	parent_link_position	parent_link_position_offset	child_link_position_offset	mid_link_offset
+#unit_upgrade_group_ui_links_tables;2;db/unit_upgrade_group_ui_links_tables/Yukino_Upgrade_Skv_A						
+Yukino_Skv_Inf_Clanrat_RoR	Yukino_Skv_Inf_Clanrat_2	2	4	0.0000	0.0000	0.0000
+Yukino_Skv_Inf_Stormvermin	Yukino_Skv_Inf_Clanrat_2	3	1	0.0000	0.0000	0.0000
+Yukino_Skv_Inf_Clanrat_2	Yukino_Skv_Inf_Clanrat_1	3	1	0.0000	0.0000	0.0000
+Yukino_Skv_Inf_Weapons_Group_3_RoR	Yukino_Skv_Inf_Weapons_Group_3	2	4	0.0000	0.0000	0.0000
+Yukino_Skv_Inf_Night_Runners	Yukino_Skv_Inf_Clanrat_1	4	2	0.0000	0.0000	0.0000
+Yukino_Skv_Inf_Clanrat_1	Yukino_Skv_Inf_Night_Runners	2	4	0.0000	0.0000	0.0000
+Yukino_Skv_Veh_Doom_Flayer_RoR	Yukino_Skv_Veh_Doom_Flayer	4	2	0.0000	0.0000	-1.0000

@@ -1093,6 +1093,17 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             var f = bg ? art.BgFile : art.BtnFile;
             if (!string.IsNullOrWhiteSpace(f)) return TwuiTabs.SkinDir + f;
         }
+        // 这个页签在 twui 里**没有结构**（"建了一半"的页签：有 categories 行/组/图，就是没落 twui）——
+        // 若本会话给它改过名，落表会**挪图 + 补全结构**（TwuiTabs.PlanTargetName 同一套规则）→
+        // 这里按**计划名**解析，换图/在用标记才指得到那个页签真正会用的文件。
+        if (Edits.TabRenames.Any(x => x.New.Equals(category, StringComparison.OrdinalIgnoreCase)))
+        {
+            var pack = _pack?.Archive;
+            bool Taken(string n) =>
+                pack?.Find(TwuiTabs.SkinDir + n) is not null
+                || Edits.FileReplacements.Any(f => f.Target.Equals(TwuiTabs.SkinDir + n, StringComparison.OrdinalIgnoreCase));
+            return TwuiTabs.SkinDir + TwuiTabs.PlanTargetName(prefix, category, Taken);
+        }
         var scan = TwuiTabs.ScanName(TwuiText(), prefix, key);
         return TwuiTabs.SkinDir + (scan ?? TwuiTabs.ConventionName(prefix, key));
     }
@@ -1200,6 +1211,17 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>给自检/诊断用：这个页签**实际用的图**（包内路径，twui 解析出来的）。</summary>
     public string TabArtPathOf(string category, bool background) =>
         ArtInnerOf(background ? "background_images_" : "button_upgrade_", category);
+
+    /// <summary>给自检/诊断用：**假设**改名成 <paramref name="newKey"/>，图会落在哪个文件（和落表共用同一套规则）。</summary>
+    public string PlannedArtPathOf(string newKey, bool background)
+    {
+        var prefix = background ? "background_images_" : "button_upgrade_";
+        var pack = _pack?.Archive;
+        bool Taken(string n) =>
+            pack?.Find(TwuiTabs.SkinDir + n) is not null
+            || Edits.FileReplacements.Any(f => f.Target.Equals(TwuiTabs.SkinDir + n, StringComparison.OrdinalIgnoreCase));
+        return TwuiTabs.SkinDir + TwuiTabs.PlanTargetName(prefix, newKey, Taken);
+    }
 
     /// <summary>兼容旧调用（同路径替换）。</summary>
     public void AddUiAssetToPack(string inner)

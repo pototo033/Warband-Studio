@@ -66,7 +66,7 @@ public static class TabArtCheck
         }
 
         var n = WarbandAmender.Apply(src, null, e, schema, repl, notes);
-        PackWriter.WriteFrom(src, repl, dest);
+        PackWriter.WriteFrom(src, repl, dest, dropPaths: e.RemoveFiles);   // 真·改名：旧条目要在这一步跳过（和正式导出同一条路）
         Console.WriteLine($"[✓] 落表 {n} 个文件 → {dest}");
         foreach (var line in notes) Console.WriteLine("    · " + line);
 

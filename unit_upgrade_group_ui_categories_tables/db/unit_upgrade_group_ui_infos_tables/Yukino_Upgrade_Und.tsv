@@ -1,0 +1,4 @@
+unit_upgrade_group	x	y	category
+#unit_upgrade_group_ui_infos_tables;1;db/unit_upgrade_group_ui_infos_tables/Yukino_Upgrade_Und			
+wh3_dlc29_chs_flayerkin	100	210	UNDIVIDED
+wh3_dlc29_chs_siege_giant	0	0	UNDIVIDED

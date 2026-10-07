@@ -653,8 +653,9 @@ public static class WarbandAmender
             var newLow = newKey.ToLowerInvariant();
             var btnCompOld = art?.BtnComponent ?? oldLow;
             var stateOld = art?.PanelState ?? oldLow;
+            var hasStructure = xml is not null && TwuiTabs.HasStructure(xml, oldKey);
             // **别的页签也在用同一张图 / 同一个按钮组件**（老遗留里会有）→ 那一处**不改名**：
-            // 改名是"加新名 + 旧名留着"，但 twui 里的图路径/组件名是**全局字符串替换** ——
+            // 改名是"挪名字"，但 twui 里的图路径/组件名是**全局字符串替换** ——
             // 动了就会把别的页签一起改掉（用户明确要"别影响其他图"）。宁可名字不齐整。
             var allTabs = TwuiTabs.Parse(xml);
             bool UsedByOthers(string file) => file.Length > 0 && allTabs.Any(kv =>
@@ -664,7 +665,7 @@ public static class WarbandAmender
             bool BtnCompUsedByOthers() => allTabs.Any(kv =>
                 !kv.Key.Equals(oldKey, StringComparison.OrdinalIgnoreCase)
                 && (kv.Value.BtnComponent ?? "").Equals(btnCompOld, StringComparison.OrdinalIgnoreCase));
-            var artRenames = new List<(string OldLow, string NewLow)>();
+            var artRenames = new List<(string Kind, string OldLow, string NewLow)>();
             foreach (var (kind, actual) in new[] { ("background_images_", art?.BgFile), ("button_upgrade_", art?.BtnFile) })
             {
                 var oldLowFile = actual ?? kind + oldLow + ".png";
@@ -677,17 +678,21 @@ public static class WarbandAmender
                               $"{newKey} 的页签会继续用它，换图也照旧写这个文件。");
                     continue;
                 }
-                var baseName = kind + newLow;
-                var newLowFile = baseName + ".png";
-                for (var k = 1; k <= 99 && InPackOrRepl(pack, repl, $"ui/skins/default/warband_upgrades/{newLowFile}"); k++)
-                    newLowFile = $"{baseName}_{k}.png";
+                // 新名字（撞名 _1/_2…，绝不覆盖）—— 和 UI 解析共用同一条规则（TwuiTabs.PlanTargetName）
+                var newLowFile = TwuiTabs.PlanTargetName(kind, newKey,
+                    n => InPackOrRepl(pack, repl, $"ui/skins/default/warband_upgrades/{n}"));
                 var dstPath = $"ui/skins/default/warband_upgrades/{newLowFile}";
                 repl[dstPath] = srcBytes;
                 DropRepl(repl, srcPath);
+                // **真·改名 = 挪**：旧条目从包里删掉（用户要的："直接把原图重命名"，不是复制一张留着旧的）。
+                // 只有"别的页签还在用"才会走上面的分支保留旧名。
+                if (pack.Find(srcPath) is not null && !e.RemoveFiles.Contains(srcPath, StringComparer.OrdinalIgnoreCase))
+                    e.RemoveFiles.Add(srcPath);
                 changed++;
-                artRenames.Add((oldLowFile, newLowFile));
+                artRenames.Add((kind, oldLowFile, newLowFile));
                 notes.Add($"重命名：{oldLowFile} → {newLowFile}" +
-                          (newLowFile != baseName + ".png" ? "（原名字已被占用 → 自动加 _N，不覆盖）" : "") +
+                          (newLowFile != kind + newLow + ".png" ? "（原名字已被占用 → 自动加 _N，不覆盖）" : "") +
+                          "（旧名从包里删掉 = 真·改名）" +
                           (actual is not null && !actual.Equals(kind + oldLow + ".png", StringComparison.OrdinalIgnoreCase)
                               ? $"（页签实际用的就是 {actual}，按它改的）" : ""));
             }
@@ -708,7 +713,7 @@ public static class WarbandAmender
                                        RegexOptions.IgnoreCase);
                 n1 = Regex.Replace(n1, "value=\"" + Regex.Escape(oldKey) + "\"", "value=\"" + newKey + "\"",
                                    RegexOptions.IgnoreCase);
-                foreach (var (o, nn) in artRenames)
+                foreach (var (_, o, nn) in artRenames)
                 {
                     n1 = n1.Replace(o, nn);                              // 正斜杠（twui 里的写法）
                     n1 = n1.Replace(o.Replace('/', (char)92), nn.Replace('/', (char)92));
@@ -738,6 +743,28 @@ public static class WarbandAmender
                               (btnRenamed ? $"、按钮组件 {btnCompOld} → {newLow}" : "、按钮组件不动") +
                               (artRenames.Count > 0 ? $"、图路径 {string.Join("、", artRenames.Select(x => x.OldLow + "→" + x.NewLow))}" : ""));
                 }
+            }
+            // **建了一半的页签**（有 categories 行/组/图，twui 里却没有 holder_tab）：
+            // 只改图没用 —— 游戏里这个页签压根不出现（页签体检一直在报）。改名时顺手**补全**：
+            // 克隆一个母版页签（holder 本体 + hierarchy 节点 + 按钮组件 + 背景状态 + 图条目），
+            // 图就用**刚改好名字的那两张**（已在 repl 里 → Build 不覆盖）。
+            if (xml is not null && twui is not null && !hasStructure)
+            {
+                string? bgTarget = artRenames.FirstOrDefault(x => x.Kind == "background_images_").NewLow
+                                   ?? art?.BgFile ?? TwuiTabs.ConventionName("background_images_", newLow);
+                string? btnTarget = artRenames.FirstOrDefault(x => x.Kind == "button_upgrade_").NewLow
+                                   ?? art?.BtnFile ?? TwuiTabs.ConventionName("button_upgrade_", newLow);
+                var r = WarbandNewTab.Build(pack, newKey, null, repl, notes,
+                                            TwuiTabs.SkinDir + bgTarget, TwuiTabs.SkinDir + btnTarget,
+                                            bgTarget, btnTarget);
+                if (r.Ok)
+                {
+                    changed += r.Files.Count;
+                    notes.Add($"重命名：页签 {newKey} 在 twui 里**本来就没有结构**（建了一半的页签）→ 顺手按母版 {r.Donor} 补全了" +
+                              $"（holder/按钮/背景状态/图条目，图用改名后的 {bgTarget} / {btnTarget}）。");
+                }
+                else notes.Add($"重命名：页签 {newKey} 的结构补全失败（{r.Error}）——游戏里这个页签不会显示，" +
+                               "用「新建页签」把 key 填成同名也能补。");
             }
             notes.Add($"页签重命名：{oldKey} → {newKey}");
         }
