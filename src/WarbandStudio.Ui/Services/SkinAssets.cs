@@ -82,6 +82,14 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
     /// <summary>按包内路径抽一张图到缓存，返回页面用的 url（素材库缩略图）。</summary>
     public string? ExtractForPage(string inner, string cacheName) => Extract(inner, cacheName);
 
+    /// <summary>换图预览（来源是**包内文件**）：把来源图抽成**目标页签的缓存名**，
+    /// 来源键记成 `local:pack:&lt;目标路径&gt;` —— ① 之后 Prepare 请求目标文件时会**直接复用**这份预览缓存
+    /// （记成 `pack:&lt;来源&gt;` 的话会被判定不匹配、又拿包里还没导出的旧图把它顶掉 ——
+    /// 用户实测："换图后画布背景没变化 / 保持当前还是旧内容"）；
+    /// ② 撤销/放弃编辑时 `DropStaged` 能按 `local:` 前缀把这份暂存清掉。</summary>
+    public string? StageFromPack(string srcInner, string targetInner, string cacheName)
+        => Extract(srcInner, cacheName, "local:pack:" + targetInner);
+
     /// <summary>把**本地素材文件**（素材库里的那份）拷进缓存，返回页面用的 url（画布/预览都用它）。</summary>
     public string? StageLocalFile(string localPath, string cacheName)
     {
@@ -131,7 +139,7 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
             DropCache(name);
     }
 
-    private string? Extract(string inner, string cacheName)
+    private string? Extract(string inner, string cacheName, string? keyAs = null)
     {
         var target = Path.Combine(CacheDir, cacheName);
         var key = "pack:" + inner;
@@ -149,7 +157,7 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
             try
             {
                 File.WriteAllBytes(target, pack.ReadDecoded(e));
-                _keys[cacheName] = key;
+                _keys[cacheName] = keyAs ?? key;   // 换图预览暂存记 "local:pack:<目标>"（见 StageFromPack）
                 return Url(cacheName);
             }
             catch (Exception ex) { log?.Invoke($"皮肤素材 {inner} 抽出失败：{ex.Message}"); }

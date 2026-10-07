@@ -656,6 +656,9 @@ public partial class MainWindow : Window
         FileLog.Write("[selftest] ⑫ 换图落表目标：" + swap);
         // ⑬ 改名的"计划名"（和落表同一套规则）：图跟新 key 走；撞名自动 _1/_2，绝不覆盖别人的图
         foreach (var line in _vm.SelfTestPlanArt()) FileLog.Write("[selftest] ⑬ 改名后图会叫：" + line);
+        // ⑭ 换图**预览缓存**回归：来源选包内图 + 重推画布后，缓存必须还是来源那张
+        //    （曾经被包里还没导出的旧图顶掉 → 用户实测"换图后画布背景没变化"）。
+        FileLog.Write("[selftest] ⑭ 换图预览缓存：" + _vm.SelfTestSwapArt());
     }
 
     /// <summary>双击文件树里的 DB 表 → 中间栏开表视图（原生解码）。</summary>

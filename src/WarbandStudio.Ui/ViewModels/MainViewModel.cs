@@ -1879,6 +1879,10 @@ public sealed class MainViewModel : ObservableObject
         return lines;
     }
 
+    /// <summary>自检（--ui-selftest）⑭：换图预览缓存回归（来源=包内图 → 重推画布后缓存必须还是来源那张，
+    /// 见 <see cref="WarbandStudio.Ui.Services.Backend.SelfTestSwapPreview"/>）。</summary>
+    public string SelfTestSwapArt() => _backend.SelfTestSwapPreview();
+
     /// <summary>诊断 ───────────────────────────────────────────</summary>
     private async Task RunDiagnosticsAsync()
     {

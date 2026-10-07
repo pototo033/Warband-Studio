@@ -1009,10 +1009,12 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// </summary>
     /// <summary>
     /// "图 → 现在是谁在用"（换图面板的「在用」标记）。
-    /// **按当前状态算，不按文件名死认**：每个页签"现在显示的这张图" = 本会话最后一次换图的**来源**
-    /// （还没导出，内容还没写过去）/ 否则就是它自己在包里的画布文件。
-    /// 这么算的好处：换图之后，**上一张图的标记会自动撤销**（它不再给这个页签供图了），
-    /// 不会留下"已经不用的图还挂着 🔒"。同一张图被多个页签用 → 写成 "SKV、SKG"。
+    /// **按当前状态算，不按文件名死认**：每个页签"在用的文件" = 它**实际引用的那个文件**
+    /// （ArtInnerOf：twui 里的名字 / 待导出新建的图；改名后自动跟着新名）。
+    /// 换图只把来源的**内容**写进这个文件、**文件名不变** → 标记留在引用文件上；改名/重建后引用变了，
+    /// 旧文件的标记自动撤销，不会留下"已经不用的图还挂着 🔒"。同一张图被多个页签用 → 写成 "SKV、SKG"。
+    /// （v1.4.2 修正：曾经标"最后一次换图的**来源**"，结果和对话框"保持当前"（= 引用文件）的口径打架
+    /// —— 用户实测："查看当前用了两个图"，一个换图前的、一个所选的，都像在用。）
     /// </summary>
     private Dictionary<string, List<string>> ArtSuppliers(string prefix, List<string> knownTabs)
     {
@@ -1030,11 +1032,13 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             {
                 // **twui 里这个页签实际引用的那个文件**（不是约定名 —— 改名会带 _N，老遗留可能叫别的 key）
                 var target = ArtInnerOf(prefix, t);
-                // 本会话最后一次换图（同目标后写为准）→ 来源就是"现在显示的这张"
-                var last = Edits.FileReplacements.Where(x => x.Target.Equals(target, StringComparison.OrdinalIgnoreCase))
-                                                 .LastOrDefault();
-                if (!string.IsNullOrWhiteSpace(last.Source)) Take(last.Source, t);
-                else if (pack?.Find(target) is not null) Take(target, t);   // 没换图 → 它自己的画布文件
+                // 「在用」= **页签引用的那个文件**（§7.96 的"twui 名字"口径）。换图只把来源的**内容**写进
+                // 这个文件、**文件名不变** → 标记不该跳到来源上：否则换图后"保持当前"（= 引用文件）和
+                // 素材列表里的「本页在用」（= 来源）会显示成两张不同的图（用户实测："查看当前用了两个图"）。
+                // 本轮新写的（换图目标 / 新建页签的图）包里还没有 → 靠 FileReplacements 认它算存在。
+                if (pack?.Find(target) is not null
+                    || Edits.FileReplacements.Any(x => x.Target.Equals(target, StringComparison.OrdinalIgnoreCase)))
+                    Take(target, t);
             }
         }
         catch { }
@@ -1269,11 +1273,14 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         {
             var skins = Skins(_pack?.Archive, _pack?.PackPath);
             foreach (var n in new[] { bgName, btnName }) skins.DropCache(n);
-            // 来源有两种：包内路径（老用法）或**本地素材文件**（素材库那份）——预览都要出得来
-            string? Stage(string srcPath, string cacheName) =>
-                File.Exists(srcPath) ? skins.StageLocalFile(srcPath, cacheName) : skins.ExtractForPage(srcPath, cacheName);
-            if (!string.IsNullOrWhiteSpace(bg)) Stage(bg!, bgName);
-            if (!string.IsNullOrWhiteSpace(btn)) Stage(btn!, btnName);
+            // 来源有两种：包内路径（老用法）或**本地素材文件**（素材库那份）——预览都要出得来。
+            // 包内来源必须走 StageFromPack：把来源键记成 `local:pack:<目标>`，不然重推画布时
+            // Prepare 会拿包里还没导出的旧图把这份预览顶掉（用户实测："换图后画布背景没变化"）。
+            string? Stage(string srcPath, string cacheName, string targetInner) =>
+                File.Exists(srcPath) ? skins.StageLocalFile(srcPath, cacheName)
+                                     : skins.StageFromPack(srcPath, targetInner, cacheName);
+            if (!string.IsNullOrWhiteSpace(bg)) Stage(bg!, bgName, bgInner);
+            if (!string.IsNullOrWhiteSpace(btn)) Stage(btn!, btnName, btnInner);
         }
         catch (Exception ex) { Log?.Invoke("换图预览失败：" + ex.Message); }
         InvalidateCanvas();
@@ -1297,6 +1304,60 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         if (!TabHasStructure(category))
             Log?.Invoke($"⚠ 页签 {category} 在包里没有结构（categories 行 / twui 块都没有）——游戏里这个页签不会显示。" +
                         $"要用它请先「新建页签」，key 填 {category}（已经放到这一页的组会自动归到它底下）。");
+    }
+
+    /// <summary>自检（--ui-selftest）⑭：换图**预览缓存**回归 —— 来源选**包内**的图时，抽成目标名之后
+    /// **重推一遍画布数据（会跑 Prepare）**，缓存内容必须还是**来源**那张。
+    /// 曾经的 bug：预览把来源键记成"包内来源路径"→ Prepare 请求目标文件时不匹配 →
+    /// 又拿包里还没导出的旧图抽回来（用户实测："换图后画布背景没变化 / 保持当前还是旧内容"）。</summary>
+    public string SelfTestSwapPreview()
+    {
+        try
+        {
+            var pack = _pack?.Archive;
+            if (pack is null) return "(包没开)";
+            // 目标页签必须**在画布 pages 里**（有组在用）：Prepare 只抽 pages 里的页签，
+            // **空页签根本不会被抽**、也就照不出"被顶掉"（第一版自检挑到空页签 ART，白测）。
+            var pages = new List<string>();
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(BuildWarbandJson());
+                if (doc.RootElement.TryGetProperty("pages", out var pg))
+                    foreach (var p in pg.EnumerateArray())
+                        if (p.GetString() is { Length: > 0 } s) pages.Add(s);
+            }
+            catch { }
+            if (pages.Count == 0) return "(画布没有页签，测不了)";
+            var bgFiles = pack.VisibleEntries.Select(x => x.Path.Replace((char)92, '/'))
+                .Where(p => p.StartsWith(TwuiTabs.SkinDir + "background_images_", StringComparison.OrdinalIgnoreCase))
+                .Select(Path.GetFileName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            string? cat = null, targetName = null;
+            foreach (var t in pages)
+            {
+                var n = Path.GetFileName(ArtInnerOf("background_images_", t));
+                if (bgFiles.Contains(n, StringComparer.OrdinalIgnoreCase)) { cat = t; targetName = n; break; }
+            }
+            if (cat is null || targetName is null) return "(没有'目标图在包里'的页签，测不了)";
+            // 来源 = 包里**另一张、内容不同**的背景图（内容相同会被 SameArt 跳过，测不到东西）
+            var targetBytes = pack.Find(TwuiTabs.SkinDir + targetName) is { } te ? pack.ReadDecoded(te) : null;
+            string? src = null; byte[]? srcBytes = null;
+            foreach (var n in bgFiles.Where(n => !n.Equals(targetName, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (pack.Find(TwuiTabs.SkinDir + n) is not { } e2) continue;
+                var b2 = pack.ReadDecoded(e2);
+                if (targetBytes is null || !b2.AsSpan().SequenceEqual(targetBytes)) { src = n; srcBytes = b2; break; }
+            }
+            if (src is null) return "(包里没有'和它内容不同'的第二张背景图，测不了)";
+            SetTabArt(cat, TwuiTabs.SkinDir + src, null);            // 换图：预览暂存 + 编辑集
+            _ = BuildWarbandJson();                                  // **重推画布**（内部跑 Prepare —— 就是曾经顶掉预览的那一步）
+            var skins = Skins(pack, _pack?.PackPath);
+            var cacheFile = Path.Combine(skins.CacheDir, targetName);
+            var cached = File.Exists(cacheFile) ? File.ReadAllBytes(cacheFile) : null;
+            var ok = srcBytes is not null && cached is not null && cached.AsSpan().SequenceEqual(srcBytes);
+            return $"页签 {cat}：来源 {src} → 抽成 {targetName}，重推画布后缓存 " +
+                   (ok ? "= 来源内容 ✓（没被包里旧图顶掉）" : "✗ 被顶掉了（回归！）");
+        }
+        catch (Exception ex) { return "(换图预览自检失败：" + ex.Message + ")"; }
     }
 
     /// <summary>这个页签 key 在"包 + 待导出"里有没有结构（本会话新建的页签 / categories 行 / twui holder_tab）。</summary>
