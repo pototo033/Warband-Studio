@@ -145,11 +145,16 @@ public partial class MainWindow : Window
         return dlg.ShowDialog(this) == true ? dlg.FolderName : null;
     }
 
-    /// <summary>「从 Pack 打开工程」：选放着 .pack 的文件夹 → 自动登记成工程（project.json + old/）并打开。</summary>
+    /// <summary>「从 Pack 打开工程」：**直接选你的 .pack** —— 它所在的文件夹自动成为工程目录
+    /// （建 project.json + old/ 历史版本），并优先打开你选的那个包。</summary>
     private async void OnOpenProjectFromPack(object sender, RoutedEventArgs e)
     {
-        var dir = PickFolder("选择放着 .pack 的文件夹（会成为工程目录）");
-        if (dir is not null) await _vm.OpenProjectFromPackAsync(dir);
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择你的 .pack（它所在的文件夹会成为工程目录）",
+            Filter = "Pack 文件 (*.pack)|*.pack|所有文件 (*.*)|*.*",
+        };
+        if (dlg.ShowDialog(this) == true) await _vm.OpenProjectFromPackAsync(dlg.FileName);
     }
 
     /// <summary>「新建工程」：选一个文件夹 → 建工程骨架（不自动放包）。</summary>

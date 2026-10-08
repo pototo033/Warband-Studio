@@ -1590,13 +1590,28 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>「从 Pack 打开工程」：选一个**包所在的文件夹** —— 已经是工程就打开它；不是就把它登记成工程
-    /// （建 project.json + old/）并打开其中的包。散落各处的旧包一键转成工程格式。</summary>
-    public async Task<bool> OpenProjectFromPackAsync(string dir)
+    /// （建 project.json + old/）并打开其中的包。散落各处的旧包一键转成工程格式。
+    /// <paramref name="pathOrDir"/> 可以是**一个 .pack 文件**（用户直接选包；优先打开它，文件夹成为工程目录）
+    /// 或一个**目录**（该目录里的包）—— 直接选包是用户最常见的心智，两个都收。
+    public async Task<bool> OpenProjectFromPackAsync(string pathOrDir)
     {
         try
         {
-            dir = Path.GetFullPath(dir);
-            if (ProjectStore.IsProject(dir)) return await OpenProjectAsync(dir);
+            var full = Path.GetFullPath(pathOrDir);
+            string dir;
+            string? preferred = null;
+            if (Directory.Exists(full)) dir = full;
+            else if (File.Exists(full) && full.EndsWith(".pack", StringComparison.OrdinalIgnoreCase))
+            {
+                dir = Path.GetDirectoryName(full)!;
+                preferred = full;
+            }
+            else
+            {
+                Status = "请选一个 .pack 文件（或它所在的文件夹）";
+                return false;
+            }
+            if (ProjectStore.IsProject(dir) && preferred is null) return await OpenProjectAsync(dir);
             var packs = ProjectStore.PacksIn(dir);
             if (packs.Count == 0)
             {
@@ -1605,7 +1620,8 @@ public sealed class MainViewModel : ObservableObject
             }
             if (!ConfirmDropEditsForProjectSwitch()) return false;
             var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
-            info.LastPack = packs[0];
+            var open = preferred is not null ? preferred : packs[0];   // 用户选的那个包 → 优先打开它
+            info.LastPack = open;
             ProjectStore.Save(dir, info);
             _projectDir = dir;
             Project = info;
@@ -1613,11 +1629,11 @@ public sealed class MainViewModel : ObservableObject
             ProjectStore.TouchRecent(_settings.RecentProjects, dir);
             _settings.Save();
             PruneRecentProjects();
-            await OpenPackPathAsync(packs[0], open: true, asUnitPack: false);
+            await OpenPackPathAsync(open, open: true, asUnitPack: false);
             Status = packs.Count == 1
-                ? $"已把该文件夹登记为工程「{info.Name}」并打开 {Path.GetFileName(packs[0])}"
-                : $"已把该文件夹登记为工程「{info.Name}」——里面有 {packs.Count} 个包，先打开 {Path.GetFileName(packs[0])}（其余可在左侧或菜单里打开）";
-            FileLog.Write($"工程：从 Pack 建立 {dir}（主包 {Path.GetFileName(packs[0])}，共 {packs.Count} 个包）");
+                ? $"已把「{Path.GetFileName(dir)}」登记为工程并打开 {Path.GetFileName(open)}"
+                : $"已把「{Path.GetFileName(dir)}」登记为工程 —— 里面有 {packs.Count} 个包，先打开 {Path.GetFileName(open)}（其余可在左侧或菜单里打开）";
+            FileLog.Write($"工程：从 Pack 建立 {dir}（主包 {Path.GetFileName(open)}，共 {packs.Count} 个包）");
             return true;
         }
         catch (Exception ex) { Status = "从 Pack 打开工程失败：" + ex.Message; FileLog.Write("从 Pack 打开工程失败", ex); return false; }
