@@ -235,6 +235,14 @@
                                 <Button Content="选择文件夹…" Padding="10,3" Margin="0,0,6,0" Click="OnChooseBackupDir" />
                                 <Button Content="打开备份文件夹" Padding="10,3" Click="OnOpenBackupDir" />
                             </StackPanel>
+                            <TextBlock Text="新组名前缀（新建 / 合并 / 拆出的单位组按「前缀_页签_兵种」命名；留空 = 旧的时间戳名）"
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Secondary}" />
+                            <TextBox Text="{Binding GroupKeyPrefix, UpdateSourceTrigger=PropertyChanged}"
+                                     Margin="0,4,0,6" Padding="4,3"
+                                     Background="{DynamicResource Bg.Window}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     BorderBrush="{DynamicResource Border.Line}" />
                             <TextBlock Text="{Binding SchemaText}" FontSize="12" TextWrapping="Wrap"
                                        Foreground="{DynamicResource Text.Primary}" />
                             <TextBlock Text="RPFM 引擎（随包内置 rpfm_cli 4.7.4）"

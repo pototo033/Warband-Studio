@@ -1620,9 +1620,10 @@ function paintMulti() {
   } else {
     host.innerHTML = '已选 <b>' + multiGroups.length + '</b> 个组';
     mk('合并成一个组', 'primary', () => {
-      const key = 'studio_group_' + Date.now().toString().slice(-6);
+      // 组名交给后端起（按"前缀_页签_兵种词…"的命名规则；空 group = 让后端生成）——
+      // 前端不知道包里已有组名，去重要在后端做
       const n = (DATA.groups || []).length;
-      report({ type: 'mergeMany', group: key, groups: multiGroups.slice(),
+      report({ type: 'mergeMany', group: '', groups: multiGroups.slice(),
                x: 40 + (n % 10) * 60, y: 40 + Math.floor(n / 10) * 105, category: activePage || '' });
       multiGroups = []; paintMulti();
     });
@@ -1778,7 +1779,9 @@ function openNewPop(mode) {
   document.getElementById('npTitle').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '换图（' + (npArtCat || '') + '）');
   document.getElementById('npOk').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '应用换图');
   if (mode === 'group')
-    document.getElementById('npGroupKey').value = 'studio_group_' + Date.now().toString().slice(-6);
+    document.getElementById('npGroupKey').value = DATA.groupPrefix
+      ? DATA.groupPrefix + (activePage ? '_' + activePage : '')      // 新命名：<前缀>_<页签>（空组没有兵种段）
+      : 'studio_group_' + Date.now().toString().slice(-6);
   showPop('newPop');
   hidePop('cardPop'); hidePop('routePop');
 }

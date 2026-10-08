@@ -32,6 +32,7 @@ public sealed class MainViewModel : ObservableObject
             ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "backups")
             : _settings.BackupDir;
         _autoSave = _settings.AutoSave;
+        _groupKeyPrefix = _settings.GroupKeyPrefix ?? "";
         // 这里不建画布页签：等第一个包打开时按包名建（避免出现一个空的"战帮画布"页签）
         // **日志回调不阻塞后台线程**：以前用同步 Dispatcher.Invoke，而 UI 线程可能正等着后台线程的图标解析锁
         // （兵种库在后台抽图、画布在 UI 线程抽图，抢同一把锁）→ 死锁。现在文件日志直接写（自带锁），
@@ -81,6 +82,15 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _backupDir;
         set { _backupDir = value; _settings.BackupDir = value; _settings.Save(); Raise(nameof(BackupDir)); }
+    }
+
+    private string _groupKeyPrefix = "";
+    /// <summary>新单位组名前缀（全局选项里填）：新建/合并/拆出的组按 `<前缀>_<页签>_<兵种词…>` 命名；
+    /// 空 = 旧的时间戳命名。改了立刻存设置（下一个新建的组就用新前缀）。</summary>
+    public string GroupKeyPrefix
+    {
+        get => _groupKeyPrefix;
+        set { _groupKeyPrefix = value; _settings.GroupKeyPrefix = value; _settings.Save(); Raise(nameof(GroupKeyPrefix)); }
     }
 
     /// <summary>教程是否放过（第一次打开自动放一遍；看完/跳过都记上）。</summary>
@@ -892,10 +902,12 @@ public sealed class MainViewModel : ObservableObject
                 {
                     var g = S("group");
                     var isNew = B("isNew") || g.Length == 0;
-                    if (isNew) g = "studio_new_" + DateTime.Now.ToString("HHmmssff");
                     // 新组归**当前页签**（页面上选着哪个页签就归哪个）；
                     // 注意：消息里没有 category（拖进已有组）时必须传 null —— 传空串会把那个组的页签清掉
                     var cat = S("category");
+                    // 新组命名：全局选项填了前缀就按 `<前缀>_<页签>_<兵种词…>`（见 GroupNaming），没填退回时间戳名
+                    if (isNew) g = _backend.MakeGroupKey(cat.Length > 0 ? cat : null, new[] { S("unit") },
+                                                         "studio_new_" + DateTime.Now.ToString("HHmmssff"));
                     // overwrite：画布上问过"这个兵已经被使用"且用户选了继续 → 覆盖旧的 junction（只留这次的位置）
                     _backend.AddUnitToGroup(g, S("unit"), I("x"), I("y"), isNew, cat.Length > 0 ? cat : null,
                                             overwrite: B("overwrite"));
@@ -1882,6 +1894,9 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>自检（--ui-selftest）⑭：换图预览缓存回归（来源=包内图 → 重推画布后缓存必须还是来源那张，
     /// 见 <see cref="WarbandStudio.Ui.Services.Backend.SelfTestSwapPreview"/>）。</summary>
     public string SelfTestSwapArt() => _backend.SelfTestSwapPreview();
+
+    /// <summary>自检（--ui-selftest）⑮：新组命名规则（`<前缀>_<页签>_<兵种词…>`；见 Backend.SelfTestGroupNaming）。</summary>
+    public string SelfTestGroupNaming() => _backend.SelfTestGroupNaming();
 
     /// <summary>诊断 ───────────────────────────────────────────</summary>
     private async Task RunDiagnosticsAsync()

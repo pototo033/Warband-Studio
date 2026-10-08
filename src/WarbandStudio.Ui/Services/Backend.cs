@@ -288,6 +288,10 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     {
         var list = drops.Where(d => d.Length > 0 && !d.Equals(keep, StringComparison.OrdinalIgnoreCase)).ToList();
         if (list.Count == 0) return;
+        // 画布不再自己起名（"合并成一个组"原来用 studio_group_时间戳，重载后不可读）：
+        // 空 keep = 让后端按命名规则起（<前缀>_<页签>_<合并后每个兵的词…>）。
+        if (string.IsNullOrWhiteSpace(keep))
+            keep = MakeGroupKey(category, list.SelectMany(UnitsOf), $"studio_group_{DateTime.Now:HHmmssff}");
         foreach (var d in list)
         {
             Edits.SetGroup(keep, true);
@@ -327,7 +331,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var made = 0;
         for (var i = 1; i < units.Count; i++)
         {
-            var key = $"studio_split_{DateTime.Now:HHmmssff}_{i}";
+            var key = MakeGroupKey(category, new[] { units[i] }, $"studio_split_{DateTime.Now:HHmmssff}_{i}");
             Edits.SetGroup(key, true);
             Edits.SetJunction(units[i], group, false);
             Edits.SetJunction(units[i], key, true);
@@ -439,9 +443,45 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>新建分组（空组，先落在画布上，之后往里拖兵）。</summary>
     public void NewGroup(string group, int x, int y, string? category)
     {
+        if (string.IsNullOrWhiteSpace(group)) return;
+        if (GroupKeyTaken(group))
+        {
+            var old = group;
+            group = GroupNaming.Unique(group, GroupKeyTaken);
+            Log?.Invoke($"新建分组：key「{old}」已被占用 → 改用「{group}」");
+        }
         Edits.SetGroup(group, true);
         Edits.InfoEdits[group] = (x, y, category);
         Log?.Invoke($"新建分组：{group}（{x},{y}，页签 {category ?? "—"}）　待导出");
+    }
+
+    /// <summary>新建单位组的 key（命名规则见 <see cref="GroupNaming"/>：`<用户填的前缀>_<页签>_<兵种词…>`；
+    /// 全局选项没填前缀就退回 <paramref name="fallback"/> 的旧时间戳名）。</summary>
+    public string MakeGroupKey(string? category, IEnumerable<string> units, string fallback) =>
+        GroupNaming.NewKey(settings.GroupKeyPrefix, category, units, GroupKeyTaken) ?? fallback;
+
+    /// <summary>这个组名现在是不是已经被占用（包里已有的组 + 本会话新建的组；本轮删掉的可以复用）。
+    /// 组名是表主键，重了会把两个组的数据混在一起 —— 起名时靠它去重。</summary>
+    private bool GroupKeyTaken(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        if (Edits.AddGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return true;
+        if (Edits.RemoveGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return false;
+        var pack = _pack?.Archive;
+        if (pack is null) return false;
+        try
+        {
+            foreach (var f in TableFiles.EntriesFor(pack, "unit_upgrade_groups_tables"))
+            {
+                var t = DbTable.Decode(pack.ReadDecoded(f), "unit_upgrade_groups_tables", GetSchema());
+                var c = t.Columns.FindIndex(x => x.Name.Equals("unit_group", StringComparison.OrdinalIgnoreCase));
+                if (c < 0) continue;
+                foreach (var r in t.Rows)
+                    if (r[c].ToTsv().Equals(key, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        catch { /* 读不动就当没占用，别拦着建组 */ }
+        return false;
     }
 
     /// <summary>页签重命名（一次改齐 categories / infos / twui / 两张图）。</summary>
@@ -1408,6 +1448,24 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
                    (ok ? "= 来源内容 ✓（没被包里旧图顶掉）" : "✗ 被顶掉了（回归！）");
         }
         catch (Exception ex) { return "(换图预览自检失败：" + ex.Message + ")"; }
+    }
+
+    /// <summary>自检（--ui-selftest）⑮：新组命名规则（`<前缀>_<页签>_<兵种词…>`；多兵依次接；撞名 _2 去重；
+    /// 没配前缀退回旧时间戳名）。临时借用真实 settings 的前缀字段算例子，**finally 里还原**。</summary>
+    public string SelfTestGroupNaming()
+    {
+        var save = settings.GroupKeyPrefix;
+        try
+        {
+            settings.GroupKeyPrefix = "Yukino";
+            var one = MakeGroupKey("SKV", new[] { "wh2_main_skv_inf_clanrat_1" }, "(旧式)");
+            var many = MakeGroupKey("SKV", new[] { "wh2_main_skv_inf_clanrat_1", "Yukino_Skv_Inf_Night_Runners" }, "(旧式)");
+            var empty = MakeGroupKey("SKV", Array.Empty<string>(), "(旧式)");
+            settings.GroupKeyPrefix = "";
+            var none = MakeGroupKey("SKV", new[] { "wh2_main_skv_inf_clanrat_1" }, "(旧式)");
+            return $"单兵 {one}；多兵 {many}；空组 {empty}；没配前缀 {none}";
+        }
+        finally { settings.GroupKeyPrefix = save; }
     }
 
     /// <summary>这个页签 key 在"包 + 待导出"里有没有结构（本会话新建的页签 / categories 行 / twui holder_tab）。</summary>
@@ -3032,6 +3090,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var newTabs = new System.Text.Json.Nodes.JsonArray();
         foreach (var (tabKey, _, _, _) in Edits.NewTabs) newTabs.Add(tabKey);
         jso["newTabs"] = newTabs;
+        jso["groupPrefix"] = settings.GroupKeyPrefix ?? "";   // 画布「新建分组」默认名要用（<前缀>_<页签>）
         foreach (var t in Edits.OpenedTabs) if (seenPages.Add(t)) pages.Add(t);   // 「打开页签」加进来的
         jso["openedTabs"] = ToJsonArray(Edits.OpenedTabs);
         // 页签右键「应用到其他种族」：手工归属（并进 pageRaces 一起给页面判断"这个页签归谁"）

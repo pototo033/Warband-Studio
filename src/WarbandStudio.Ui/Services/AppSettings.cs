@@ -21,6 +21,10 @@ public sealed class AppSettings
     /// <summary>备份文件夹（保存写回原包时，原文件备份到这里；空 = 默认 %APPDATA%\WarbandStudioackups）。</summary>
     public string BackupDir { get; set; } = "";
 
+    /// <summary>新单位组名前缀（全局选项里填）：新建/合并/拆出的组按 `&lt;前缀&gt;_&lt;页签&gt;_&lt;兵种词…&gt;` 命名；
+    /// 空 = 用旧的时间戳命名（studio_new_…）。</summary>
+    public string GroupKeyPrefix { get; set; } = "";
+
     /// <summary>上次打开的 .pack（下次启动可以问一句要不要接着开）。</summary>
     public string LastPack { get; set; } = "";
 
