@@ -21,9 +21,15 @@ public sealed class AppSettings
     /// <summary>备份文件夹（保存写回原包时，原文件备份到这里；空 = 默认 %APPDATA%\WarbandStudioackups）。</summary>
     public string BackupDir { get; set; } = "";
 
-    /// <summary>新单位组名前缀（全局选项里填）：新建/合并/拆出的组按 `&lt;前缀&gt;_&lt;页签&gt;_&lt;兵种词…&gt;` 命名；
-    /// 空 = 用旧的时间戳命名（studio_new_…）。</summary>
+    /// <summary>旧版全局"新组名前缀"——v1.5.0 起项目 key 存工程（project.json），这个字段只当**迁移种子**
+    /// （新建工程时预填一次），不再参与运行。</summary>
     public string GroupKeyPrefix { get; set; } = "";
+
+    /// <summary>最近打开的工程目录（新到旧，最多 5 个；空状态页/菜单里快捷开启）。</summary>
+    public List<string> RecentProjects { get; set; } = [];
+
+    /// <summary>工程 `old/` 里历史版本保留份数（每次保存前备份一份，超出自动删最旧）。</summary>
+    public int HistoryKeep { get; set; } = 20;
 
     /// <summary>上次打开的 .pack（下次启动可以问一句要不要接着开）。</summary>
     public string LastPack { get; set; } = "";

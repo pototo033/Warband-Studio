@@ -122,12 +122,83 @@ public partial class MainWindow : Window
         if (TreeFiles.SelectedItem is ViewModels.TreeItem item) await _vm.OpenCanvasForNodeAsync(item);
     }
 
-    /// <summary>文件树右键菜单打开时：把"只对某类节点有意义"的项开关一下（「关闭 pack」只在 pack 名上有意义）。</summary>
+    /// <summary>文件树右键菜单打开时：把"只对某类节点有意义"的项开关一下
+    /// （「关闭 pack」只在包根上；工程操作只在工程根上）。</summary>
     private void OnTreeContextOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
     {
         if (MenuClosePack is null) return;
-        MenuClosePack.IsEnabled = TreeFiles.SelectedItem is ViewModels.TreeItem it
-                                  && it.IsFolder && it.Path.Length == 0 && it.PackPath is { Length: > 0 };
+        var it = TreeFiles.SelectedItem as ViewModels.TreeItem;
+        var isPackRoot = it is { IsFolder: true, Path.Length: 0 } && it.PackPath is { Length: > 0 };
+        var isProjectRoot = it is { IsFolder: true, Path.Length: 0, Tag: "工程" };
+        MenuClosePack.IsEnabled = isPackRoot;
+        if (MenuProjectImportWuu is not null) MenuProjectImportWuu.IsEnabled = isProjectRoot;
+        if (MenuProjectImportPack is not null) MenuProjectImportPack.IsEnabled = isProjectRoot;
+        if (MenuProjectFolder is not null) MenuProjectFolder.IsEnabled = isProjectRoot;
+    }
+
+    // ── 工程入口（v1.5.0：选文件夹 → 新建成/打开工程）──────────────────
+
+    /// <summary>弹一个"选文件夹"对话框（工程目录用）。</summary>
+    private string? PickFolder(string title)
+    {
+        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = title, Multiselect = false };
+        return dlg.ShowDialog(this) == true ? dlg.FolderName : null;
+    }
+
+    /// <summary>「从 Pack 打开工程」：选放着 .pack 的文件夹 → 自动登记成工程（project.json + old/）并打开。</summary>
+    private async void OnOpenProjectFromPack(object sender, RoutedEventArgs e)
+    {
+        var dir = PickFolder("选择放着 .pack 的文件夹（会成为工程目录）");
+        if (dir is not null) await _vm.OpenProjectFromPackAsync(dir);
+    }
+
+    /// <summary>「新建工程」：选一个文件夹 → 建工程骨架（不自动放包）。</summary>
+    private async void OnNewProject(object sender, RoutedEventArgs e)
+    {
+        var dir = PickFolder("选择一个文件夹作为新工程目录");
+        if (dir is not null) await _vm.NewProjectAsync(dir);
+    }
+
+    /// <summary>「打开工程」：选已有工程目录（里面有 project.json）。</summary>
+    private async void OnOpenProject(object sender, RoutedEventArgs e)
+    {
+        var dir = PickFolder("选择工程目录（里面有 project.json）");
+        if (dir is not null) await _vm.OpenProjectAsync(dir);
+    }
+
+    /// <summary>「导入 WUU 模板到工程」：把内置 WUU 参考包放进当前工程并打开。</summary>
+    private async void OnImportWuuTemplate(object sender, RoutedEventArgs e) => await _vm.ImportWuuTemplateAsync();
+
+    /// <summary>「导入 Pack 到工程」：选一个外部 .pack → 拷进工程目录并打开。</summary>
+    private async void OnImportPackToProject(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.HasProject) { _vm.SetStatus("先新建/打开一个工程"); return; }
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择要导入工程的 .pack",
+            Filter = "Pack 文件 (*.pack)|*.pack|所有文件 (*.*)|*.*",
+        };
+        if (dlg.ShowDialog(this) == true) await _vm.ImportPackToProjectAsync(dlg.FileName);
+    }
+
+    /// <summary>欢迎面板「最近工程」点一下 → 直接打开那个工程。</summary>
+    private async void OnRecentProjectClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is string dir && dir.Length > 0)
+            await _vm.OpenRecentProjectAsync(dir);
+    }
+
+    /// <summary>文件树右键 →「打开工程文件夹」。</summary>
+    private void OnTreeOpenProjectFolder(object sender, RoutedEventArgs e)
+    {
+        var dir = _vm.ProjectDir;
+        if (dir.Length == 0) { _vm.SetStatus("还没打开工程"); return; }
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{dir}\"")
+            { UseShellExecute = true });
+        }
+        catch (Exception ex) { _vm.SetStatus("打开工程文件夹失败：" + ex.Message); }
     }
 
     /// <summary>文件树里 pack 名右键 →「关闭这个 pack」：只关这一个包（别的已打开的包留着）。</summary>
@@ -432,6 +503,7 @@ public partial class MainWindow : Window
     /// <summary>把当前包的战帮数据推给画布（没打开包/缺表就静默跳过）。</summary>
     private void PushCanvasData()
     {
+        if (!_vm.PackOpen) return;      // v1.5.0 空状态（启动/关工程后没包）：不用推画布，也别记"构建失败"
         try
         {
             var json = _vm.BuildCanvasJson();
@@ -480,6 +552,7 @@ public partial class MainWindow : Window
             if (args[i] == "--ui-selftest")
             {
                 FileLog.Write("启动参数：下拉自检（成本工坊）");
+                await _vm.SelfTestPrepareAsync();      // v1.5.0 空状态启动：自检自己先备一个测试包（⑫~⑮ 都靠它）
                 await RunDropDownSelfTestAsync();
             }
         }
@@ -661,6 +734,8 @@ public partial class MainWindow : Window
         FileLog.Write("[selftest] ⑭ 换图预览缓存：" + _vm.SelfTestSwapArt());
         // ⑮ 新组命名规则：<前缀>_<页签>_<兵种词…>（多兵依次接、撞名 _2 去重；没配前缀退回时间戳名）
         FileLog.Write("[selftest] ⑮ 新组命名：" + _vm.SelfTestGroupNaming());
+        // ⑯ 工程目录往返：建临时工程 → 项目 key 落盘回读 → 历史版本保留 N 份（v1.5.0 工程化的最小闭环）
+        FileLog.Write("[selftest] ⑯ 工程往返：" + _vm.SelfTestProjectRoundTrip());
     }
 
     /// <summary>双击文件树里的 DB 表 → 中间栏开表视图（原生解码）。</summary>

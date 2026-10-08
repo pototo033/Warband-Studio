@@ -455,10 +455,14 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         Log?.Invoke($"新建分组：{group}（{x},{y}，页签 {category ?? "—"}）　待导出");
     }
 
-    /// <summary>新建单位组的 key（命名规则见 <see cref="GroupNaming"/>：`<用户填的前缀>_<页签>_<兵种词…>`；
-    /// 全局选项没填前缀就退回 <paramref name="fallback"/> 的旧时间戳名）。</summary>
+    /// <summary>当前工程的**项目 key**（新单位组的命名前缀；v1.5.0 起存工程 project.json，不再是全局设置）。
+    /// VM 在打开/新建/切工程（和改 key）时同步到这里；空 = 没工程 → 新组命名退回旧时间戳规则。</summary>
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>新建单位组的 key（命名规则见 <see cref="GroupNaming"/>：`<项目 key>_<页签>_<兵种词…>`；
+    /// 项目 key 为空就退回 <paramref name="fallback"/> 的旧时间戳名）。</summary>
     public string MakeGroupKey(string? category, IEnumerable<string> units, string fallback) =>
-        GroupNaming.NewKey(settings.GroupKeyPrefix, category, units, GroupKeyTaken) ?? fallback;
+        GroupNaming.NewKey(ProjectKey, category, units, GroupKeyTaken) ?? fallback;
 
     /// <summary>这个组名现在是不是已经被占用（包里已有的组 + 本会话新建的组；本轮删掉的可以复用）。
     /// 组名是表主键，重了会把两个组的数据混在一起 —— 起名时靠它去重。</summary>
@@ -1454,18 +1458,18 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// 没配前缀退回旧时间戳名）。临时借用真实 settings 的前缀字段算例子，**finally 里还原**。</summary>
     public string SelfTestGroupNaming()
     {
-        var save = settings.GroupKeyPrefix;
+        var save = ProjectKey;
         try
         {
-            settings.GroupKeyPrefix = "Yukino";
+            ProjectKey = "Yukino";
             var one = MakeGroupKey("SKV", new[] { "wh2_main_skv_inf_clanrat_1" }, "(旧式)");
             var many = MakeGroupKey("SKV", new[] { "wh2_main_skv_inf_clanrat_1", "Yukino_Skv_Inf_Night_Runners" }, "(旧式)");
             var empty = MakeGroupKey("SKV", Array.Empty<string>(), "(旧式)");
-            settings.GroupKeyPrefix = "";
+            ProjectKey = "";
             var none = MakeGroupKey("SKV", new[] { "wh2_main_skv_inf_clanrat_1" }, "(旧式)");
             return $"单兵 {one}；多兵 {many}；空组 {empty}；没配前缀 {none}";
         }
-        finally { settings.GroupKeyPrefix = save; }
+        finally { ProjectKey = save; }
     }
 
     /// <summary>这个页签 key 在"包 + 待导出"里有没有结构（本会话新建的页签 / categories 行 / twui holder_tab）。</summary>
@@ -1973,24 +1977,29 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// 以后编辑都落在这个包上。已存在就直接用。
     /// </summary>
     /// <summary>
-    /// 新建「WUU战帮升级」包：把 **WUU（workshop 2853239091）** 的战帮相关内容抽出来写成一个独立包，
-    /// 缺的表再从游戏 data 补一份（这样包是自洽的）。找不到 WUU 时退回"原版战帮升级"。
+    /// 把**内置的 WUU 素材**组装成一个可编辑的参考包，**导出到指定目录**（「导入 WUU 模板」用）。
+    /// v1.5.0 起启动不再自动生成/打开它（启动 = 空状态；用户自行导入模板）。
+    /// 目标文件已存在就直接沿用（想要全新的先删掉旧的）。返回包路径；素材缺失时返回 null。
     /// </summary>
-    public string? EnsureWuuWarbandPack()
+    public string? BuildWuuTemplatePack(string destDir, string? fileName = null)
     {
-        try { return EnsureWuuWarbandPackCore(); }
+        try { return BuildWuuTemplatePackCore(destDir, fileName); }
         catch (Exception ex)
         {
-            Log?.Invoke("建 WUU 战帮包失败（退回原版）：" + ex.Message);
+            Log?.Invoke("导入 WUU 模板失败：" + ex.Message);
             return null;
         }
     }
 
-    private string? EnsureWuuWarbandPackCore()
+    private string? BuildWuuTemplatePackCore(string destDir, string? fileName = null)
     {
-        var dir = Path.Combine(AppContext.BaseDirectory, "packs");
-        Directory.CreateDirectory(dir);
-        var dest = Path.Combine(dir, "WUU战帮升级.pack");
+        Directory.CreateDirectory(destDir);
+        var dest = Path.Combine(destDir, fileName ?? "WUU战帮升级.pack");
+        if (File.Exists(dest))
+        {
+            Log?.Invoke($"WUU 模板：目标已存在，直接沿用 {dest}");
+            return dest;
+        }
 
         var packs = new List<string>();
         var game = settings.GameDir ?? "";
@@ -2003,7 +2012,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         if (Directory.Exists(bundled)) packs.AddRange(Directory.GetFiles(bundled, "*.pack"));
         // ② 其次 workshop 里的 WUU
         if (ws is not null && Directory.Exists(ws)) packs.AddRange(Directory.GetFiles(ws, "*.pack"));
-        if (packs.Count == 0) return null;
+        if (packs.Count == 0) { Log?.Invoke("WUU 模板：找不到素材（bundled/wuu 里没有 .pack）"); return null; }
 
         // **UI 来源（twui + skins）单独排队：WUF（warband ui framework，包名 !!!!!!TLA_warband_twui.pack）优先。**
         // 游戏里 WUF 与 WUU 的同名 UI 文件是"WUF 覆盖 WUU"（原作者设定），所以工具新建的页签也必须建在
@@ -2020,16 +2029,6 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         uiSources = uiSources.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         uiSources.AddRange(packs);                       // WUF 里没有的素材（背景/按钮 PNG）再从内容包拿
         var uiSourceTag = uiSources.Count > 0 ? Path.GetFileName(uiSources[0]) : "(无)";
-
-        // 源包跟着"UI 来源"走：来源变了就把旧的删掉重建（不然改了来源还是用老 twui）
-        var stamp = dest + ".src.txt";
-        if (File.Exists(dest))
-        {
-            var old = File.Exists(stamp) ? File.ReadAllText(stamp).Trim() : "";
-            if (string.Equals(old, uiSourceTag, StringComparison.OrdinalIgnoreCase)) return dest;
-            Log?.Invoke($"UI 来源从「{old}」变成「{uiSourceTag}」→ 重建源包");
-            try { File.Delete(dest); } catch { return dest; }
-        }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var items = new List<(string Path, byte[] Data)>();
@@ -2077,9 +2076,8 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         }
 
         PackWriter.WriteNew(dest, items);
-        try { File.WriteAllText(stamp, uiSourceTag); } catch { }
         sw.Stop();
-        Log?.Invoke($"新建 WUU战帮升级包：{dest}（{items.Count} 个文件，其中 WUU 表/内容 {wuuFiles} 个，UI 来源 {uiSourceTag}，{sw.ElapsedMilliseconds} ms）");
+        Log?.Invoke($"导入 WUU 模板：{dest}（{items.Count} 个文件，其中 WUU 表/内容 {wuuFiles} 个，UI 来源 {uiSourceTag}，{sw.ElapsedMilliseconds} ms）");
         return dest;
     }
 
@@ -2265,12 +2263,28 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     private readonly Dictionary<string, SkinAssets> _skins = new(StringComparer.OrdinalIgnoreCase);
     private SkinAssets Skins(PackArchive? pack, string? packPath)
     {
-        var tag = string.IsNullOrWhiteSpace(packPath) ? "common" : Path.GetFileNameWithoutExtension(packPath);
+        var tag = SkinTagOf(packPath);
         // 注意：**保存（写回原包）会重开包 → 换了 Archive 实例**。缓存里的 SkinAssets 要是还攥着
         // 旧实例，换图抽图就会 "Cannot access a closed file"（表现为"当前是空的 / 预览点不出来"）。
         if (!_skins.TryGetValue(tag, out var sa) || !ReferenceEquals(sa.Pack, pack))
             _skins[tag] = sa = new SkinAssets(pack, settings.GameDir, line => Log?.Invoke(line), tag);
         return sa;
+    }
+
+    /// <summary>皮肤缓存的分目录键（v1.5.0 起 = `包名@目录哈希前 6 位`）。
+    /// 以前只取包文件名 → **不同工程里的同名包会共用同一份缓存**（切工程后画面串图）；加上目录哈希就互不干扰。</summary>
+    private static string SkinTagOf(string? packPath)
+    {
+        if (string.IsNullOrWhiteSpace(packPath)) return "common";
+        var name = Path.GetFileNameWithoutExtension(packPath);
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(packPath)) ?? "";
+            var h = System.Security.Cryptography.SHA1.HashData(
+                System.Text.Encoding.UTF8.GetBytes(dir.ToLowerInvariant()));
+            return name + "@" + Convert.ToHexString(h)[..6].ToLowerInvariant();
+        }
+        catch { return name; }
     }
 
     /// <summary>切换"当前包"（多画布：每个画布看自己的包）。</summary>
@@ -2373,15 +2387,23 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var rep = Export(tmp);                       // 复用导出（含全部落表 + 文件替换）
         // **先把包关掉**：读包时我们自己一直占着这个文件的句柄，不关就替换不了（"used by another process"）
         await CloseSessionAsync(session);
-        // 备份到**专用备份文件夹**（全局选项可改；默认 %APPDATA%\WarbandStudioackups）：
-        // 带时间戳 → 不覆盖上一份，等于有备份历史（以前是 pack 旁边一个 .bak，只留一份）
         var bak = "";
         try
         {
-            var bakDir = BackupDirPath();
-            Directory.CreateDirectory(bakDir);
-            bak = Path.Combine(bakDir, Path.GetFileName(pack) + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".bak");
-            File.Copy(pack, bak);
+            // 备份：**工程的 old/ 优先**（v1.5.0 起；那份是完整 .pack，能直接在「历史版本」里还原，保留最近 N 份）；
+            // 包不在任何工程里（如 --open-pack）才退回旧备份目录（.bak）。
+            var proj = ProjectStore.ProjectDirOfPack(pack);
+            if (proj is not null)
+            {
+                bak = ProjectStore.BackupPack(proj, pack, settings.HistoryKeep) ?? "";
+            }
+            else
+            {
+                var bakDir = BackupDirPath();
+                Directory.CreateDirectory(bakDir);
+                bak = Path.Combine(bakDir, Path.GetFileName(pack) + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".bak");
+                File.Copy(pack, bak);
+            }
         }
         catch (Exception ex) { Log?.Invoke("备份失败（继续保存）：" + ex.Message); bak = ""; }
         File.Delete(pack);
@@ -2393,6 +2415,24 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     }
 
     /// <summary>备份文件夹（设置里没写就用默认 %APPDATA%\WarbandStudioackups）。</summary>
+    /// <summary>
+    /// 从工程的 `old/` 历史版本**还原**一个包：先把当前包也备份一份（还原不是丢东西的借口），
+    /// 再把所选备份拷回原位、清掉内存编辑、重新打开。调用方负责先问"有未导出编辑怎么办"。
+    /// </summary>
+    public async Task<string> RestoreFromBackupAsync(string packPath, string backupFile)
+    {
+        var proj = ProjectStore.ProjectDirOfPack(packPath);
+        var session = _packs.FirstOrDefault(s => s.PackPath.Equals(packPath, StringComparison.OrdinalIgnoreCase));
+        if (session is not null) await CloseSessionAsync(session);      // 先关，释放文件句柄
+        var keepBak = proj is not null ? ProjectStore.BackupPack(proj, packPath, settings.HistoryKeep) : null;
+        File.Copy(backupFile, packPath, overwrite: true);
+        DiscardEditsOf(packPath);
+        await OpenPackAsync(packPath);
+        Log?.Invoke($"还原：{Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}" +
+                    $"（还原前的包也备份了一份：{(keepBak is null ? "—" : Path.GetFileName(keepBak))}）");
+        return $"已还原 {Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}（还原前的那份也进了历史版本）";
+    }
+
     public string BackupDirPath()
     {
         var d = settings.BackupDir;
@@ -3090,7 +3130,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var newTabs = new System.Text.Json.Nodes.JsonArray();
         foreach (var (tabKey, _, _, _) in Edits.NewTabs) newTabs.Add(tabKey);
         jso["newTabs"] = newTabs;
-        jso["groupPrefix"] = settings.GroupKeyPrefix ?? "";   // 画布「新建分组」默认名要用（<前缀>_<页签>）
+        jso["projectKey"] = ProjectKey ?? "";   // 画布「新建分组」默认名要用（<项目 key>_<页签>）
         foreach (var t in Edits.OpenedTabs) if (seenPages.Add(t)) pages.Add(t);   // 「打开页签」加进来的
         jso["openedTabs"] = ToJsonArray(Edits.OpenedTabs);
         // 页签右键「应用到其他种族」：手工归属（并进 pageRaces 一起给页面判断"这个页签归谁"）
@@ -3372,11 +3412,18 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     {
         try
         {
-            var p = s.PackPath ?? "";
+            var p = (s.PackPath ?? "").Trim();
             if (p.Length == 0) return false;
-            var own = Path.Combine(AppContext.BaseDirectory, "packs", "WUU战帮升级.pack");
-            return Path.GetFullPath(p).Equals(Path.GetFullPath(own), StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(p).Equals("WUU战帮升级.pack", StringComparison.OrdinalIgnoreCase);
+            var full = Path.GetFullPath(p);
+            // 工具自带的包 = exe 旁 packs/（老版生成的源包）或 bundled/（随包素材）里那些。
+            // v1.5.0 起 exe 旁不再自动生成 WUU 包；**工程目录里的同名包是用户的包**（要能出现在 mod 列表里）。
+            foreach (var d in new[] { Path.Combine(AppContext.BaseDirectory, "packs"),
+                                      Path.Combine(AppContext.BaseDirectory, "bundled") })
+            {
+                if (full.StartsWith(Path.GetFullPath(d) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
         catch { return false; }
     }

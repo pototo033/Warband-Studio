@@ -32,7 +32,6 @@ public sealed class MainViewModel : ObservableObject
             ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "backups")
             : _settings.BackupDir;
         _autoSave = _settings.AutoSave;
-        _groupKeyPrefix = _settings.GroupKeyPrefix ?? "";
         // 这里不建画布页签：等第一个包打开时按包名建（避免出现一个空的"战帮画布"页签）
         // **日志回调不阻塞后台线程**：以前用同步 Dispatcher.Invoke，而 UI 线程可能正等着后台线程的图标解析锁
         // （兵种库在后台抽图、画布在 UI 线程抽图，抢同一把锁）→ 死锁。现在文件日志直接写（自带锁），
@@ -57,6 +56,7 @@ public sealed class MainViewModel : ObservableObject
         SavePackCommand = new RelayCommand(() => SaveAsync(null), () => PackOpen && !IsBusy);
         SavePackAsCommand = new RelayCommand(SaveAsAsync, () => PackOpen && !IsBusy);
         ClosePackCommand = new RelayCommand(ClosePackAsync, () => PackOpen && !IsBusy);
+        CloseProjectCommand = new RelayCommand(CloseProjectAsync, () => HasProject && !IsBusy);
         ChooseGameDirCommand = new RelayCommand(ChooseGameDirAsync, () => !IsBusy);
         ApplyGameCommand = new RelayCommand(ApplyGameDirAsync, () => !IsBusy);
         DiagnosticsCommand = new RelayCommand(RunDiagnosticsAsync, () => !IsBusy);
@@ -84,13 +84,62 @@ public sealed class MainViewModel : ObservableObject
         set { _backupDir = value; _settings.BackupDir = value; _settings.Save(); Raise(nameof(BackupDir)); }
     }
 
-    private string _groupKeyPrefix = "";
-    /// <summary>新单位组名前缀（全局选项里填）：新建/合并/拆出的组按 `<前缀>_<页签>_<兵种词…>` 命名；
-    /// 空 = 旧的时间戳命名。改了立刻存设置（下一个新建的组就用新前缀）。</summary>
-    public string GroupKeyPrefix
+    // ── 工程（v1.5.0：用户选一个文件夹 = 一个工程；项目 key / 历史版本都在工程里）────────────
+
+    private ProjectInfo? _project;
+    private string _projectDir = "";
+
+    /// <summary>当前工程（null = 没打开；启动就是空状态）。</summary>
+    public ProjectInfo? Project
     {
-        get => _groupKeyPrefix;
-        set { _groupKeyPrefix = value; _settings.GroupKeyPrefix = value; _settings.Save(); Raise(nameof(GroupKeyPrefix)); }
+        get => _project;
+        private set
+        {
+            _project = value;
+            Raise(nameof(Project));
+            Raise(nameof(HasProject));
+            Raise(nameof(ProjectName));
+            Raise(nameof(ProjectDir));
+            Raise(nameof(ProjectText));
+            Raise(nameof(ProjectKey));
+            Raise(nameof(IsWelcomeVisible));
+        }
+    }
+
+    public bool HasProject => _project is not null;
+    public string ProjectName => _project?.Name ?? "(未打开)";
+    public string ProjectDir => _projectDir;
+    public string ProjectText => _project is null ? "工程：未打开" : $"工程：{_project.Name}";
+
+    /// <summary>**项目 key**（新单位组的命名前缀，存工程 project.json）：`<key>_<页签>_<兵种词…>`；
+    /// 没工程/留空 = 新组命名退回旧时间戳规则。改了立刻落盘（下一个新建的组就用新 key）。</summary>
+    public string ProjectKey
+    {
+        get => _project?.ProjectKey ?? "";
+        set
+        {
+            if (_project is null || _projectDir.Length == 0) return;
+            _project.ProjectKey = value ?? "";
+            ProjectStore.Save(_projectDir, _project);
+            _backend.ProjectKey = _project.ProjectKey;
+            _backend.InvalidateCanvas();                 // 画布「新建分组」的默认名跟着变
+            Raise(nameof(ProjectKey));
+        }
+    }
+
+    /// <summary>欢迎面板（空状态）是否显示：没有画布页签 = 还没开工程/包。</summary>
+    public bool IsWelcomeVisible => !IsCanvasActive;
+
+    /// <summary>最近工程（欢迎面板/菜单用；打开时会把"目录已不存在"的剔掉）。</summary>
+    public ObservableCollection<string> RecentProjects { get; } = [];
+
+    /// <summary>刷新最近工程列表（剔除失效目录）。</summary>
+    private void PruneRecentProjects()
+    {
+        var list = _settings.RecentProjects.Where(d => Directory.Exists(d) && ProjectStore.IsProject(d)).ToList();
+        if (list.Count != _settings.RecentProjects.Count) { _settings.RecentProjects = list; _settings.Save(); }
+        RecentProjects.Clear();
+        foreach (var d in list) RecentProjects.Add(d);
     }
 
     /// <summary>教程是否放过（第一次打开自动放一遍；看完/跳过都记上）。</summary>
@@ -148,6 +197,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand SavePackCommand { get; }
     public RelayCommand SavePackAsCommand { get; }
     public RelayCommand ClosePackCommand { get; }
+    public RelayCommand CloseProjectCommand { get; }
     public RelayCommand ChooseGameDirCommand { get; }
     public RelayCommand ApplyGameCommand { get; }
     public RelayCommand DiagnosticsCommand { get; }
@@ -211,7 +261,7 @@ public sealed class MainViewModel : ObservableObject
         set
         {
             var v = value ?? (CenterTabs.Count > 0 ? CenterTabs[0] : null!);
-            if (Set(ref _activeCenterTab, v)) Raise(nameof(IsCanvasActive));
+            if (Set(ref _activeCenterTab, v)) { Raise(nameof(IsCanvasActive)); Raise(nameof(IsWelcomeVisible)); }
             else if (v is not null) Raise(nameof(ActiveCenterTab));
         }
     }
@@ -447,6 +497,7 @@ public sealed class MainViewModel : ObservableObject
                 _activeCenterTab = null!;
                 Raise(nameof(ActiveCenterTab));
                 Raise(nameof(IsCanvasActive));
+                Raise(nameof(IsWelcomeVisible));
             }
         }
         try { CenterTabs.Remove(tab); }
@@ -1453,18 +1504,14 @@ public sealed class MainViewModel : ObservableObject
             else if (!string.IsNullOrWhiteSpace(GameDir))
                 Status = "这个目录里没找到 data\\*.pack，请在左下「全局选项」里改一个正确的游戏目录";
 
-            // 启动默认打开 **原版战帮升级**（= 游戏 data/db.pack）；想看自己的包用「打开 Pack…」
-            var mine = _backend.EnsureWuuWarbandPack();
-            if (mine is not null) await _backend.OpenPackAsync(mine, default, displayName: "WUU战帮升级");
-            else
-            {
-                mine = _backend.EnsureVanillaWarbandPack();
-                if (mine is not null) await _backend.OpenPackAsync(mine, default, displayName: "原版战帮升级");
-            }
+            // **v1.5.0：启动 = 空状态** —— 不再自动生成/打开 WUU 参考包（它仍内置在 bundled/wuu，
+            // 走「导入 WUU 模板」）；用户从欢迎面板「新建工程 / 从 Pack 打开工程 / 打开工程」开始。
+            // 这里只把"最近工程"里的失效项剔掉，给欢迎面板用。
+            PruneRecentProjects();
 
             // 启动收尾：**强制重刷一次**文件树 + 推一次画布数据（之前出现"刚启动左边空、画布等待数据"）
             RebuildTree();
-            FileLog.Write($"启动收尾：pack={_backend.Pack?.DisplayName ?? "(无)"}，树根 {TreeRoots.Count} 个，文件 {_backend.Pack?.Files.Count ?? 0} 个");
+            FileLog.Write($"启动收尾：pack=(无)，树根 {TreeRoots.Count} 个（空状态，等新建/打开工程）");
             PackOpened?.Invoke();
             LoadUiAssets();
             // 成本工坊的清单（成本 id / 选用资源两个下拉）**也要在这条"启动自动开包"的路上填上** ——
@@ -1474,6 +1521,7 @@ public sealed class MainViewModel : ObservableObject
             if (CenterTabs.Count == 0 && _backend.Pack is { IsOpen: true } p0) EnsureCanvasTab(p0);
             if (CenterTabs.Count > 0) ActiveCenterTab = CenterTabs[0];   // 开好包就把画布摆到前面
             Raise(nameof(IsCanvasActive));
+            Raise(nameof(IsWelcomeVisible));
         }
         catch (Exception e)
         {
@@ -1486,6 +1534,150 @@ public sealed class MainViewModel : ObservableObject
             _settings.Save();
             IsBusy = false;
         }
+    }
+
+    // ── 工程（v1.5.0）──────────────────────────────────────────
+
+    /// <summary>切工程/关工程前：有未导出编辑就问一句（确认"放弃"才继续；想保留就取消，回去先保存）。</summary>
+    private bool ConfirmDropEditsForProjectSwitch()
+    {
+        var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
+        if (dirty.Count == 0) return true;
+        var n = dirty.Sum(s => _backend.EditCountOf(s.PackPath));
+        return Confirm?.Invoke(
+            $"有 {n} 处未导出的编辑（{dirty.Count} 个包）。\n\n继续会把这些编辑丢掉；\n想保留就先点「取消」，回工具里点「保存」再操作。\n\n继续吗？") ?? true;
+    }
+
+    /// <summary>新建工程（选一个文件夹）：写 project.json + old/；**不自动导入任何包**。</summary>
+    public Task<bool> NewProjectAsync(string dir) => OpenProjectAtAsync(dir, create: true);
+
+    /// <summary>打开一个已有工程（打开它的 lastPack；里面没包就登记着，等导入）。</summary>
+    public Task<bool> OpenProjectAsync(string dir) => OpenProjectAtAsync(dir, create: false);
+
+    private async Task<bool> OpenProjectAtAsync(string dir, bool create)
+    {
+        try
+        {
+            dir = Path.GetFullPath(dir);
+            if (!create && !ProjectStore.IsProject(dir))
+            {
+                Status = "这个文件夹还不是工程（没有 project.json）——要在已有 pack 的文件夹上建工程，用「从 Pack 打开工程」";
+                return false;
+            }
+            if (!ConfirmDropEditsForProjectSwitch()) return false;
+            var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
+            _projectDir = dir;
+            Project = info;
+            _backend.ProjectKey = info.ProjectKey;
+            ProjectStore.TouchRecent(_settings.RecentProjects, dir);
+            _settings.Save();
+            PruneRecentProjects();
+            var packs = ProjectStore.PacksIn(dir);
+            var open = !string.IsNullOrWhiteSpace(info.LastPack) && File.Exists(info.LastPack)
+                ? info.LastPack
+                : packs.Count > 0 ? packs[0] : null;
+            if (open is not null) await OpenPackPathAsync(open, open: true, asUnitPack: false);
+            Status = packs.Count switch
+            {
+                0 => $"工程「{info.Name}」已打开 —— 用「导入 WUU 模板」或「导入 Pack」放一个包进来",
+                _ => $"工程「{info.Name}」已打开：{Path.GetFileName(open!)}" +
+                     (packs.Count > 1 ? $"（工程里还有 {packs.Count - 1} 个包）" : ""),
+            };
+            FileLog.Write($"工程：{(create ? "新建" : "打开")} {dir}（项目 key「{info.ProjectKey}」，包 {packs.Count} 个）");
+            return true;
+        }
+        catch (Exception ex) { Status = "打开工程失败：" + ex.Message; FileLog.Write("打开工程失败", ex); return false; }
+    }
+
+    /// <summary>「从 Pack 打开工程」：选一个**包所在的文件夹** —— 已经是工程就打开它；不是就把它登记成工程
+    /// （建 project.json + old/）并打开其中的包。散落各处的旧包一键转成工程格式。</summary>
+    public async Task<bool> OpenProjectFromPackAsync(string dir)
+    {
+        try
+        {
+            dir = Path.GetFullPath(dir);
+            if (ProjectStore.IsProject(dir)) return await OpenProjectAsync(dir);
+            var packs = ProjectStore.PacksIn(dir);
+            if (packs.Count == 0)
+            {
+                Status = "这个文件夹里没有 .pack —— 请选包所在的文件夹（或先「新建工程」再用「导入 Pack」）";
+                return false;
+            }
+            if (!ConfirmDropEditsForProjectSwitch()) return false;
+            var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
+            info.LastPack = packs[0];
+            ProjectStore.Save(dir, info);
+            _projectDir = dir;
+            Project = info;
+            _backend.ProjectKey = info.ProjectKey;
+            ProjectStore.TouchRecent(_settings.RecentProjects, dir);
+            _settings.Save();
+            PruneRecentProjects();
+            await OpenPackPathAsync(packs[0], open: true, asUnitPack: false);
+            Status = packs.Count == 1
+                ? $"已把该文件夹登记为工程「{info.Name}」并打开 {Path.GetFileName(packs[0])}"
+                : $"已把该文件夹登记为工程「{info.Name}」——里面有 {packs.Count} 个包，先打开 {Path.GetFileName(packs[0])}（其余可在左侧或菜单里打开）";
+            FileLog.Write($"工程：从 Pack 建立 {dir}（主包 {Path.GetFileName(packs[0])}，共 {packs.Count} 个包）");
+            return true;
+        }
+        catch (Exception ex) { Status = "从 Pack 打开工程失败：" + ex.Message; FileLog.Write("从 Pack 打开工程失败", ex); return false; }
+    }
+
+    /// <summary>打开"最近工程"里的一个（欢迎面板/菜单的快捷入口）。</summary>
+    public async Task<bool> OpenRecentProjectAsync(string dir)
+    {
+        if (!Directory.Exists(dir) || !ProjectStore.IsProject(dir))
+        {
+            PruneRecentProjects();
+            Status = "这个工程目录已经不在了（已从最近列表移除）";
+            return false;
+        }
+        return await OpenProjectAsync(dir);
+    }
+
+    /// <summary>关闭工程：它下面打开的包全关掉（有未导出编辑先问）。</summary>
+    public async Task CloseProjectAsync()
+    {
+        if (_project is null) return;
+        if (!ConfirmDropEditsForProjectSwitch()) return;
+        foreach (var s in _backend.Packs.ToList()) await _backend.CloseSessionAsync(s);
+        AfterPackClosed();
+        Project = null;
+        _projectDir = "";
+        _backend.ProjectKey = "";
+        RebuildTree();
+        FileLog.Write("工程：已关闭");
+        Status = "工程已关闭";
+    }
+
+    /// <summary>把外部 pack 拷进当前工程并打开（"往工程里加一个包"的正路）。</summary>
+    public async Task<bool> ImportPackToProjectAsync(string externalPack)
+    {
+        if (_project is null || _projectDir.Length == 0) { Status = "先新建/打开一个工程"; return false; }
+        try
+        {
+            var dest = Path.Combine(_projectDir, Path.GetFileName(externalPack));
+            if (!Path.GetFullPath(externalPack).Equals(Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+            {
+                if (File.Exists(dest)) { Status = $"工程里已经有 {Path.GetFileName(dest)}（要么给导入的包改个名，要么先删旧的那份）"; return false; }
+                File.Copy(externalPack, dest);
+            }
+            await OpenPackPathAsync(dest, open: true, asUnitPack: false);
+            FileLog.Write($"工程：导入包 {Path.GetFileName(dest)}");
+            return true;
+        }
+        catch (Exception ex) { Status = "导入包失败：" + ex.Message; return false; }
+    }
+
+    /// <summary>导入内置的 WUU 模板到当前工程并打开（空工程起步用；素材在 exe 旁 bundled/wuu）。</summary>
+    public async Task<bool> ImportWuuTemplateAsync()
+    {
+        if (_project is null || _projectDir.Length == 0) { Status = "先新建/打开一个工程"; return false; }
+        var pack = _backend.BuildWuuTemplatePack(_projectDir);
+        if (pack is null) { Status = "导入失败：内置 WUU 素材缺失（exe 旁 bundled\\wuu 里应有 .pack）"; return false; }
+        await OpenPackPathAsync(pack, open: true, asUnitPack: false);
+        FileLog.Write($"工程：导入 WUU 模板 {Path.GetFileName(pack)}");
+        return true;
     }
 
     // ── 游戏目录 ────────────────────────────────────────────────
@@ -1635,7 +1827,16 @@ public sealed class MainViewModel : ObservableObject
     private void RebuildTree()
     {
         TreeRoots.Clear();
-        // 照 RPFM 的样子：**一个 pack 一棵树**（根 = pack 名），多个 pack 可以共存
+        // **v1.5.0：工程根 → 包 → 文件**。有工程时包根挂在工程根下面（工程信息、导入/历史版本等右键操作都在它上面）；
+        // 没工程（--open-pack 之类）退回平铺的"一个 pack 一棵树"。
+        var projectRoot = _project is null ? null : new TreeItem
+        {
+            Name = $"工程：{_project.Name}",
+            Path = "",
+            IsFolder = true,
+            IsExpanded = true,
+            Tag = "工程",       // 右键菜单靠它区分"工程根"和"包根"
+        };
         foreach (var session in _backend.Packs)
         {
             if (session.IsUnitPack) continue;      // 兵种包不进战帮树（它只出现在右上「mod 兵种」页）
@@ -1663,8 +1864,15 @@ public sealed class MainViewModel : ObservableObject
             }
             packRoot.PackPath = session.PackPath;
             foreach (var c in packRoot.Children) TagPack(c, session.PackPath);   // 子节点也记住自己属于哪个包
-            TreeRoots.Add(packRoot);
+            if (projectRoot is not null) projectRoot.Children.Add(packRoot);
+            else TreeRoots.Add(packRoot);
             FileLog.Write($"文件树：根「{packRoot.Name}」= {files.Count} 个战帮相关文件");
+        }
+        if (projectRoot is not null)
+        {
+            // 工程下暂时没包（或包都关了）也保留工程根：用户能看到"工程开着、还没放包"
+            TreeRoots.Add(projectRoot);
+            FileLog.Write($"文件树：工程「{_project!.Name}」下 {projectRoot.Children.Count} 个包");
         }
     }
 
@@ -1897,6 +2105,49 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>自检（--ui-selftest）⑮：新组命名规则（`<前缀>_<页签>_<兵种词…>`；见 Backend.SelfTestGroupNaming）。</summary>
     public string SelfTestGroupNaming() => _backend.SelfTestGroupNaming();
+
+    /// <summary>自检（--ui-selftest）前置：启动 = 空状态后，⑫~⑮ 都依赖"有个打开的包" ——
+    /// 现场用内置 WUU 素材在临时目录生成一个测试包并打开（已有包就直接用）。</summary>
+    public async Task SelfTestPrepareAsync()
+    {
+        if (_backend.Pack is { IsOpen: true }) return;
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "warbandstudio_selftest");
+            Directory.CreateDirectory(dir);
+            var pack = _backend.BuildWuuTemplatePack(dir);
+            if (pack is not null)
+            {
+                await _backend.OpenPackAsync(pack, default, displayName: "WUU战帮升级（自检）");
+                RebuildTree();
+            }
+            FileLog.Write($"[selftest] 测试包：{pack ?? "(生成失败)"}");
+        }
+        catch (Exception ex) { FileLog.Write("[selftest] 测试包准备失败：" + ex.Message); }
+    }
+
+    /// <summary>自检（--ui-selftest）⑯：工程目录往返 —— 建临时工程 → 项目 key 落盘回读 →
+    /// 历史版本备份/保留 N 份 → 清理。空状态启动后"工程这条路"通不通看它。</summary>
+    public string SelfTestProjectRoundTrip()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "warbandstudio_selftest_proj");
+        try
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            var info = ProjectStore.Ensure(dir);
+            info.ProjectKey = "StudioTest";
+            ProjectStore.Save(dir, info);
+            var back = ProjectStore.Load(dir);
+            var fake = Path.Combine(dir, "fake.pack");
+            File.WriteAllBytes(fake, [1, 2, 3]);
+            for (var i = 0; i < 3; i++) ProjectStore.BackupPack(dir, fake, keep: 2);
+            var hist = ProjectStore.HistoryOf(dir, fake);
+            var ok = back.ProjectKey == "StudioTest" && hist.Count == 2;
+            return $"临时工程：key 回读「{back.ProjectKey}」，历史版本 keep=2 → 实剩 {hist.Count} 份 " + (ok ? "✓" : "✗");
+        }
+        catch (Exception ex) { return "(工程自检失败：" + ex.Message + ")"; }
+        finally { try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { } }
+    }
 
     /// <summary>诊断 ───────────────────────────────────────────</summary>
     private async Task RunDiagnosticsAsync()

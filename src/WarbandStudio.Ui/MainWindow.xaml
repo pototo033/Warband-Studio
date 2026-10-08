@@ -66,15 +66,22 @@
         <!-- 菜单 -->
         <Menu Grid.Row="0" Background="{DynamicResource Bg.Header}"
               Foreground="{DynamicResource Text.Primary}">
-            <MenuItem Header="Pack 文件(_P)">
-                <MenuItem Header="打开 Pack（加载为战帮）…" InputGestureText="Ctrl+O"
-                          Command="{Binding OpenPackCommand}" />
+            <MenuItem Header="工程(_P)">
+                <MenuItem Header="从 Pack 打开工程…（选 pack 所在文件夹）" Click="OnOpenProjectFromPack" />
+                <MenuItem Header="新建工程…" Click="OnNewProject" />
+                <MenuItem Header="打开工程…（选已有工程目录）" Click="OnOpenProject" />
+                <MenuItem Header="关闭工程" Command="{Binding CloseProjectCommand}" />
+                <Separator />
+                <MenuItem Header="导入 WUU 模板到工程" Click="OnImportWuuTemplate"
+                          ToolTip="把内置的 WUU 参考包放进当前工程（空工程起步用）" />
+                <MenuItem Header="导入 Pack 到工程…" Click="OnImportPackToProject" />
+                <Separator />
                 <MenuItem Header="加载兵种 mod（参考包：图标/中文名/兵种库）…"
                           Command="{Binding OpenUnitPackCommand}" />
-                <MenuItem Header="关闭 Pack（当前这个）" Command="{Binding ClosePackCommand}" />
                 <Separator />
                 <MenuItem Header="保存 Pack" InputGestureText="Ctrl+S" Command="{Binding SavePackCommand}" />
                 <MenuItem Header="另存为…" Command="{Binding SavePackAsCommand}" />
+                <MenuItem Header="关闭当前 Pack" Command="{Binding ClosePackCommand}" />
                 <Separator />
                 <MenuItem Header="退出" Click="OnExit" />
             </MenuItem>
@@ -88,8 +95,10 @@
                 BorderBrush="{DynamicResource Border.Line}" BorderThickness="0,1,0,1"
                 Padding="6,4">
             <StackPanel Orientation="Horizontal">
-                <Button Content="打开战帮" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenPackCommand}"
-                        ToolTip="打开一个战帮 .pack：进左侧文件树、占画布、可编辑" />
+                <Button Content="从 Pack 打开工程" Padding="10,3" Margin="0,0,6,0" Click="OnOpenProjectFromPack"
+                        ToolTip="选一个放着 .pack 的文件夹：自动登记成工程（project.json + old/ 历史版本）并打开；已经是工程就直接打开" />
+                <Button Content="新建工程" Padding="10,3" Margin="0,0,6,0" Click="OnNewProject"
+                        ToolTip="选一个空文件夹建工程骨架（不自动放包；之后可「导入 WUU 模板」或「导入 Pack」）" />
                 <Button Content="加载兵种mod" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenUnitPackCommand}"
                         ToolTip="加载一个兵种 mod 当参考包：图标/中文名/右上「mod 兵种」页读它；不进战帮树、不占画布" />
                 <Button Content="保存" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" />
@@ -150,6 +159,10 @@
                                 </ContextMenu.Resources>
                                 <MenuItem Header="在新画布中打开该包" Click="OnOpenCanvasForNode" />
                                 <MenuItem x:Name="MenuClosePack" Header="关闭这个 pack（只关它，别的包留着）" Click="OnTreeClosePack" />
+                                <Separator />
+                                <MenuItem x:Name="MenuProjectImportWuu" Header="导入 WUU 模板到工程" Click="OnImportWuuTemplate" />
+                                <MenuItem x:Name="MenuProjectImportPack" Header="导入 Pack 到工程…" Click="OnImportPackToProject" />
+                                <MenuItem x:Name="MenuProjectFolder" Header="打开工程文件夹" Click="OnTreeOpenProjectFolder" />
                                 <Separator />
                                 <MenuItem Header="打开所在文件夹" Click="OnTreeOpenFolder" />
                                 <MenuItem Header="重命名…（这个文件）" Click="OnTreeRenameFile" />
@@ -235,10 +248,10 @@
                                 <Button Content="选择文件夹…" Padding="10,3" Margin="0,0,6,0" Click="OnChooseBackupDir" />
                                 <Button Content="打开备份文件夹" Padding="10,3" Click="OnOpenBackupDir" />
                             </StackPanel>
-                            <TextBlock Text="新组名前缀（新建 / 合并 / 拆出的单位组按「前缀_页签_兵种」命名；留空 = 旧的时间戳名）"
+                            <TextBlock Text="项目 key（存进当前工程 project.json；新建 / 合并 / 拆出的单位组按「项目key_页签_兵种」命名；留空 = 旧的时间戳名）"
                                        FontSize="12" TextWrapping="Wrap"
                                        Foreground="{DynamicResource Text.Secondary}" />
-                            <TextBox Text="{Binding GroupKeyPrefix, UpdateSourceTrigger=PropertyChanged}"
+                            <TextBox Text="{Binding ProjectKey, UpdateSourceTrigger=PropertyChanged}"
                                      Margin="0,4,0,6" Padding="4,3"
                                      Background="{DynamicResource Bg.Window}"
                                      Foreground="{DynamicResource Text.Primary}"
@@ -394,6 +407,39 @@
                     </DataTemplate>
                 </TabControl.Resources>
             </TabControl>
+                <!-- **v1.5.0 空状态欢迎面板**：还没开工程/包时显示（启动就是这一屏） -->
+                <Border x:Name="WelcomeHost" Margin="0,28,0,0"
+                        Visibility="{Binding IsWelcomeVisible, Converter={StaticResource BoolToVisibility}}"
+                        Background="{DynamicResource Bg.Window}">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="620" Margin="24">
+                        <TextBlock Text="WarbandStudio 战帮树工坊" FontSize="23" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource Text.Primary}" />
+                        <TextBlock Text="还没有打开工程 —— 选一个开始（工程目录里放你改的 pack、项目 key 和历史版本，多个工程互不影响）："
+                                   FontSize="13" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center"
+                                   Foreground="{DynamicResource Text.Secondary}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Button Content="从 Pack 打开工程…" Padding="14,6" Margin="0,0,8,0" Click="OnOpenProjectFromPack"
+                                    ToolTip="选一个放着 .pack 的文件夹：自动登记成工程（project.json + old/ 历史版本）并打开；已经是工程就直接打开" />
+                            <Button Content="新建工程…" Padding="14,6" Margin="0,0,8,0" Click="OnNewProject"
+                                    ToolTip="选一个空文件夹建工程骨架（不自动放包；之后可「导入 WUU 模板」或「导入 Pack」）" />
+                            <Button Content="打开工程…" Padding="14,6" Click="OnOpenProject"
+                                    ToolTip="选一个已有工程目录（里面有 project.json）" />
+                        </StackPanel>
+                        <TextBlock Text="最近工程（点击直接打开）" FontSize="12" Margin="0,24,0,6"
+                                   HorizontalAlignment="Left" Foreground="{DynamicResource Text.Secondary}" />
+                        <ItemsControl ItemsSource="{Binding RecentProjects}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Margin="0,0,0,4" Padding="8,4" HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Left" Click="OnRecentProjectClick"
+                                            ToolTip="{Binding}">
+                                        <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
                 <!-- 战帮画布：WebView2 覆盖在中间栏（留出页签条高度），只在画布页签选中时显示 -->
                 <views:WarbandCanvas x:Name="CanvasHost" Margin="0,28,0,0"
                                      Visibility="{Binding IsCanvasActive, Converter={StaticResource BoolToVisibility}}" />

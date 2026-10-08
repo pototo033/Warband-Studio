@@ -1779,8 +1779,8 @@ function openNewPop(mode) {
   document.getElementById('npTitle').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '换图（' + (npArtCat || '') + '）');
   document.getElementById('npOk').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '应用换图');
   if (mode === 'group')
-    document.getElementById('npGroupKey').value = DATA.groupPrefix
-      ? DATA.groupPrefix + (activePage ? '_' + activePage : '')      // 新命名：<前缀>_<页签>（空组没有兵种段）
+    document.getElementById('npGroupKey').value = DATA.projectKey
+      ? DATA.projectKey + (activePage ? '_' + activePage : '')      // 新命名：<项目 key>_<页签>（空组没有兵种段）
       : 'studio_group_' + Date.now().toString().slice(-6);
   showPop('newPop');
   hidePop('cardPop'); hidePop('routePop');
