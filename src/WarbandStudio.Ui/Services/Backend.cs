@@ -2417,7 +2417,8 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>备份文件夹（设置里没写就用默认 %APPDATA%\WarbandStudioackups）。</summary>
     /// <summary>
     /// 从工程的 `old/` 历史版本**还原**一个包：先把当前包也备份一份（还原不是丢东西的借口），
-    /// 再把所选备份拷回原位、清掉内存编辑、重新打开。调用方负责先问"有未导出编辑怎么办"。
+    /// 再把所选备份拷回原位、清掉内存编辑。**重开包由调用方走正常打开链路**（画布/树/清单要一起刷）。
+    /// 调用方负责先问"有未导出编辑怎么办"。
     /// </summary>
     public async Task<string> RestoreFromBackupAsync(string packPath, string backupFile)
     {
@@ -2427,7 +2428,6 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         var keepBak = proj is not null ? ProjectStore.BackupPack(proj, packPath, settings.HistoryKeep) : null;
         File.Copy(backupFile, packPath, overwrite: true);
         DiscardEditsOf(packPath);
-        await OpenPackAsync(packPath);
         Log?.Invoke($"还原：{Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}" +
                     $"（还原前的包也备份了一份：{(keepBak is null ? "—" : Path.GetFileName(keepBak))}）");
         return $"已还原 {Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}（还原前的那份也进了历史版本）";

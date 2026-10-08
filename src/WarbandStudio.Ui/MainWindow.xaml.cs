@@ -109,6 +109,34 @@ public partial class MainWindow : Window
 
     private void OnExit(object sender, RoutedEventArgs e) => Close();
 
+    private bool _forceClosing;   // "保存后关闭"流程里，保存完再真的关（别让 OnClosing 再拦一次）
+
+    /// <summary>关窗口前：有未导出编辑就提醒（是=保存后关 / 否=放弃编辑关 / 取消=不关）。防丢失的最后一道。</summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (_forceClosing) { base.OnClosing(e); return; }
+        var (packs, edits) = _vm.UnsavedEdits();
+        if (packs == 0) { base.OnClosing(e); return; }
+        var r = MessageBox.Show(this,
+            $"有 {edits} 处未导出的编辑（{packs} 个包）。\n\n是：保存后关闭\n否：放弃这些编辑并关闭\n取消：不关，回去处理",
+            "未导出的编辑", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
+        if (r == MessageBoxResult.Cancel) { e.Cancel = true; return; }
+        if (r == MessageBoxResult.Yes)
+        {
+            e.Cancel = true;                       // 先拦住，等异步保存完再真关
+            _ = SaveAllThenCloseAsync();
+        }
+        // No → 直接关（编辑丢弃）
+    }
+
+    private async Task SaveAllThenCloseAsync()
+    {
+        var ok = await _vm.SaveAllEditsAsync();
+        if (!ok) return;                           // 保存失败：不关（状态栏/日志给原因）
+        _forceClosing = true;
+        Close();
+    }
+
     /// <summary>页签上的 × → 关页签（画布页签会先问未导出的编辑）。</summary>
     private async void OnCloseTab(object sender, RoutedEventArgs e)
     {
@@ -134,6 +162,14 @@ public partial class MainWindow : Window
         if (MenuProjectImportWuu is not null) MenuProjectImportWuu.IsEnabled = isProjectRoot;
         if (MenuProjectImportPack is not null) MenuProjectImportPack.IsEnabled = isProjectRoot;
         if (MenuProjectFolder is not null) MenuProjectFolder.IsEnabled = isProjectRoot;
+        if (MenuHistoryVersion is not null) MenuHistoryVersion.IsEnabled = isPackRoot;   // 历史版本 = 对某个包
+    }
+
+    /// <summary>「历史版本…」：列出当前包在工程 old/ 里的备份，可还原（没工程/没包时对话框里会给提示）。</summary>
+    private void OnShowHistory(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.PackOpen) { _vm.SetStatus("先打开一个包（历史版本跟随工程）"); return; }
+        new Views.HistoryDialog(_vm) { Owner = this }.ShowDialog();
     }
 
     // ── 工程入口（v1.5.0：选文件夹 → 新建成/打开工程）──────────────────

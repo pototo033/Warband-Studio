@@ -71,6 +71,8 @@
                 <MenuItem Header="新建工程…" Click="OnNewProject" />
                 <MenuItem Header="打开工程…（选已有工程目录）" Click="OnOpenProject" />
                 <MenuItem Header="关闭工程" Command="{Binding CloseProjectCommand}" />
+                <MenuItem Header="历史版本…（当前包）" Click="OnShowHistory"
+                          ToolTip="列出当前包在工程 old/ 里的备份（每次保存前的自动备份），可一键还原" />
                 <Separator />
                 <MenuItem Header="导入 WUU 模板到工程" Click="OnImportWuuTemplate"
                           ToolTip="把内置的 WUU 参考包放进当前工程（空工程起步用）" />
@@ -161,6 +163,7 @@
                                 </ContextMenu.Resources>
                                 <MenuItem Header="在新画布中打开该包" Click="OnOpenCanvasForNode" />
                                 <MenuItem x:Name="MenuClosePack" Header="关闭这个 pack（只关它，别的包留着）" Click="OnTreeClosePack" />
+                                <MenuItem x:Name="MenuHistoryVersion" Header="历史版本…（这个包）" Click="OnShowHistory" />
                                 <Separator />
                                 <MenuItem x:Name="MenuProjectImportWuu" Header="导入 WUU 模板到工程" Click="OnImportWuuTemplate" />
                                 <MenuItem x:Name="MenuProjectImportPack" Header="导入 Pack 到工程…" Click="OnImportPackToProject" />

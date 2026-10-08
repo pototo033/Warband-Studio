@@ -8,6 +8,9 @@ using WarbandStudio.Ui.Services;
 
 namespace WarbandStudio.Ui.ViewModels;
 
+/// <summary>历史版本对话框的一行（WPF 绑定要**属性**，不能用 ValueTuple——它的具名元素是字段）。</summary>
+public sealed record HistoryRow(string File, string When, string Size, string Full);
+
 /// <summary>
 /// 主视图模型：后端生命周期、首跑向导、打开/保存 pack、文件树、诊断、日志。
 /// </summary>
@@ -1692,6 +1695,72 @@ public sealed class MainViewModel : ObservableObject
         RebuildTree();
         FileLog.Write("工程：已关闭");
         Status = "工程已关闭";
+    }
+
+    /// <summary>当前包的历史版本列表（工程 old/ 里的备份，新到旧）。没工程/没包时为空。</summary>
+    public List<HistoryRow> HistoryOfCurrentPack()
+    {
+        var list = new List<HistoryRow>();
+        var pack = _backend.Pack?.PackPath;
+        if (pack is null || _project is null || _projectDir.Length == 0) return list;
+        foreach (var f in ProjectStore.HistoryOf(_projectDir, pack))
+            list.Add(new HistoryRow(f.Name, f.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                                    $"{f.Length / 1024.0 / 1024.0:N1} MB", f.FullName));
+        return list;
+    }
+
+    /// <summary>当前包所在工程的历史版本目录（对话框的「打开文件夹」用；没工程返回空）。</summary>
+    public string HistoryDirOfCurrentPack()
+    {
+        var pack = _backend.Pack?.PackPath;
+        if (pack is null || _project is null || _projectDir.Length == 0) return "";
+        return ProjectStore.HistoryDirOf(_projectDir);
+    }
+
+    /// <summary>还原到某个历史版本：有未导出编辑先问；Backend 负责"先把当前包也备份一份再拷回"，
+    /// 然后走正常打开链路把包重开（画布/树/清单一起刷新）。</summary>
+    public async Task<bool> RestoreHistoryAsync(string backupFile)
+    {
+        var pack = _backend.Pack?.PackPath;
+        if (pack is null) { Status = "先打开一个包"; return false; }
+        if (!ConfirmDropEditsForProjectSwitch()) return false;
+        try
+        {
+            var msg = await _backend.RestoreFromBackupAsync(pack, backupFile);
+            await OpenPackPathAsync(pack, open: true, asUnitPack: false);   // 重开 + 画布/树/清单全刷
+            Status = msg;
+            return true;
+        }
+        catch (Exception ex) { Status = "还原失败：" + ex.Message; FileLog.Write("还原失败", ex); return false; }
+    }
+
+    /// <summary>有未导出编辑的包数 / 编辑总处数（关窗口提醒用）。</summary>
+    public (int Packs, int Edits) UnsavedEdits()
+    {
+        var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
+        return (dirty.Count, dirty.Sum(s => _backend.EditCountOf(s.PackPath)));
+    }
+
+    /// <summary>把所有有编辑的包都写回原包（关窗口"保存后退出"用）。返回是否全部成功。</summary>
+    public async Task<bool> SaveAllEditsAsync()
+    {
+        var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
+        foreach (var s in dirty)
+        {
+            try
+            {
+                _backend.SwitchTo(s);
+                await _backend.SaveInPlaceAsync();
+            }
+            catch (Exception ex)
+            {
+                Status = "保存失败：" + ex.Message;
+                FileLog.Write("关窗口保存失败", ex);
+                return false;
+            }
+        }
+        RebuildTree();
+        return true;
     }
 
     /// <summary>把外部 pack 拷进当前工程并打开（"往工程里加一个包"的正路）。</summary>

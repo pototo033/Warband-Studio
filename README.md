@@ -82,8 +82,14 @@ dotnet run --project tools/WarbandStudio.Probe -- roundtrip <pack> <表路径> <
 - 启动后只在「全局选项」里选一次**游戏目录**（用来做诊断 / 生成依赖缓存；纯编辑和导出不需要它）；
 - 依赖缓存（`%APPDATA%\WarbandStudio\cache\dependencies_wh3.pak2`）只在跑「诊断」时才要生成一次。
 
-已实测（发布版 v0.4，干净环境）：启动 → 引擎就绪 → 自动重开上次的 pack → 文件树 256 个文件 →
-界面 274 个可见节点，`pack list` 耗时 0.7 秒。
+**怎么开始改（v1.5.0 起 = 工程化）**：启动是**空状态**（不再自动打开参考包）——
+
+1. 「**从 Pack 打开工程…**」选你的 `.pack` →（弹表单页）填**工程目录 / 生成 Pack 目录 / 项目 key**
+   —— 源包会被**复制**进工程再编辑（源文件不动）；也可以「新建工程…」建空骨架后「导入 WUU 模板」/「导入 Pack」；
+2. 左下「全局选项」里填**项目 key**（新建单位组的命名前缀：`项目key_页签_兵种`）；
+3. 每次「保存」前，原包自动备份进 `<工程目录>\old\`（保留最近 20 份）；菜单「工程 → 历史版本…」一键还原。
+
+工具栏「打开上次工程」可一键续接；**多个战帮各用各的工程目录，互不影响**。
 
 ## 原生格式层（`WarbandStudio.Packfile`）—— 学 CRPFM 的路线
 
@@ -169,7 +175,7 @@ main_units.unit  →  main_units.land_unit  →  unit_variants_tables[unit = lan
 卡图命中 966（包内 0，游戏 966，随附 0，缺 0）
 ```
 
-**排查入口**：每次启动画布都会把"游戏里没找到的卡（含试过的所有候选名）"打进日志（`%APPDATA%\WarbandStudiopp.log`），以后遇到查不到的卡直接看日志，不必改代码。
+**排查入口**：每次启动画布都会把"游戏里没找到的卡（含试过的所有候选名）"打进日志（`%APPDATA%\WarbandStudio\app.log`），以后遇到查不到的卡直接看日志，不必改代码。
 
 ### 参考：CRPFM（ChaDeRPFM）的做法
 
@@ -177,11 +183,14 @@ main_units.unit  →  main_units.land_unit  →  unit_variants_tables[unit = lan
 
 ## 版本号约定
 
-`release/WarbandStudio_v<号>/`，**v1.0 留给正式版**，在那之前一律 v0.1x（0.13 → 0.14 → …）。
-`build.ps1` 用 `[version]` 解析（不是 double，"0.10" 会被 double 当成 0.1），只保留最近 5 个版本。
+`release/WarbandStudio_v<号>/`；**发布号 = 当前版本号**（`tools/publish_github.ps1 -Version <号>` 直接发，
+不再"推送自动改名"）。`build.ps1` 用 `[version]` 解析（不是 double，"0.10" 会被 double 当成 0.1），
+只保留最近 5 个版本（v1.0 留档）；每次发布同步更新根目录 `CHANGELOG.md`。
 
 ## 阶段路线
 
+- **已完成（v1.4.x ~ v1.5.x）**：页签图名体系（twui 实际引用解析、"正名优先"让位、换图顺带图名归正）、
+  成本工坊 v2、新组命名 `项目key_页签_兵种`、**工程化**（工程目录 + `old/` 历史版本 + 项目 key + 启动空状态 + 从 Pack 复制进工程）
 - **已完成（v1.2）**：
   - 三栏壳 + 多 pack 共存（每个 pack 一棵树根，点开的各自展开；原版那棵叫「原版战帮升级」）
   - 文件树只显示**战帮相关**文件（15 张表白名单 + `ui/**warband_upgrades` + `campaign ui/`），兵牌相关表归右下的兵种库
