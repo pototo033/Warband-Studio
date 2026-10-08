@@ -1548,20 +1548,59 @@ public sealed class MainViewModel : ObservableObject
             $"有 {n} 处未导出的编辑（{dirty.Count} 个包）。\n\n继续会把这些编辑丢掉；\n想保留就先点「取消」，回工具里点「保存」再操作。\n\n继续吗？") ?? true;
     }
 
-    /// <summary>新建工程（选一个文件夹）：写 project.json + old/；**不自动导入任何包**。</summary>
-    public Task<bool> NewProjectAsync(string dir) => OpenProjectAtAsync(dir, create: true);
-
-    /// <summary>打开一个已有工程（打开它的 lastPack；里面没包就登记着，等导入）。</summary>
-    public Task<bool> OpenProjectAsync(string dir) => OpenProjectAtAsync(dir, create: false);
-
-    private async Task<bool> OpenProjectAtAsync(string dir, bool create)
+    /// <summary>新建工程（"新建工程"对话框的结果）：工程目录 + 生成 Pack 目录 + 项目 key；
+    /// 建好骨架（project.json + old/ + Pack 目录），**不自动导入任何包**。</summary>
+    public async Task<bool> NewProjectAsync(string dir, string? packDir = null, string? projectKey = null)
     {
         try
         {
             dir = Path.GetFullPath(dir);
-            if (!create && !ProjectStore.IsProject(dir))
+            if (!ConfirmDropEditsForProjectSwitch()) return false;
+            var info = ProjectStore.Ensure(dir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
+            if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
+            if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
+            ProjectStore.Save(dir, info);
+            _projectDir = dir;
+            Project = info;
+            _backend.ProjectKey = info.ProjectKey;
+            ProjectStore.TouchRecent(_settings.RecentProjects, dir);
+            _settings.Save();
+            PruneRecentProjects();
+            var packs = ProjectStore.PacksIn(dir);
+            if (packs.Count > 0) await OpenPackPathAsync(packs[0], open: true, asUnitPack: false);
+            Status = packs.Count > 0
+                ? $"工程「{info.Name}」已打开：{Path.GetFileName(packs[0])}"
+                : $"工程「{info.Name}」已建好（Pack 目录 {info.PackDir}）—— 用「导入 WUU 模板」或「导入 Pack」放一个包进来";
+            FileLog.Write($"工程：新建 {dir}（Pack 目录 {ProjectStore.PackDirOf(dir, info)}，项目 key「{info.ProjectKey}」）");
+            return true;
+        }
+        catch (Exception ex) { Status = "新建工程失败：" + ex.Message; FileLog.Write("新建工程失败", ex); return false; }
+    }
+
+    /// <summary>打开一个已有工程（打开它的 lastPack；里面没包就登记着，等导入）。</summary>
+    public Task<bool> OpenProjectAsync(string dir) => OpenProjectAtAsync(dir);
+
+    /// <summary>「打开上次工程」：直接开最近工程列表里的第一个（没有就提示从哪开始）。</summary>
+    public async Task<bool> OpenLastProjectAsync()
+    {
+        PruneRecentProjects();
+        var last = RecentProjects.FirstOrDefault();
+        if (last is null)
+        {
+            Status = "还没有最近工程 —— 用「新建工程」，或在菜单「工程」里选「从 Pack 打开工程」";
+            return false;
+        }
+        return await OpenRecentProjectAsync(last);
+    }
+
+    private async Task<bool> OpenProjectAtAsync(string dir)
+    {
+        try
+        {
+            dir = Path.GetFullPath(dir);
+            if (!ProjectStore.IsProject(dir))
             {
-                Status = "这个文件夹还不是工程（没有 project.json）——要在已有 pack 的文件夹上建工程，用「从 Pack 打开工程」";
+                Status = "这个文件夹还不是工程（没有 project.json）——用「新建工程」，或菜单「从 Pack 打开工程」";
                 return false;
             }
             if (!ConfirmDropEditsForProjectSwitch()) return false;
@@ -1583,57 +1622,46 @@ public sealed class MainViewModel : ObservableObject
                 _ => $"工程「{info.Name}」已打开：{Path.GetFileName(open!)}" +
                      (packs.Count > 1 ? $"（工程里还有 {packs.Count - 1} 个包）" : ""),
             };
-            FileLog.Write($"工程：{(create ? "新建" : "打开")} {dir}（项目 key「{info.ProjectKey}」，包 {packs.Count} 个）");
+            FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，包 {packs.Count} 个）");
             return true;
         }
         catch (Exception ex) { Status = "打开工程失败：" + ex.Message; FileLog.Write("打开工程失败", ex); return false; }
     }
 
-    /// <summary>「从 Pack 打开工程」：选一个**包所在的文件夹** —— 已经是工程就打开它；不是就把它登记成工程
-    /// （建 project.json + old/）并打开其中的包。散落各处的旧包一键转成工程格式。
-    /// <paramref name="pathOrDir"/> 可以是**一个 .pack 文件**（用户直接选包；优先打开它，文件夹成为工程目录）
-    /// 或一个**目录**（该目录里的包）—— 直接选包是用户最常见的心智，两个都收。
-    public async Task<bool> OpenProjectFromPackAsync(string pathOrDir)
+    /// <summary>「从 Pack 打开工程」：把**源 pack 复制**到工程的"生成 Pack 目录"再编辑（**源文件不动**），
+    /// 然后建工程并打开复制件。工程目录 / Pack 目录 / 项目 key 来自"新建工程"对话框。</summary>
+    public async Task<bool> OpenProjectFromPackAsync(string sourcePack, string projectDir,
+                                                     string? packDir = null, string? projectKey = null)
     {
         try
         {
-            var full = Path.GetFullPath(pathOrDir);
-            string dir;
-            string? preferred = null;
-            if (Directory.Exists(full)) dir = full;
-            else if (File.Exists(full) && full.EndsWith(".pack", StringComparison.OrdinalIgnoreCase))
-            {
-                dir = Path.GetDirectoryName(full)!;
-                preferred = full;
-            }
-            else
-            {
-                Status = "请选一个 .pack 文件（或它所在的文件夹）";
-                return false;
-            }
-            if (ProjectStore.IsProject(dir) && preferred is null) return await OpenProjectAsync(dir);
-            var packs = ProjectStore.PacksIn(dir);
-            if (packs.Count == 0)
-            {
-                Status = "这个文件夹里没有 .pack —— 请选包所在的文件夹（或先「新建工程」再用「导入 Pack」）";
-                return false;
-            }
+            var src = Path.GetFullPath(sourcePack);
+            if (!File.Exists(src)) { Status = "找不到源 pack：" + src; return false; }
+            projectDir = Path.GetFullPath(projectDir);
             if (!ConfirmDropEditsForProjectSwitch()) return false;
-            var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
-            var open = preferred is not null ? preferred : packs[0];   // 用户选的那个包 → 优先打开它
-            info.LastPack = open;
-            ProjectStore.Save(dir, info);
-            _projectDir = dir;
+            var info = ProjectStore.Ensure(projectDir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
+            if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
+            if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
+            var targetDir = ProjectStore.PackDirOf(projectDir, info);
+            Directory.CreateDirectory(targetDir);
+            var dest = Path.Combine(targetDir, Path.GetFileName(src));
+            if (!Path.GetFullPath(dest).Equals(src, StringComparison.OrdinalIgnoreCase))
+            {
+                if (File.Exists(dest))
+                    FileLog.Write($"工程：目标已有 {Path.GetFileName(dest)} → 直接打开现有那份（**不覆盖**；源文件也不动）");
+                else File.Copy(src, dest);
+            }
+            info.LastPack = dest;
+            ProjectStore.Save(projectDir, info);
+            _projectDir = projectDir;
             Project = info;
             _backend.ProjectKey = info.ProjectKey;
-            ProjectStore.TouchRecent(_settings.RecentProjects, dir);
+            ProjectStore.TouchRecent(_settings.RecentProjects, projectDir);
             _settings.Save();
             PruneRecentProjects();
-            await OpenPackPathAsync(open, open: true, asUnitPack: false);
-            Status = packs.Count == 1
-                ? $"已把「{Path.GetFileName(dir)}」登记为工程并打开 {Path.GetFileName(open)}"
-                : $"已把「{Path.GetFileName(dir)}」登记为工程 —— 里面有 {packs.Count} 个包，先打开 {Path.GetFileName(open)}（其余可在左侧或菜单里打开）";
-            FileLog.Write($"工程：从 Pack 建立 {dir}（主包 {Path.GetFileName(open)}，共 {packs.Count} 个包）");
+            await OpenPackPathAsync(dest, open: true, asUnitPack: false);
+            Status = $"已复制进工程并打开：{Path.GetFileName(dest)}（源文件不动，编辑都在工程里）";
+            FileLog.Write($"工程：从 Pack 建立 {projectDir}（复制 {src} → {dest}，项目 key「{info.ProjectKey}」）");
             return true;
         }
         catch (Exception ex) { Status = "从 Pack 打开工程失败：" + ex.Message; FileLog.Write("从 Pack 打开工程失败", ex); return false; }

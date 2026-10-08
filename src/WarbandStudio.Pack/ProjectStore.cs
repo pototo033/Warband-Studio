@@ -12,6 +12,9 @@ public sealed class ProjectInfo
     /// <summary>**项目 key**：新建单位组的命名前缀（`&lt;key&gt;_&lt;页签&gt;_&lt;兵种词…&gt;`，见 GroupNaming）。</summary>
     public string ProjectKey { get; set; } = "";
 
+    /// <summary>**生成 Pack 所在目录**（工作包放这；相对工程目录，或绝对路径）。默认 `packs`（工程目录的子文件夹）。</summary>
+    public string PackDir { get; set; } = ProjectStore.DefaultPackDir;
+
     /// <summary>上次打开的包（打开工程时自动开它）。</summary>
     public string LastPack { get; set; } = "";
 
@@ -22,8 +25,8 @@ public sealed class ProjectInfo
 /// 工程目录（用户选一个文件夹 = 一个工程；多个战帮/项目各用各的目录，互不影响）：
 /// <code>
 /// &lt;工程目录&gt;/
-/// ├── project.json      # 工程名 / 项目 key / 上次打开的包
-/// ├── *.pack            # 工作包（可以多个）
+/// ├── project.json      # 工程名 / 项目 key / 生成 Pack 目录 / 上次打开的包
+/// ├── packs/            # 工作包（"生成 Pack 所在目录"，默认在工程目录下、可另选）
 /// └── old/              # 历史版本（每次保存前自动备份，保留最近 N 份，可随时还原）
 /// </code>
 /// 编辑集本来就是按包路径分的（Backend），所以多工程切换不会串台；
@@ -33,20 +36,39 @@ public static class ProjectStore
 {
     public const string ProjectFile = "project.json";
     public const string HistoryDir = "old";
+    /// <summary>默认的"生成 Pack 所在目录"（工程目录的子文件夹）。</summary>
+    public const string DefaultPackDir = "packs";
 
     /// <summary>这个目录是不是工程（有 project.json）。</summary>
     public static bool IsProject(string dir) =>
         !string.IsNullOrWhiteSpace(dir) && File.Exists(Path.Combine(dir, ProjectFile));
 
-    /// <summary>把包所在目录当工程目录（该目录里有 project.json 才算）。</summary>
+    /// <summary>把包所在目录当工程目录（兼容两种布局：包在工程根 / 包在"生成 Pack 目录"里）。</summary>
     public static string? ProjectDirOfPack(string packPath)
     {
         try
         {
-            var dir = Path.GetDirectoryName(Path.GetFullPath(packPath));
-            return dir is not null && IsProject(dir) ? dir : null;
+            var full = Path.GetFullPath(packPath);
+            var dir = Path.GetDirectoryName(full);
+            if (dir is null) return null;
+            if (IsProject(dir)) return dir;                         // 旧布局：包就在工程根
+            var parent = Path.GetDirectoryName(dir);                // 新布局：包在「生成 Pack 目录」（默认 工程\packs）
+            if (parent is not null && IsProject(parent)
+                && Path.GetFullPath(PackDirOf(parent)).TrimEnd(Path.DirectorySeparatorChar)
+                       .Equals(Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                return parent;
+            return null;
         }
         catch { return null; }
+    }
+
+    /// <summary>"生成 Pack 所在目录"的绝对路径（相对路径按工程目录拼；空则退回默认 packs/）。</summary>
+    public static string PackDirOf(string projectDir, ProjectInfo? info = null)
+    {
+        info ??= Load(projectDir);
+        var d = (info.PackDir ?? "").Trim();
+        if (d.Length == 0) d = DefaultPackDir;
+        return Path.IsPathRooted(d) ? d : Path.Combine(projectDir, d);
     }
 
     public static ProjectInfo Load(string dir)
@@ -73,34 +95,43 @@ public static class ProjectStore
     }
 
     /// <summary>
-    /// 把目录登记成工程（已有 project.json 就沿用，只补 old/ 目录）。新建时用
-    /// <paramref name="prefillKey"/>（旧版全局"新组名前缀"的迁移种子）预填项目 key。
+    /// 把目录登记成工程（已有 project.json 就沿用，只补目录）。新建时用
+    /// <paramref name="prefillKey"/>（旧版全局"新组名前缀"的迁移种子）预填项目 key，
+    /// <paramref name="packDir"/> 指定"生成 Pack 目录"（空 = 默认 packs/）。
     /// </summary>
-    public static ProjectInfo Ensure(string dir, string? prefillKey = null)
+    public static ProjectInfo Ensure(string dir, string? prefillKey = null, string? packDir = null)
     {
         Directory.CreateDirectory(dir);
         var p = IsProject(dir) ? Load(dir) : new ProjectInfo
         {
             Name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar)),
             ProjectKey = prefillKey ?? "",
+            PackDir = string.IsNullOrWhiteSpace(packDir) ? DefaultPackDir : packDir!.Trim(),
             Created = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
         };
         if (string.IsNullOrWhiteSpace(p.Name)) p.Name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar));
         Directory.CreateDirectory(HistoryDirOf(dir));
+        try { Directory.CreateDirectory(PackDirOf(dir, p)); } catch { /* 目录建不出来不拦（后面打开会报） */ }
         Save(dir, p);
         return p;
     }
 
     public static string HistoryDirOf(string projectDir) => Path.Combine(projectDir, HistoryDir);
 
-    /// <summary>工程目录下的 .pack（按名字排序；old/ 里的不算）。</summary>
+    /// <summary>工程里的工作包（列「生成 Pack 目录」里的 .pack；旧工程"包在工程根"也认）。
+    /// old/ 里的历史版本不算。</summary>
     public static List<string> PacksIn(string projectDir)
     {
         try
         {
-            return Directory.GetFiles(projectDir, "*.pack")
-                            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
-                            .ToList();
+            var dir = PackDirOf(projectDir);
+            var list = Directory.Exists(dir) ? Directory.GetFiles(dir, "*.pack").ToList() : [];
+            if (list.Count == 0
+                && !Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar)
+                        .Equals(Path.GetFullPath(projectDir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
+                && Directory.Exists(projectDir))
+                list.AddRange(Directory.GetFiles(projectDir, "*.pack"));   // 兼容旧布局（包直接放工程根）
+            return list.OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch { return []; }
     }

@@ -67,7 +67,7 @@
         <Menu Grid.Row="0" Background="{DynamicResource Bg.Header}"
               Foreground="{DynamicResource Text.Primary}">
             <MenuItem Header="工程(_P)">
-                <MenuItem Header="从 Pack 打开工程…（直接选你的 .pack）" Click="OnOpenProjectFromPack" />
+                <MenuItem Header="从 Pack 打开工程…（复制进工程编辑，源文件不动）" Click="OnOpenProjectFromPack" />
                 <MenuItem Header="新建工程…" Click="OnNewProject" />
                 <MenuItem Header="打开工程…（选已有工程目录）" Click="OnOpenProject" />
                 <MenuItem Header="关闭工程" Command="{Binding CloseProjectCommand}" />
@@ -95,10 +95,12 @@
                 BorderBrush="{DynamicResource Border.Line}" BorderThickness="0,1,0,1"
                 Padding="6,4">
             <StackPanel Orientation="Horizontal">
-                <Button Content="从 Pack 打开工程" Padding="10,3" Margin="0,0,6,0" Click="OnOpenProjectFromPack"
-                        ToolTip="直接选你的 .pack：它所在的文件夹自动登记成工程（project.json + old/ 历史版本）并打开；已经是工程就直接打开你选的那个包" />
+                <Button Content="打开上次工程" Padding="10,3" Margin="0,0,6,0" Click="OnOpenLastProject"
+                        ToolTip="直接打开最近一次用的工程（没有的话会提示从哪开始）" />
                 <Button Content="新建工程" Padding="10,3" Margin="0,0,6,0" Click="OnNewProject"
-                        ToolTip="选一个空文件夹建工程骨架（不自动放包；之后可「导入 WUU 模板」或「导入 Pack」）" />
+                        ToolTip="弹「新建工程」页：工程文件夹 / 生成 Pack 目录 / 项目 key" />
+                <Button Content="打开工程" Padding="10,3" Margin="0,0,6,0" Click="OnOpenProject"
+                        ToolTip="选一个已有工程目录（里面有 project.json）" />
                 <Button Content="加载兵种mod" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenUnitPackCommand}"
                         ToolTip="加载一个兵种 mod 当参考包：图标/中文名/右上「mod 兵种」页读它；不进战帮树、不占画布" />
                 <Button Content="保存" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" />
@@ -236,18 +238,9 @@
                                 <TextBlock Text="{Binding AppVersion}" VerticalAlignment="Center" Margin="4,0,0,0"
                                            Foreground="{DynamicResource Text.Secondary}" />
                             </StackPanel>
-                            <TextBlock Text="备份文件夹（保存写回原包时，原文件备份到这里；每次带时间戳，不覆盖旧的）"
+                            <TextBlock Text="历史版本：每次保存前自动备份进工程的 old/ 子文件夹（保留最近 20 份、可随时还原）；没打开工程时备份到 AppData 的默认备份目录"
                                        FontSize="12" TextWrapping="Wrap"
                                        Foreground="{DynamicResource Text.Secondary}" />
-                            <TextBox Text="{Binding BackupDir, UpdateSourceTrigger=PropertyChanged}"
-                                     Margin="0,4,0,6" Padding="4,3"
-                                     Background="{DynamicResource Bg.Window}"
-                                     Foreground="{DynamicResource Text.Primary}"
-                                     BorderBrush="{DynamicResource Border.Line}" />
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="选择文件夹…" Padding="10,3" Margin="0,0,6,0" Click="OnChooseBackupDir" />
-                                <Button Content="打开备份文件夹" Padding="10,3" Click="OnOpenBackupDir" />
-                            </StackPanel>
                             <TextBlock Text="项目 key（存进当前工程 project.json；新建 / 合并 / 拆出的单位组按「项目key_页签_兵种」命名；留空 = 旧的时间戳名）"
                                        FontSize="12" TextWrapping="Wrap"
                                        Foreground="{DynamicResource Text.Secondary}" />
@@ -419,7 +412,7 @@
                                    Foreground="{DynamicResource Text.Secondary}" />
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                             <Button Content="从 Pack 打开工程…" Padding="14,6" Margin="0,0,8,0" Click="OnOpenProjectFromPack"
-                                    ToolTip="直接选你的 .pack：它所在的文件夹自动登记成工程（project.json + old/ 历史版本）并打开；已经是工程就直接打开你选的那个包" />
+                                    ToolTip="直接选你的 .pack：工具把它复制进新工程的「生成 Pack 目录」再编辑（源文件不动）" />
                             <Button Content="新建工程…" Padding="14,6" Margin="0,0,8,0" Click="OnNewProject"
                                     ToolTip="选一个空文件夹建工程骨架（不自动放包；之后可「导入 WUU 模板」或「导入 Pack」）" />
                             <Button Content="打开工程…" Padding="14,6" Click="OnOpenProject"

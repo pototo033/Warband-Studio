@@ -1,0 +1,59 @@
+<Window x:Class="WarbandStudio.Ui.Views.NewProjectDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="新建工程" SizeToContent="Height" Width="680"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{DynamicResource Bg.Window}"
+        Foreground="{DynamicResource Text.Primary}"
+        FontFamily="{DynamicResource AppFont}">
+    <StackPanel Margin="18">
+        <TextBlock FontSize="16" FontWeight="SemiBold" Text="新建工程" />
+        <TextBlock x:Name="TxtIntro" Style="{StaticResource PlaceholderText}" Margin="0,8,0,0" TextWrapping="Wrap"
+                   Text="工程目录里放你的工作包、项目设置和历史版本（old/），多个工程互不影响。&#x0a;「生成 Pack 所在目录」默认为工程目录的子文件夹，包都放那里。" />
+
+        <TextBlock Margin="0,14,0,4" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                   Text="文件工程目录" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtProjectDir" Grid.Column="0" Padding="4,3" Height="28"
+                     Background="{DynamicResource Bg.Panel}"
+                     Foreground="{DynamicResource Text.Primary}"
+                     BorderBrush="{DynamicResource Border.Line}"
+                     TextChanged="OnProjectDirChanged" />
+            <Button Grid.Column="1" Content="浏览…" Padding="12,4" Margin="8,0,0,0" Click="OnBrowseProject" />
+        </Grid>
+
+        <TextBlock Margin="0,10,0,4" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                   Text="生成 Pack 所在目录（默认 = 工程目录里的 packs 子文件夹）" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtPackDir" Grid.Column="0" Padding="4,3" Height="28"
+                     Background="{DynamicResource Bg.Panel}"
+                     Foreground="{DynamicResource Text.Primary}"
+                     BorderBrush="{DynamicResource Border.Line}"
+                     TextChanged="OnPackDirChanged" />
+            <Button Grid.Column="1" Content="浏览…" Padding="12,4" Margin="8,0,0,0" Click="OnBrowsePack" />
+        </Grid>
+
+        <TextBlock Margin="0,10,0,4" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                   Text="项目 key（新建单位组的命名前缀：项目key_页签_兵种；默认 studio）" />
+        <TextBox x:Name="TxtKey" Padding="4,3" Height="28" Text="studio"
+                 Background="{DynamicResource Bg.Panel}"
+                 Foreground="{DynamicResource Text.Primary}"
+                 BorderBrush="{DynamicResource Border.Line}" />
+
+        <TextBlock x:Name="TxtNote" Margin="0,10,0,0" FontSize="11" TextWrapping="Wrap"
+                   Foreground="{DynamicResource Text.Secondary}" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="取消" Padding="12,4" Margin="0,0,8,0" IsCancel="True" Click="OnCancel" />
+            <Button Content="确定" Padding="12,4" IsDefault="True" Click="OnOk" />
+        </StackPanel>
+    </StackPanel>
+</Window>

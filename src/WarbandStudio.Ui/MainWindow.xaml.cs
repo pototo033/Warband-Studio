@@ -145,23 +145,30 @@ public partial class MainWindow : Window
         return dlg.ShowDialog(this) == true ? dlg.FolderName : null;
     }
 
-    /// <summary>「从 Pack 打开工程」：**直接选你的 .pack** —— 它所在的文件夹自动成为工程目录
-    /// （建 project.json + old/ 历史版本），并优先打开你选的那个包。</summary>
+    /// <summary>「打开上次工程」：直接开最近工程列表里的第一个。</summary>
+    private async void OnOpenLastProject(object sender, RoutedEventArgs e) => await _vm.OpenLastProjectAsync();
+
+    /// <summary>「从 Pack 打开工程」：先选源 .pack → 弹「新建工程」页（工程文件夹/Pack 目录/项目 key）→
+    /// 把源包**复制**进工程再编辑（源文件不动）。</summary>
     private async void OnOpenProjectFromPack(object sender, RoutedEventArgs e)
     {
-        var dlg = new Microsoft.Win32.OpenFileDialog
+        var pick = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "选择你的 .pack（它所在的文件夹会成为工程目录）",
+            Title = "第一步：选你的源 .pack（会复制进工程，源文件不动）",
             Filter = "Pack 文件 (*.pack)|*.pack|所有文件 (*.*)|*.*",
         };
-        if (dlg.ShowDialog(this) == true) await _vm.OpenProjectFromPackAsync(dlg.FileName);
+        if (pick.ShowDialog(this) != true) return;
+        var dlg = new Views.NewProjectDialog("从 Pack 打开工程", pick.FileName) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        await _vm.OpenProjectFromPackAsync(pick.FileName, dlg.ProjectDir, dlg.PackDir, dlg.ProjectKey);
     }
 
-    /// <summary>「新建工程」：选一个文件夹 → 建工程骨架（不自动放包）。</summary>
+    /// <summary>「新建工程」：弹「新建工程」页（工程文件夹 / 生成 Pack 目录 / 项目 key）→ 建骨架（不自动放包）。</summary>
     private async void OnNewProject(object sender, RoutedEventArgs e)
     {
-        var dir = PickFolder("选择一个文件夹作为新工程目录");
-        if (dir is not null) await _vm.NewProjectAsync(dir);
+        var dlg = new Views.NewProjectDialog { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        await _vm.NewProjectAsync(dlg.ProjectDir, dlg.PackDir, dlg.ProjectKey);
     }
 
     /// <summary>「打开工程」：选已有工程目录（里面有 project.json）。</summary>
@@ -390,21 +397,6 @@ public partial class MainWindow : Window
     }
 
     /// <summary>全局选项：选备份文件夹 / 打开它。</summary>
-    private void OnChooseBackupDir(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择备份文件夹", InitialDirectory = _vm.BackupDir };
-        if (dlg.ShowDialog(this) == true) _vm.BackupDir = dlg.FolderName;
-    }
-    private void OnOpenBackupDir(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            System.IO.Directory.CreateDirectory(_vm.BackupDir);
-            System.Diagnostics.Process.Start("explorer.exe", _vm.BackupDir);
-        }
-        catch (Exception ex) { _vm.SetStatus("打开备份文件夹失败：" + ex.Message); }
-    }
-
     private void OnTreeRenameFile(object sender, RoutedEventArgs e)
     {
         if (TreeFiles.SelectedItem is not ViewModels.TreeItem item || item.IsFolder) return;
