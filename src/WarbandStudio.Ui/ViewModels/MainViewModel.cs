@@ -471,14 +471,13 @@ public sealed class MainViewModel : ObservableObject
             var pending = _backend.EditCountOf(ct.PackPath) > 0;
             if (pending)
             {
-                // 三选一：0=现在导出（另存为） 1=放弃编辑并关闭 2=取消（不关）
+                // 三选一：0=保存（写回原包；工程里会留一份历史版本） 1=放弃编辑并关闭 2=取消（不关）
                 var choice = AskSave?.Invoke(ct.Header, _backend.EditSummaryOf(ct.PackPath)) ?? 1;
                 if (choice == 2) { Status = "已取消关闭"; return; }
                 if (choice == 0)
                 {
-                    Status = "关闭前先导出：请选保存位置…";
-                    await SaveAsAsync();
-                    if (_backend.EditCountOf(ct.PackPath) > 0) { Status = "另存被取消，画布保持打开"; return; }
+                    Status = "关闭前先保存…";
+                    if (!await SavePackByPathAsync(ct.PackPath)) { Status = "保存失败，画布保持打开（见日志）"; return; }
                 }
                 else _backend.DiscardEditsOf(ct.PackPath);   // 清**这个页签那个包**的编辑（当前包可能已经被挪走了）
             }
@@ -1541,14 +1540,17 @@ public sealed class MainViewModel : ObservableObject
 
     // ── 工程（v1.5.0）──────────────────────────────────────────
 
-    /// <summary>切工程/关工程前：有未导出编辑就问一句（确认"放弃"才继续；想保留就取消，回去先保存）。</summary>
-    private bool ConfirmDropEditsForProjectSwitch()
+    /// <summary>切工程/关工程/还原前统一处理未导出编辑：三选（是=**保存所有有编辑的包** / 否=放弃 / 取消=中止）。
+    /// 返回 false = 用户取消或保存失败（调用方应中止操作）。</summary>
+    private async Task<bool> ConfirmUnsavedBeforeAsync(string what)
     {
-        var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
-        if (dirty.Count == 0) return true;
-        var n = dirty.Sum(s => _backend.EditCountOf(s.PackPath));
-        return Confirm?.Invoke(
-            $"有 {n} 处未导出的编辑（{dirty.Count} 个包）。\n\n继续会把这些编辑丢掉；\n想保留就先点「取消」，回工具里点「保存」再操作。\n\n继续吗？") ?? true;
+        var (packs, edits) = UnsavedEdits();
+        if (packs == 0) return true;
+        var choice = AskSave?.Invoke(what, $"{edits} 处未导出（{packs} 个包）") ?? 1;
+        if (choice == 2) { Status = "已取消"; return false; }
+        if (choice == 0) return await SaveAllEditsAsync();
+        foreach (var s in _backend.Packs.ToList()) _backend.DiscardEditsOf(s.PackPath);
+        return true;
     }
 
     /// <summary>新建工程（"新建工程"对话框的结果）：工程目录 + 生成 Pack 目录 + 项目 key；
@@ -1558,7 +1560,7 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             dir = Path.GetFullPath(dir);
-            if (!ConfirmDropEditsForProjectSwitch()) return false;
+            if (!await ConfirmUnsavedBeforeAsync("新建工程")) return false;
             var info = ProjectStore.Ensure(dir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
             if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
             if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
@@ -1606,7 +1608,7 @@ public sealed class MainViewModel : ObservableObject
                 Status = "这个文件夹还不是工程（没有 project.json）——用「新建工程」，或菜单「从 Pack 打开工程」";
                 return false;
             }
-            if (!ConfirmDropEditsForProjectSwitch()) return false;
+            if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
             var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
             _projectDir = dir;
             Project = info;
@@ -1641,7 +1643,7 @@ public sealed class MainViewModel : ObservableObject
             var src = Path.GetFullPath(sourcePack);
             if (!File.Exists(src)) { Status = "找不到源 pack：" + src; return false; }
             projectDir = Path.GetFullPath(projectDir);
-            if (!ConfirmDropEditsForProjectSwitch()) return false;
+            if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
             var info = ProjectStore.Ensure(projectDir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
             if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
             if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
@@ -1686,7 +1688,7 @@ public sealed class MainViewModel : ObservableObject
     public async Task CloseProjectAsync()
     {
         if (_project is null) return;
-        if (!ConfirmDropEditsForProjectSwitch()) return;
+        if (!await ConfirmUnsavedBeforeAsync("关闭工程")) return;
         foreach (var s in _backend.Packs.ToList()) await _backend.CloseSessionAsync(s);
         AfterPackClosed();
         Project = null;
@@ -1723,7 +1725,7 @@ public sealed class MainViewModel : ObservableObject
     {
         var pack = _backend.Pack?.PackPath;
         if (pack is null) { Status = "先打开一个包"; return false; }
-        if (!ConfirmDropEditsForProjectSwitch()) return false;
+        if (!await ConfirmUnsavedBeforeAsync("还原历史版本")) return false;
         try
         {
             var msg = await _backend.RestoreFromBackupAsync(pack, backupFile);
@@ -1741,24 +1743,27 @@ public sealed class MainViewModel : ObservableObject
         return (dirty.Count, dirty.Sum(s => _backend.EditCountOf(s.PackPath)));
     }
 
-    /// <summary>把所有有编辑的包都写回原包（关窗口"保存后退出"用）。返回是否全部成功。</summary>
+    /// <summary>保存**指定包**（写回原包；工程模式下同时留一份 old/ 历史版本）。失败返回 false。</summary>
+    public async Task<bool> SavePackByPathAsync(string packPath)
+    {
+        var session = _backend.Packs.FirstOrDefault(x =>
+            string.Equals(x.PackPath, packPath, StringComparison.OrdinalIgnoreCase));
+        if (session is null) return false;
+        try
+        {
+            _backend.SwitchTo(session);
+            await _backend.SaveInPlaceAsync();
+            return true;
+        }
+        catch (Exception ex) { Status = "保存失败：" + ex.Message; FileLog.Write("保存失败", ex); return false; }
+    }
+
+    /// <summary>把所有有编辑的包都写回原包（关窗口/关工程"保存后继续"用）。返回是否全部成功。</summary>
     public async Task<bool> SaveAllEditsAsync()
     {
         var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
         foreach (var s in dirty)
-        {
-            try
-            {
-                _backend.SwitchTo(s);
-                await _backend.SaveInPlaceAsync();
-            }
-            catch (Exception ex)
-            {
-                Status = "保存失败：" + ex.Message;
-                FileLog.Write("关窗口保存失败", ex);
-                return false;
-            }
-        }
+            if (!await SavePackByPathAsync(s.PackPath)) return false;
         RebuildTree();
         return true;
     }

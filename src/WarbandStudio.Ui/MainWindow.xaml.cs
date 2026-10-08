@@ -22,14 +22,15 @@ public partial class MainWindow : Window
         _vm.PackOpened += PushCanvasData;
         _vm.UnitPicked += (unit, url) => CanvasHost.SendAddUnit(unit, url);
         _vm.FilterRequested += (race, faction) => CanvasHost.SendFilter(race, faction);
-        // 关画布：未导出的编辑怎么办（是=导出 / 否=放弃 / 取消=不关）
+        // 关闭/切换前的未导出编辑怎么办（**统一三选**:是=保存写回原包 / 否=放弃 / 取消=不关）——
+        // 关画布 ×、关闭 Pack、关闭工程、切工程、还原历史版本、关窗口都走这一套（v1.5.3 统一）。
         _vm.AskSave = (title, summary) =>
         {
             var r = MessageBox.Show(
                 $"「{title}」还有未导出的编辑：{summary}" + Environment.NewLine + Environment.NewLine +
-                "「是」= 现在导出（会让你选保存位置）" + Environment.NewLine +
-                "「否」= 放弃这些编辑并关闭画布" + Environment.NewLine +
-                "「取消」= 什么都不做，保持打开",
+                "「是」= 保存（写回原包；工程里会留一份历史版本）" + Environment.NewLine +
+                "「否」= 放弃这些编辑" + Environment.NewLine +
+                "「取消」= 什么都不做",
                 "WarbandStudio", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
             return r == MessageBoxResult.Yes ? 0 : r == MessageBoxResult.No ? 1 : 2;
         };
