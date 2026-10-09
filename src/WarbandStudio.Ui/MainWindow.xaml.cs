@@ -22,15 +22,18 @@ public partial class MainWindow : Window
         _vm.PackOpened += PushCanvasData;
         _vm.UnitPicked += (unit, url) => CanvasHost.SendAddUnit(unit, url);
         _vm.FilterRequested += (race, faction) => CanvasHost.SendFilter(race, faction);
+        // **自检模式（--ui-selftest）无人值守**：所有确认自动应答（否则某个确认框一弹就卡死整轮自检 —— ⑱ 踩过）
+        var selfTest = Environment.GetCommandLineArgs().Contains("--ui-selftest");
         // 一般性确认（是/否）：素材库移除、换图里删"还在用"的图等都走它（以前只在代码里预留、没接线 → 那些确认被静默跳过）
-        _vm.Confirm = msg =>
-            MessageBox.Show(this, msg, "WarbandStudio", MessageBoxButton.YesNo, MessageBoxImage.Question)
+        _vm.Confirm = msg => selfTest
+            || MessageBox.Show(this, msg, "WarbandStudio", MessageBoxButton.YesNo, MessageBoxImage.Question)
                 == MessageBoxResult.Yes;
 
         // 关闭/切换前的未导出编辑怎么办（**统一三选**:是=保存写回原包 / 否=放弃 / 取消=不关）——
         // 关画布 ×、关闭 Pack、关闭工程、切工程、还原历史版本、关窗口都走这一套（v1.5.3 统一）。
         _vm.AskSave = (title, summary) =>
         {
+            if (selfTest) return 1;                 // 自检：自动"放弃编辑"（不弹框）
             var r = MessageBox.Show(
                 $"「{title}」还有未导出的编辑：{summary}" + Environment.NewLine + Environment.NewLine +
                 "「是」= 保存（写回原包；工程里会留一份历史版本）" + Environment.NewLine +
@@ -169,6 +172,14 @@ public partial class MainWindow : Window
         if (MenuProjectImportPack is not null) MenuProjectImportPack.IsEnabled = isProjectRoot;
         if (MenuProjectFolder is not null) MenuProjectFolder.IsEnabled = isProjectRoot;
         if (MenuHistoryVersion is not null) MenuHistoryVersion.IsEnabled = isPackRoot;   // 历史版本 = 对某个包
+        if (MenuProjectPacks is not null) MenuProjectPacks.IsEnabled = isProjectRoot;   // 工程内的包 = 对工程
+    }
+
+    /// <summary>文件树右键 →「工程内的包…」：勾选 = 识别（下次打开工程时一起打开）。</summary>
+    private void OnShowProjectPacks(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.HasProject) { _vm.SetStatus("先新建/打开一个工程"); return; }
+        new Views.ProjectPacksDialog(_vm) { Owner = this }.ShowDialog();
     }
 
     /// <summary>「历史版本…」：列出当前包在工程 old/ 里的备份，可还原（没工程/没包时对话框里会给提示）。</summary>
@@ -777,6 +788,8 @@ public partial class MainWindow : Window
         FileLog.Write("[selftest] ⑯ 工程往返：" + _vm.SelfTestProjectRoundTrip());
         // ⑰ 换图"移动"语义：来源是没人用的包内素材 → 换完自动把来源从包里删掉（不留同内容不同名的重复）
         FileLog.Write("[selftest] ⑰ 换图移动：" + _vm.SelfTestArtMove());
+        // ⑱ 工程多包：识别清单里的包，打开工程时一起开；没识别的不开
+        FileLog.Write("[selftest] ⑱ 工程多包：" + await _vm.SelfTestMultiPackAsync());
     }
 
     /// <summary>双击文件树里的 DB 表 → 中间栏开表视图（原生解码）。</summary>

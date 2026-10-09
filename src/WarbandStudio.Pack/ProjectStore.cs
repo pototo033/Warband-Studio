@@ -15,8 +15,12 @@ public sealed class ProjectInfo
     /// <summary>**生成 Pack 所在目录**（工作包放这；相对工程目录，或绝对路径）。默认 `packs`（工程目录的子文件夹）。</summary>
     public string PackDir { get; set; } = ProjectStore.DefaultPackDir;
 
-    /// <summary>上次打开的包（打开工程时自动开它）。</summary>
+    /// <summary>上次打开的包（打开工程时它是**激活**的那个；旧的单包字段，迁移进 <see cref="Packs"/>）。</summary>
     public string LastPack { get; set; } = "";
+
+    /// <summary>**识别清单**：属于本工程、打开工程时要一起打开的包（相对工程目录的路径，正斜杠）。
+    /// "导入 Pack 到工程"会自动登记；工程里其它没登记的包不会自动开（用「工程内的包…」勾选）。</summary>
+    public List<string> Packs { get; set; } = [];
 
     public string Created { get; set; } = "";
 }
@@ -118,8 +122,7 @@ public static class ProjectStore
 
     public static string HistoryDirOf(string projectDir) => Path.Combine(projectDir, HistoryDir);
 
-    /// <summary>工程里的工作包（列「生成 Pack 目录」里的 .pack；旧工程"包在工程根"也认）。
-    /// old/ 里的历史版本不算。</summary>
+    /// <summary>工程目录下的 .pack（按名字排序；old/ 里的不算）。</summary>
     public static List<string> PacksIn(string projectDir)
     {
         try
@@ -134,6 +137,36 @@ public static class ProjectStore
             return list.OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch { return []; }
+    }
+
+    /// <summary>包 → 存在 project.json 里的相对路径（正斜杠；工程搬家也不怕）。</summary>
+    public static string RelPath(string projectDir, string packFullPath)
+    {
+        try
+        {
+            return Path.GetRelativePath(Path.GetFullPath(projectDir), Path.GetFullPath(packFullPath))
+                       .Replace((char)92, '/');
+        }
+        catch { return Path.GetFileName(packFullPath); }
+    }
+
+    /// <summary>相对路径 → 绝对路径（坏路径返回空串）。</summary>
+    public static string FullPath(string projectDir, string rel)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(rel) ? "" : Path.GetFullPath(Path.Combine(projectDir, rel.Replace('/', (char)92)));
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>把相对路径并进识别清单（去重、保持原顺序）；返回是否新增。</summary>
+    public static bool AddPack(ProjectInfo info, string rel)
+    {
+        if (string.IsNullOrWhiteSpace(rel)) return false;
+        if (info.Packs.Any(p => p.Equals(rel, StringComparison.OrdinalIgnoreCase))) return false;
+        info.Packs.Add(rel);
+        return true;
     }
 
     /// <summary>把一个包备份进 `old/`（**用 .pack 后缀**，直接拷出来就能当包用），返回备份路径；

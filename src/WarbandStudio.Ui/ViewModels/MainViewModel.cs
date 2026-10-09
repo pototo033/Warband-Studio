@@ -11,6 +11,17 @@ namespace WarbandStudio.Ui.ViewModels;
 /// <summary>历史版本对话框的一行（WPF 绑定要**属性**，不能用 ValueTuple——它的具名元素是字段）。</summary>
 public sealed record HistoryRow(string File, string When, string Size, string Full);
 
+/// <summary>「工程内的包…」对话框的一行：勾选 = 已识别（打开工程时自动打开）。</summary>
+public sealed class ProjectPackRow(string full, string rel, string name, string size, bool recognized)
+{
+    public string Full { get; } = full;
+    public string Rel { get; } = rel;
+    public string Name { get; } = name;
+    public string Size { get; } = size;
+    /// <summary>勾选状态（初始 = 是否已在识别清单里）。</summary>
+    public bool Checked { get; set; } = recognized;
+}
+
 /// <summary>
 /// 主视图模型：后端生命周期、首跑向导、打开/保存 pack、文件树、诊断、日志。
 /// </summary>
@@ -1628,24 +1639,40 @@ public sealed class MainViewModel : ObservableObject
             }
             if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
             var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
+            // **识别清单迁移**（旧工程只有 LastPack 单包字段）：并进 Packs，之后就按清单多开
+            if (info.Packs.Count == 0 && !string.IsNullOrWhiteSpace(info.LastPack) && File.Exists(info.LastPack))
+            {
+                ProjectStore.AddPack(info, ProjectStore.RelPath(dir, info.LastPack));
+                ProjectStore.Save(dir, info);
+            }
             _projectDir = dir;
             Project = info;
             _backend.ProjectKey = info.ProjectKey;
             ProjectStore.TouchRecent(_settings.RecentProjects, dir);
             _settings.Save();
             PruneRecentProjects();
-            var packs = ProjectStore.PacksIn(dir);
-            var open = !string.IsNullOrWhiteSpace(info.LastPack) && File.Exists(info.LastPack)
-                ? info.LastPack
-                : packs.Count > 0 ? packs[0] : null;
-            if (open is not null) await OpenPackPathAsync(open, open: true, asUnitPack: false);
-            Status = packs.Count switch
+            // **按识别清单打开所有包**（工程目录里没被识别的包不自动开）；LastPack 放最后开 = 激活的画布
+            var all = ProjectStore.PacksIn(dir);
+            var toOpen = info.Packs
+                .Select(rel => ProjectStore.FullPath(dir, rel))
+                .Where(f => f.Length > 0 && File.Exists(f))
+                .ToList();
+            var missing = info.Packs.Count - toOpen.Count;
+            if (info.LastPack is { Length: > 0 } lp && File.Exists(lp))
             {
-                0 => $"工程「{info.Name}」已打开 —— 用「导入 WUU 模板」或「导入 Pack」放一个包进来",
-                _ => $"工程「{info.Name}」已打开：{Path.GetFileName(open!)}" +
-                     (packs.Count > 1 ? $"（工程里还有 {packs.Count - 1} 个包）" : ""),
+                toOpen.RemoveAll(f => f.Equals(lp, StringComparison.OrdinalIgnoreCase));
+                toOpen.Add(lp);
+            }
+            foreach (var f in toOpen) await OpenPackPathAsync(f, open: true, asUnitPack: false);
+            Status = toOpen.Count switch
+            {
+                0 => $"工程「{info.Name}」已打开 —— 用「导入 WUU 模板」或「导入 Pack」放一个包进来" +
+                     (all.Count > 0 ? "（目录里有包但都没被识别：工程根右键「工程内的包…」勾一下）" : ""),
+                _ => $"工程「{info.Name}」已打开，同时开 {toOpen.Count} 个包：{string.Join("、", toOpen.Select(Path.GetFileName))}" +
+                     (all.Count > toOpen.Count ? $"（另有 {all.Count - toOpen.Count} 个未识别，不自动开）" : "") +
+                     (missing > 0 ? $"（{missing} 个清单里的包不在了，已跳过）" : ""),
             };
-            FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，包 {packs.Count} 个）");
+            FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，识别 {info.Packs.Count} / 目录 {all.Count} 个包，本次开 {toOpen.Count} 个）");
             return true;
         }
         catch (Exception ex) { Status = "打开工程失败：" + ex.Message; FileLog.Write("打开工程失败", ex); return false; }
@@ -1675,6 +1702,7 @@ public sealed class MainViewModel : ObservableObject
                 else File.Copy(src, dest);
             }
             info.LastPack = dest;
+            ProjectStore.AddPack(info, ProjectStore.RelPath(projectDir, dest));   // 识别
             ProjectStore.Save(projectDir, info);
             _projectDir = projectDir;
             Project = info;
@@ -1792,14 +1820,23 @@ public sealed class MainViewModel : ObservableObject
         if (_project is null || _projectDir.Length == 0) { Status = "先新建/打开一个工程"; return false; }
         try
         {
-            var dest = Path.Combine(_projectDir, Path.GetFileName(externalPack));
-            if (!Path.GetFullPath(externalPack).Equals(Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+            var srcFull = Path.GetFullPath(externalPack);
+            var targetDir = ProjectStore.PackDirOf(_projectDir, _project);
+            Directory.CreateDirectory(targetDir);
+            var dest = Path.Combine(targetDir, Path.GetFileName(srcFull));
+            if (srcFull.Equals(Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+            {
+                // 已经在"生成 Pack 目录"里 → 不复制，直接**识别 + 打开**（给"手动拷进工程的包"用的入口）
+            }
+            else
             {
                 if (File.Exists(dest)) { Status = $"工程里已经有 {Path.GetFileName(dest)}（要么给导入的包改个名，要么先删旧的那份）"; return false; }
-                File.Copy(externalPack, dest);
+                File.Copy(srcFull, dest);
             }
+            ProjectStore.AddPack(_project, ProjectStore.RelPath(_projectDir, dest));   // 识别：下次打开工程一起开
+            ProjectStore.Save(_projectDir, _project);
             await OpenPackPathAsync(dest, open: true, asUnitPack: false);
-            FileLog.Write($"工程：导入包 {Path.GetFileName(dest)}");
+            FileLog.Write($"工程：导入包 {Path.GetFileName(dest)}（已识别；下次打开工程会一起开）");
             return true;
         }
         catch (Exception ex) { Status = "导入包失败：" + ex.Message; return false; }
@@ -1811,9 +1848,49 @@ public sealed class MainViewModel : ObservableObject
         if (_project is null || _projectDir.Length == 0) { Status = "先新建/打开一个工程"; return false; }
         var pack = _backend.BuildWuuTemplatePack(_projectDir);
         if (pack is null) { Status = "导入失败：内置 WUU 素材缺失（exe 旁 bundled\\wuu 里应有 .pack）"; return false; }
+        ProjectStore.AddPack(_project, ProjectStore.RelPath(_projectDir, pack));   // 识别：下次打开工程一起开
+        ProjectStore.Save(_projectDir, _project);
         await OpenPackPathAsync(pack, open: true, asUnitPack: false);
-        FileLog.Write($"工程：导入 WUU 模板 {Path.GetFileName(pack)}");
+        FileLog.Write($"工程：导入 WUU 模板 {Path.GetFileName(pack)}（已识别）");
         return true;
+    }
+
+    /// <summary>「工程内的包…」对话框的数据：目录里每个包 + 是否已识别（在清单里）+ 大小。</summary>
+    public List<ProjectPackRow> ProjectPacksList()
+    {
+        var list = new List<ProjectPackRow>();
+        if (_project is null || _projectDir.Length == 0) return list;
+        foreach (var f in ProjectStore.PacksIn(_projectDir))
+        {
+            var rel = ProjectStore.RelPath(_projectDir, f);
+            var fi = new FileInfo(f);
+            var rec = _project.Packs.Any(p => p.Equals(rel, StringComparison.OrdinalIgnoreCase));
+            list.Add(new ProjectPackRow(f, rel, fi.Name, $"{fi.Length / 1024.0 / 1024.0:N1} MB", rec));
+        }
+        return list;
+    }
+
+    /// <summary>应用「工程内的包…」的勾选（= 识别清单）：保存清单；**新勾上的立刻打开**；
+    /// 取消勾选的不主动关（已经开着就开着，下次打开工程起不再自动开）。</summary>
+    public async Task ApplyProjectPacksAsync(List<string> rels)
+    {
+        if (_project is null || _projectDir.Length == 0) return;
+        _project.Packs = rels.Where(r => !string.IsNullOrWhiteSpace(r))
+                             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        ProjectStore.Save(_projectDir, _project);
+        var opened = _backend.Packs.Select(s => s.PackPath).ToList();
+        var n = 0;
+        foreach (var rel in _project.Packs)
+        {
+            var f = ProjectStore.FullPath(_projectDir, rel);
+            if (f.Length == 0 || !File.Exists(f)) continue;
+            if (opened.Any(p => p.Equals(f, StringComparison.OrdinalIgnoreCase))) continue;
+            await OpenPackPathAsync(f, open: true, asUnitPack: false);
+            n++;
+        }
+        FileLog.Write($"工程：识别清单更新为 {_project.Packs.Count} 个包" + (n > 0 ? $"（顺手打开了 {n} 个新勾的）" : ""));
+        Status = $"识别清单已更新：{_project.Packs.Count} 个包会在打开工程时自动打开" +
+                 (n > 0 ? $"（已打开 {n} 个新勾选的）" : "");
     }
 
     // ── 游戏目录 ────────────────────────────────────────────────
@@ -2244,6 +2321,46 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>自检（--ui-selftest）⑰：换图"移动"语义（来源是没人用的包内素材 → 换完自动删来源；见 Backend.SelfTestArtMove）。</summary>
     public string SelfTestArtMove() => _backend.SelfTestArtMove();
+
+    /// <summary>自检（--ui-selftest）⑱：工程多包"识别清单" —— 建临时工程 + 两个包 → 打开工程时两个都自动开；
+    /// 清单里去掉一个、关工程重开 → 只开清单里的那个（没识别的不开）。跑完清理。</summary>
+    public async Task<string> SelfTestMultiPackAsync()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "warbandstudio_selftest_multi");
+        try
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            var info = ProjectStore.Ensure(dir);
+            var packDir = ProjectStore.PackDirOf(dir, info);
+            Directory.CreateDirectory(packDir);
+            var p1 = _backend.BuildWuuTemplatePack(packDir, "testA.pack");
+            if (p1 is null) return "(生成测试包失败：bundled/wuu 缺素材)";
+            var p2 = Path.Combine(packDir, "testB.pack");
+            File.Copy(p1, p2, true);
+            ProjectStore.AddPack(info, ProjectStore.RelPath(dir, p1));
+            ProjectStore.AddPack(info, ProjectStore.RelPath(dir, p2));
+            ProjectStore.Save(dir, info);
+            // ① 识别两个 → 打开工程 → 两个都该开
+            await OpenProjectAsync(dir);
+            var n2 = _backend.Packs.Count(x => (x.PackPath ?? "").StartsWith(packDir, StringComparison.OrdinalIgnoreCase));
+            // ② 清单里去掉 B、关工程、重开 → 只开 A（"没识别的不开"）
+            var info2 = ProjectStore.Load(dir);
+            info2.Packs = [ProjectStore.RelPath(dir, p1)];
+            ProjectStore.Save(dir, info2);
+            await CloseProjectAsync();
+            await OpenProjectAsync(dir);
+            var n1 = _backend.Packs.Count(x => (x.PackPath ?? "").StartsWith(packDir, StringComparison.OrdinalIgnoreCase));
+            var ok = n2 == 2 && n1 == 1;
+            await CloseProjectAsync();
+            return $"识别 2 个 → 打开工程开 {n2} 个；清单留 1 个 → 重开只开 {n1} 个 " + (ok ? "✓" : "✗");
+        }
+        catch (Exception ex) { return "(工程多包自检失败：" + ex.Message + ")"; }
+        finally
+        {
+            try { foreach (var s in _backend.Packs.ToList()) await _backend.CloseSessionAsync(s); } catch { }
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        }
+    }
 
     /// <summary>自检（--ui-selftest）前置：启动 = 空状态后，⑫~⑮ 都依赖"有个打开的包" ——
     /// 现场用内置 WUU 素材在临时目录生成一个测试包并打开（已有包就直接用）。</summary>

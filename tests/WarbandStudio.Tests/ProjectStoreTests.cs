@@ -105,6 +105,30 @@ public class ProjectStoreTests : IDisposable
     }
 
     [Fact]
+    public void RelPath与FullPath_往返一致()
+    {
+        ProjectStore.Ensure(_dir);
+        var pack = Path.Combine(ProjectStore.PackDirOf(_dir), "a.pack");
+        File.WriteAllBytes(pack, [1]);
+        var rel = ProjectStore.RelPath(_dir, pack);
+        Assert.Equal("packs/a.pack", rel.Replace((char)92, '/'));
+        Assert.Equal(Path.GetFullPath(pack), Path.GetFullPath(ProjectStore.FullPath(_dir, rel)));
+    }
+
+    [Fact]
+    public void 识别清单_读写与去重()
+    {
+        var info = ProjectStore.Ensure(_dir);
+        Assert.True(ProjectStore.AddPack(info, "packs/a.pack"));
+        Assert.False(ProjectStore.AddPack(info, "packs/A.PACK"));   // 大小写不敏感去重
+        ProjectStore.AddPack(info, "packs/b.pack");
+        ProjectStore.Save(_dir, info);
+        var back = ProjectStore.Load(_dir);
+        Assert.Equal(2, back.Packs.Count);
+        Assert.Contains("packs/a.pack", back.Packs);
+    }
+
+    [Fact]
     public void TouchRecent_去重_新的在前_最多5个()
     {
         var r = new List<string>();

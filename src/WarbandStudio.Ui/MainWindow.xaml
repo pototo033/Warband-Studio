@@ -167,6 +167,7 @@
                                 <Separator />
                                 <MenuItem x:Name="MenuProjectImportWuu" Header="导入 WUU 模板到工程" Click="OnImportWuuTemplate" />
                                 <MenuItem x:Name="MenuProjectImportPack" Header="导入 Pack 到工程…" Click="OnImportPackToProject" />
+                                <MenuItem x:Name="MenuProjectPacks" Header="工程内的包…（识别清单：勾上的打开工程时一起开）" Click="OnShowProjectPacks" />
                                 <MenuItem x:Name="MenuProjectFolder" Header="打开工程文件夹" Click="OnTreeOpenProjectFolder" />
                                 <Separator />
                                 <MenuItem Header="打开所在文件夹" Click="OnTreeOpenFolder" />

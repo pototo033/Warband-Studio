@@ -1478,6 +1478,9 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             var cacheFile = Path.Combine(skins.CacheDir, targetName);
             var cached = File.Exists(cacheFile) ? File.ReadAllBytes(cacheFile) : null;
             var ok = srcBytes is not null && cached is not null && cached.AsSpan().SequenceEqual(srcBytes);
+            // 撤掉这次测试编辑（不然留给后面的步骤一个"未导出编辑"，⑱ 开工程时会被确认框卡住）
+            Edits.FileReplacements.RemoveAll(f =>
+                f.Target.Equals(TwuiTabs.SkinDir + targetName, StringComparison.OrdinalIgnoreCase));
             return $"页签 {cat}：来源 {src} → 抽成 {targetName}，重推画布后缓存 " +
                    (ok ? "= 来源内容 ✓（没被包里旧图顶掉）" : "✗ 被顶掉了（回归！）");
         }
