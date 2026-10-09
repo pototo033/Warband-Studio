@@ -1174,6 +1174,13 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         Dictionary<string, List<string>> map2(string prefix) => ArtSuppliers(prefix, tabs);
     }
 
+    /// <summary>这张包内 UI 图现在被哪些页签用着（换图对话框里右键删除前要问一句）。全路径/文件名都收。</summary>
+    public List<string> TabsUsingArt(string file)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return [];
+        return TabsUsing(file.Replace((char)92, '/'));
+    }
+
     /// <summary>
     /// 来源图和目标位置现在的内容是不是同一份字节（是就别再记一条"换图"了，省得包里白白多一次写入）。
     /// 来源可以是包内路径，也可以是本地素材文件。

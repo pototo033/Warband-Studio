@@ -327,6 +327,15 @@
   </div>
 </div>
 
+<!-- 换图对话框：右键一张缩略图 → 小菜单（把这张图从包里删掉；清换图留下的旧图/没用到的素材） -->
+<div id="artMenu" class="pop hidden" style="left:0;top:0;transform:none">
+  <div class="t" id="artMenuTitle">这张图</div>
+  <div class="row">
+    <button id="artMenuDel" class="danger">从包中删除</button>
+    <button id="artMenuCancel">取消</button>
+  </div>
+</div>
+
 <!-- 已有升级（右键兵牌 → 查看已有升级）：列出这个组作为 base / target 的全部升级关系。
      跨页（两端不在同一页签）或无界面连线的关系：交换/删除**只改路线表**，不写 ui_links（防跨页连线 bug） -->
 <div id="upgPop" class="pop hidden" style="max-width:min(880px,94vw)">
@@ -1720,7 +1729,18 @@ function openNewPop(mode) {
       c.title = name + (note || '');
       c.innerHTML = (url ? '<img src="' + url + '" loading="lazy">' : '<img>') +
                     '<span>' + name + '</span>';
+      c.dataset.file = file;
       c.onclick = () => { pickArt(kind, file); };
+      c.oncontextmenu = ev => {                        // 右键缩略图 →「从包中删除」（清旧图/没用到的素材）
+        if (!file || file === '__donor__') return;     // 「保持当前」「跟母版一样」没有实体文件
+        ev.preventDefault(); ev.stopPropagation();
+        artMenuFile = file; artMenuName = name;
+        document.getElementById('artMenuTitle').textContent = name;
+        const m = document.getElementById('artMenu');
+        m.style.left = Math.min(ev.clientX, window.innerWidth - 240) + 'px';
+        m.style.top = Math.min(ev.clientY, window.innerHeight - 130) + 'px';
+        m.classList.remove('hidden');
+      };
       grid.appendChild(c);
     };
     // 第一格永远是「保持当前」（= 这个页签现在用的那张，来自当前包）
@@ -2111,6 +2131,24 @@ document.getElementById('tmRename').onclick = () => {
   report({ type: 'renameTab', old: tmCategory, new: nk.trim().toUpperCase() });
 };
 document.getElementById('tmClose').onclick = () => document.getElementById('tabMenu').classList.add('hidden');
+
+/* ───────────── 换图缩略图右键：从包中删除（清换图留下的旧图 / 没用到的素材） ───────────── */
+let artMenuFile = '', artMenuName = '';
+document.getElementById('artMenuCancel').onclick = () => document.getElementById('artMenu').classList.add('hidden');
+document.getElementById('artMenuDel').onclick = () => {
+  document.getElementById('artMenu').classList.add('hidden');
+  if (!artMenuFile) return;
+  // 当前对话框里这一格先标灰（真正删没删以包为准；不开新对话框前不会自动刷新）
+  for (const c of document.querySelectorAll('.artCell')) {
+    if (c.dataset && c.dataset.file === artMenuFile) {
+      c.style.opacity = '0.35';
+      const s = c.querySelector('span');
+      if (s && s.textContent.indexOf('（待删除）') < 0) s.textContent += '（待删除）';
+    }
+  }
+  report({ type: 'deletePackArt', file: artMenuFile });
+  artMenuFile = '';
+};
 // 换图：目标 = 被右键的这个页签（不切换当前画布页签）
 document.getElementById('tmArt').onclick = () => {
   npTargetCat = tmCategory;

@@ -22,6 +22,11 @@ public partial class MainWindow : Window
         _vm.PackOpened += PushCanvasData;
         _vm.UnitPicked += (unit, url) => CanvasHost.SendAddUnit(unit, url);
         _vm.FilterRequested += (race, faction) => CanvasHost.SendFilter(race, faction);
+        // 一般性确认（是/否）：素材库移除、换图里删"还在用"的图等都走它（以前只在代码里预留、没接线 → 那些确认被静默跳过）
+        _vm.Confirm = msg =>
+            MessageBox.Show(this, msg, "WarbandStudio", MessageBoxButton.YesNo, MessageBoxImage.Question)
+                == MessageBoxResult.Yes;
+
         // 关闭/切换前的未导出编辑怎么办（**统一三选**:是=保存写回原包 / 否=放弃 / 取消=不关）——
         // 关画布 ×、关闭 Pack、关闭工程、切工程、还原历史版本、关窗口都走这一套（v1.5.3 统一）。
         _vm.AskSave = (title, summary) =>

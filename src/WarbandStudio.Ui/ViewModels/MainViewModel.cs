@@ -1039,6 +1039,24 @@ public sealed class MainViewModel : ObservableObject
                     RefreshLibrarySoon();
                     break;
                 }
+                case "deletePackArt":
+                {
+                    // 换图对话框里右键一张缩略图 →「从包中删除」（清旧图 / 没用到的素材；待导出）
+                    var f = S("file").Replace((char)92, '/');
+                    if (f.Length == 0) break;
+                    var name = Path.GetFileName(f);
+                    var owners = _backend.TabsUsingArt(f);
+                    if (owners.Count > 0 &&
+                        !(Confirm?.Invoke($"「{name}」正被 {string.Join("、", owners)} 页签用着 —— 删了它们会丢图。\n\n仍要从包里删除吗？") ?? false))
+                    {
+                        Status = "已取消删除";
+                        break;
+                    }
+                    _backend.RemovePackFile(f);                 // 待导出新增→撤掉；包内条目→导出时跳过
+                    Status = $"已从包里删除 {name}（待导出）" +
+                             (owners.Count > 0 ? $"（原在用：{string.Join("、", owners)}）" : "");
+                    break;
+                }
                 case "renameTab":
                     _backend.RenameTab(S("old"), S("new"));
                     break;

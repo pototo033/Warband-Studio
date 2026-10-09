@@ -271,6 +271,26 @@ const artM2 = last();
 chk('没有右键目标时（普通入口）：category 回退到当前页签',
     artM2 && artM2.type === 'setTabArt' && artM2.category === 'SKV4', artM2);
 
+console.log('⑦c 换图缩略图右键 →「从包中删除」（清旧图/素材）');
+clear();
+vm.runInContext("activePage = 'SKV4'; openNewPop('art');", ctx);      // 重开对话框，拿到最新的网格
+vm.runInContext("document.getElementById('artMenu');", ctx);          // 预热：桩按需创建元素（真实页面里它是静态 DOM）
+vm.runInContext("document.getElementById('artMenu').classList.add('hidden');", ctx);   // 桩不解析静态 HTML 的 class，手动还原初始态
+const bgGrid = byId['npBgGrid'];
+const keepCell = bgGrid.children[0];                                 // 第 0 格 =「保持当前」（没有实体文件）
+const libCell = bgGrid.children[1];                                  // 第 1 格 = 库里的第一张背景
+const evStub = { preventDefault() { }, stopPropagation() { }, clientX: 10, clientY: 10 };
+keepCell.oncontextmenu(evStub);
+chk('「保持当前」格右键不弹删除菜单（它没有实体文件）',
+    byId['artMenu'].classList.contains('hidden'), byId['artMenu'].classList.contains('hidden'));
+libCell.oncontextmenu(evStub);
+chk('普通缩略图右键 → 弹出删除菜单', !byId['artMenu'].classList.contains('hidden'), null);
+byId['artMenuDel'].onclick();
+const delM = last();
+chk('点「从包中删除」→ 发出 deletePackArt（带那张图的路径）',
+    delM && delM.type === 'deletePackArt' && delM.file === 'C:/lib/bg/background_images_mod1.png', delM);
+chk('删除菜单点完自动收起', byId['artMenu'].classList.contains('hidden'), null);
+
 console.log('⑧ 黄标跟着过滤实时重算（v0.91 修的场景：切换种族后旧标不会挂着）');
 vm.runInContext(`
   DATA = {
