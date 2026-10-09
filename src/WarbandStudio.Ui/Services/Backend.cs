@@ -1375,7 +1375,8 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         // **可见提示**（用户报过"换了图上方一点动静都没有"）：改了哪几张、写到哪个文件、要保存才生效
         if (did.Count > 0)
         {
-            Log?.Invoke($"换图：页签 {category} 已改 {did.Count} 处 —— {string.Join("；", did)}　待导出（保存/导出后游戏里才生效）");
+            Log?.Invoke($"换图：页签 {category} 已改 {did.Count} 处 —— {string.Join("；", did)}　" +
+                        "待导出（保存/导出后游戏里才生效）；页签原来那张会自动保留成 _1（不覆盖、不丢）");
             var bgConv = TwuiTabs.ConventionName("background_images_", category);
             var btnConv = TwuiTabs.ConventionName("button_upgrade_", category);
             if (renamed.Count == 0 &&

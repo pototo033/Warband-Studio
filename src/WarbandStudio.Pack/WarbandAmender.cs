@@ -605,6 +605,34 @@ public static class WarbandAmender
                 else if (File.Exists(source)) data = File.ReadAllBytes(source);
             }
             if (data is null) { notes.Add($"换图：找不到来源 {source}（跳过）"); continue; }
+            // **换图不丢旧图**（用户 2026-10-09 要的）：目标现在有内容（包里 / 本轮缓冲里）且和来源**不一样**时，
+            // 先把旧内容**挪成 `<原名>_1.png`**（撞名依次 _2/_3…）保留下来再写新内容 ——
+            // 以前是直接覆盖（用户实测："原来的 emp2 直接被覆盖掉了"）。旧图变成没人引用的素材，
+            // 以后在「换图」对话框里还能选回来；同路径替换（target==source 那种素材导入）内容相同，走不进这里。
+            var prev = CurrentBytes(pack, repl, target);
+            if (prev is not null && !(prev.Length == data.Length && prev.AsSpan().SequenceEqual(data)))
+            {
+                var slash = target.LastIndexOfAny(['/', (char)92]);
+                var dirPart = slash >= 0 ? target[..(slash + 1)] : "";
+                var file = slash >= 0 ? target[(slash + 1)..] : target;
+                var hasPng = file.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
+                var stem = hasPng ? file[..^4] : file;
+                var ext = hasPng ? ".png" : "";
+                var parked = "";
+                for (var k = 1; k <= 99; k++)
+                {
+                    var cand = $"{dirPart}{stem}_{k}{ext}";
+                    if (CurrentBytes(pack, repl, cand) is null
+                        && !e.RemoveFiles.Contains(cand, StringComparer.OrdinalIgnoreCase)) { parked = cand; break; }
+                }
+                if (parked.Length > 0)
+                {
+                    repl[parked] = prev;
+                    changed++;
+                    notes.Add($"换图：旧图保留为 {Path.GetFileName(parked)}（{file} 的原内容没丢，以后在「换图」里还能选回来）");
+                }
+                else notes.Add($"换图：{stem}_1..99 都被占着 → 这张旧图只能直接覆盖（{file}）");
+            }
             repl[target] = data;
             changed++;
             notes.Add($"换图：{target} ← {source}" + (File.Exists(source) ? "（本地素材）" : ""));
@@ -675,6 +703,9 @@ public static class WarbandAmender
             foreach (var (kind, actual) in new[] { ("background_images_", art?.BgFile), ("button_upgrade_", art?.BtnFile) })
             {
                 var oldLowFile = actual ?? kind + oldLow + ".png";
+                // 图名**已经是正名**（<前缀><新 key>.png）→ 没什么可归正的（"同名改名"会走到这），
+                // 不拦的话 PlanRename 会以为"正名被占（其实就是它自己）"→ 把这页签的正名图挪成 _N ✗
+                if (oldLowFile.Equals(TwuiTabs.ConventionName(kind, newKey), StringComparison.OrdinalIgnoreCase)) continue;
                 var srcPath = $"ui/skins/default/warband_upgrades/{oldLowFile}";
                 var srcBytes = CurrentBytes(pack, repl, srcPath);
                 if (srcBytes is null) { notes.Add($"重命名：{srcPath} 不在包里（这张图跳过）"); continue; }
@@ -798,9 +829,11 @@ public static class WarbandAmender
                 else notes.Add($"重命名：页签 {newKey} 的结构补全失败（{r.Error}）——游戏里这个页签不会显示，" +
                                "用「新建页签」把 key 填成同名也能补。");
             }
-            notes.Add(sameKey
-                ? $"图名归正：{oldKey}（页签 key 没变，只把图挪成标准名）"
-                : $"页签重命名：{oldKey} → {newKey}");
+            if (sameKey)
+                notes.Add(artRenames.Count > 0
+                    ? $"图名归正：{oldKey}（页签 key 没变，只把图挪成标准名）"
+                    : $"图名归正：{oldKey}（图名已经是标准名，不用动）");
+            else notes.Add($"页签重命名：{oldKey} → {newKey}");
         }
 
         // ── 6d-2) 页签背景状态自愈：**状态名必须 = 页签 key** ──
