@@ -1359,6 +1359,28 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             }
             Edits.FileReplacements.Add((inner, src!));
             did.Add($"{label} ← {Path.GetFileName(src!)}（写到 {name}）");
+            // **"移动"语义**（用户 2026-10-09 要的）：来源是**包内**的图、且**没有任何页签在用它**（素材/旧图）
+            // → 内容已经搬到目标上，这张来源留着就是"同内容不同名"的重复 → 顺手从包里删掉（导出时生效）。
+            // 三种情况**不删**：本地素材文件（不在包里）、来源就是目标（同路径替换）、还有页签在用（TabsUsing）。
+            // 注意 RemoveFiles 只在**写包时**跳过 → 6c 落表读来源时包里还在，多个换图共用同一来源也没问题。
+            if (!File.Exists(src!) && !src!.Equals(inner, StringComparison.OrdinalIgnoreCase))
+            {
+                var srcInner = src!.Replace((char)92, '/');
+                var asTarget = Edits.FileReplacements.Any(x =>
+                    x.Target.Equals(srcInner, StringComparison.OrdinalIgnoreCase)
+                    && !x.Source.Equals(srcInner, StringComparison.OrdinalIgnoreCase));
+                if (_pack?.Archive?.Find(srcInner) is not null && !asTarget && TabsUsing(srcInner).Count == 0)
+                {
+                    if (!Edits.RemoveFiles.Contains(srcInner, StringComparer.OrdinalIgnoreCase))
+                        Edits.RemoveFiles.Add(srcInner);
+                    // 它如果还是"本会话刚加进包的素材"（同路径新增那条）→ 连那条一起撤掉
+                    Edits.FileReplacements.RemoveAll(x =>
+                        x.Target.Equals(srcInner, StringComparison.OrdinalIgnoreCase)
+                        && x.Source.Equals(srcInner, StringComparison.OrdinalIgnoreCase));
+                    Log?.Invoke($"换图：来源 {Path.GetFileName(srcInner)} 没被任何页签用着 → 已顺手从包里删掉" +
+                                "（移动，不留重复）　待导出");
+                }
+            }
         }
         if (renamed.Count > 0)
             Log?.Invoke($"换图：页签 {category} 的图名和页签 key 不一致（历史遗留）→ 保存时会一并改成标准命名：" +
@@ -1478,6 +1500,43 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             return $"单兵 {one}；多兵 {many}；空组 {empty}；没配前缀 {none}";
         }
         finally { ProjectKey = save; }
+    }
+
+    /// <summary>自检（--ui-selftest）⑰：换图"移动"语义 —— 来源是**没人用的包内素材**时，换完自动把它
+    /// 从包里删掉（进 RemoveFiles）。跑完把测试编辑撤掉，不留痕。</summary>
+    public string SelfTestArtMove()
+    {
+        try
+        {
+            var pack = _pack?.Archive;
+            if (pack is null) return "(包没开)";
+            var tabs = TabKeys();
+            if (tabs.Count == 0) return "(没有页签)";
+            var cat = tabs[0];
+            var target = ArtInnerOf("background_images_", cat);
+            string? orphan = null;
+            foreach (var e in pack.VisibleEntries)
+            {
+                var p = e.Path.Replace((char)92, '/');
+                if (!p.StartsWith(TwuiTabs.SkinDir + "background_images_", StringComparison.OrdinalIgnoreCase)) continue;
+                var n = Path.GetFileName(p);
+                var srcTry = TwuiTabs.SkinDir + n;
+                if (TabsUsing(srcTry).Count > 0) continue;       // 有人在用
+                if (SameArt(srcTry, target)) continue;           // 和目标内容一样 → 换图会走"没变化"分支
+                orphan = n; break;
+            }
+            if (orphan is null) return "(包里没有'没人用且内容不同'的背景图，测不了)";
+            var src = TwuiTabs.SkinDir + orphan;
+            SetTabArt(cat, src, null);
+            var hit = Edits.RemoveFiles.Any(p => p.EndsWith(orphan, StringComparison.OrdinalIgnoreCase));
+            // 撤掉这次测试编辑（只动和这张图相关的）
+            Edits.RemoveFiles.RemoveAll(p => p.EndsWith(orphan, StringComparison.OrdinalIgnoreCase));
+            Edits.FileReplacements.RemoveAll(x =>
+                x.Target.EndsWith(orphan, StringComparison.OrdinalIgnoreCase)
+                || x.Source.EndsWith(orphan, StringComparison.OrdinalIgnoreCase));
+            return $"来源 {orphan}（没人用）→ 换图后自动删：{(hit ? "✓ 已进删除名单" : "✗ 没删")}（测试编辑已撤）";
+        }
+        catch (Exception ex) { return "(移动语义自检失败：" + ex.Message + ")"; }
     }
 
     /// <summary>这个页签 key 在"包 + 待导出"里有没有结构（本会话新建的页签 / categories 行 / twui holder_tab）。</summary>

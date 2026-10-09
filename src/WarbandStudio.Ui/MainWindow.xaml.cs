@@ -775,6 +775,8 @@ public partial class MainWindow : Window
         FileLog.Write("[selftest] ⑮ 新组命名：" + _vm.SelfTestGroupNaming());
         // ⑯ 工程目录往返：建临时工程 → 项目 key 落盘回读 → 历史版本保留 N 份（v1.5.0 工程化的最小闭环）
         FileLog.Write("[selftest] ⑯ 工程往返：" + _vm.SelfTestProjectRoundTrip());
+        // ⑰ 换图"移动"语义：来源是没人用的包内素材 → 换完自动把来源从包里删掉（不留同内容不同名的重复）
+        FileLog.Write("[selftest] ⑰ 换图移动：" + _vm.SelfTestArtMove());
     }
 
     /// <summary>双击文件树里的 DB 表 → 中间栏开表视图（原生解码）。</summary>

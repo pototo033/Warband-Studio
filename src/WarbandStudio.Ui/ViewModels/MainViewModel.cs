@@ -2242,6 +2242,9 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>自检（--ui-selftest）⑮：新组命名规则（`<前缀>_<页签>_<兵种词…>`；见 Backend.SelfTestGroupNaming）。</summary>
     public string SelfTestGroupNaming() => _backend.SelfTestGroupNaming();
 
+    /// <summary>自检（--ui-selftest）⑰：换图"移动"语义（来源是没人用的包内素材 → 换完自动删来源；见 Backend.SelfTestArtMove）。</summary>
+    public string SelfTestArtMove() => _backend.SelfTestArtMove();
+
     /// <summary>自检（--ui-selftest）前置：启动 = 空状态后，⑫~⑮ 都依赖"有个打开的包" ——
     /// 现场用内置 WUU 素材在临时目录生成一个测试包并打开（已有包就直接用）。</summary>
     public async Task SelfTestPrepareAsync()
