@@ -1000,14 +1000,35 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>从素材库移除（只删本地那份，不动任何包）。</summary>
     public bool RemoveUiAsset(UiAsset a)
     {
-        // **直接从素材库删除**；只有删不掉（文件还被占用）才退一步记名字，下次加载再删
+        // **直接从素材库删除**；删不掉（文件还被占用）就退一步记名字，下次加载再删。
         TryDelete(a.File);
         var ok = !File.Exists(a.File);
-        if (ok) DropRemovedName(a.Name);        // 删掉了就顺便把以前的名单记录划掉
-        else AddRemovedName(a.Name);
-        Log?.Invoke(ok ? $"素材库移除：{a.Name}（已删除）"
+        // **删成功也要记账**（v1.5.8 修）：内置素材（bundled/uilibrary 里有的）删掉文件后，SeedUiLibrary
+        // 会按"缺了就补"**立刻/下次铺回来** → 列表里"移除了却没变化"（用户实测"部分移除没有实时改变"）。
+        // 记进 removed.txt 才真的不再出现；以后重新导入同名文件时 ImportUiAssets 会把这条划掉
+        // （「恢复内置素材」按钮可整批复位）。
+        AddRemovedName(a.Name);
+        Log?.Invoke(ok ? $"素材库移除：{a.Name}（已删除；内置的不会再铺回来）"
                        : $"素材库移除：{a.Name}（文件还被占用，已记入 removed.txt，下次启动再删）");
         return true;
+    }
+
+    /// <summary>「恢复内置素材」：清空 removed.txt（忘掉"删过哪些"）+ 删版本号触发重铺 → 内置素材按原样回来。
+    /// 用户自己导入的（bundle 里没有的名字）不受影响。</summary>
+    public string ResetUiLibrary()
+    {
+        try
+        {
+            var f = Path.Combine(UiLibraryDir, "removed.txt");
+            if (File.Exists(f)) File.Delete(f);
+            var ver = Path.Combine(UiLibraryDir, "_version.txt");
+            if (File.Exists(ver)) File.Delete(ver);       // 删版本号 → Seed 走"升级覆盖"分支 → 内置的按原样重铺
+            SeedUiLibrary();
+            var n = UiLibrary().Count;
+            Log?.Invoke($"素材库：已恢复内置素材（removed.txt 清空 + 重铺），列表现在 {n} 张");
+            return $"已恢复内置素材，素材库现在 {n} 张";
+        }
+        catch (Exception ex) { Log?.Invoke("恢复内置素材失败：" + ex.Message); return "恢复失败：" + ex.Message; }
     }
 
     /// <summary>把素材库里的这张图**加进当前编辑的包**（按 <see cref="UiAsset.PackPath"/>；导出时无则新增、有则覆盖）。不动画布。</summary>
@@ -1540,6 +1561,46 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             return $"来源 {orphan}（没人用）→ 换图后自动删：{(hit ? "✓ 已进删除名单" : "✗ 没删")}（测试编辑已撤）";
         }
         catch (Exception ex) { return "(移动语义自检失败：" + ex.Message + ")"; }
+    }
+
+    /// <summary>自检（--ui-selftest）⑲：素材库"移除"要真的移除 —— 内置素材删掉后不能被 seed 铺回来
+    /// （v1.5.8 修的"部分移除没有实时改变"）。**先备份再恢复**，不动用户素材库。</summary>
+    public string SelfTestUiLibraryRemove()
+    {
+        string? backup = null;
+        string? victimFile = null;
+        var victimName = "";
+        try
+        {
+            var lib = UiLibrary();
+            var victim = lib.FirstOrDefault(x => x.Kind == "bg") ?? lib.FirstOrDefault();
+            if (victim is null) return "(素材库是空的，测不了)";
+            victimFile = victim.File;
+            victimName = victim.Name;
+            backup = victimFile + ".selftest_bak";
+            File.Copy(victimFile, backup, true);
+            RemoveUiAsset(victim);                        // 删 + 记账
+            _ = UiLibrary();                              // 再"加载"一次（会跑 Seed —— 以前这一下就把它铺回来了）
+            var stayedGone = !File.Exists(victimFile);
+            var notInList = UiLibrary().All(x => !x.Name.Equals(victimName, StringComparison.OrdinalIgnoreCase));
+            var ok = stayedGone && notInList;
+            return $"删「{victimName}」→ 再加载：{(stayedGone ? "文件没被铺回来 ✓" : "✗ 又被铺回来了")}；" +
+                   $"列表里{(notInList ? "已消失 ✓" : "还在 ✗")}（跑完恢复原样）";
+        }
+        catch (Exception ex) { return "(素材库移除自检失败：" + ex.Message + ")"; }
+        finally
+        {
+            try { if (victimName.Length > 0) DropRemovedName(victimName); } catch { }
+            try
+            {
+                if (backup is not null && victimFile is not null && File.Exists(backup))
+                {
+                    File.Copy(backup, victimFile, true);
+                    File.Delete(backup);
+                }
+            }
+            catch { }
+        }
     }
 
     /// <summary>这个页签 key 在"包 + 待导出"里有没有结构（本会话新建的页签 / categories 行 / twui holder_tab）。</summary>

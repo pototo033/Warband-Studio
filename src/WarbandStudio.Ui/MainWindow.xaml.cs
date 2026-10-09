@@ -499,6 +499,14 @@ public partial class MainWindow : Window
         _vm.ImportUiAssets(dlg.FileNames, kind);
     }
 
+    /// <summary>左下「UI 素材库」→「恢复内置素材」：把删掉的内置素材铺回来（删错了的救回来）。</summary>
+    private void OnUiAssetReset(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Confirm is not null &&
+            !_vm.Confirm("把删掉的内置素材重新铺回来？\n（清空\"已移除\"名单；你自己导入的素材不受影响）")) return;
+        _vm.ResetUiLibrary();
+    }
+
     /// <summary>左下「UI 素材库」右键 → 从素材库移除（只删本地那份）。</summary>
     private void OnUiAssetRemove(object sender, RoutedEventArgs e)
     {
@@ -790,6 +798,8 @@ public partial class MainWindow : Window
         FileLog.Write("[selftest] ⑰ 换图移动：" + _vm.SelfTestArtMove());
         // ⑱ 工程多包：识别清单里的包，打开工程时一起开；没识别的不开
         FileLog.Write("[selftest] ⑱ 工程多包：" + await _vm.SelfTestMultiPackAsync());
+        // ⑲ 素材库移除：内置素材删掉后不能被 seed 铺回来（"部分移除没有实时改变"的修复回归）
+        FileLog.Write("[selftest] ⑲ 素材库移除：" + _vm.SelfTestUiLibraryRemove());
     }
 
     /// <summary>双击文件树里的 DB 表 → 中间栏开表视图（原生解码）。</summary>

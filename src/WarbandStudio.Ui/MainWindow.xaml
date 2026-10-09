@@ -293,6 +293,8 @@
                                         ToolTip="选一张或多张 .png 作为**背景图**加进本地素材库（导入时先改成 background_images_new_added&lt;N&gt;.png，用到页签上再改成 background_images_&lt;页签key&gt;.png）" />
                                 <Button Content="导入按钮图…" Padding="10,3" Margin="6,0,0,0" Click="OnUiAssetImport" Tag="btn"
                                         ToolTip="选一张或多张 .png 作为**按钮图**加进本地素材库（导入时先改成 button_upgrade_new_added&lt;N&gt;.png，用到页签上再改成 button_upgrade_&lt;页签key&gt;.png）" />
+                                <Button Content="恢复内置素材" Padding="10,3" Margin="6,0,0,0" Click="OnUiAssetReset"
+                                        ToolTip="把删掉的内置素材重新铺回来（清空&quot;已移除&quot;名单；你自己导入的不受影响）" />
                                 <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="11"
                                            Foreground="{DynamicResource Text.Secondary}"
                                            Text="本地素材库（内置 WUU+雪乃 + 你导入的）；右键一张图 →「添加到当前包」= 导出时写进你编辑的 pack（不动画布）" />

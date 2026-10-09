@@ -606,6 +606,13 @@ public sealed class MainViewModel : ObservableObject
         Status = msg;
     }
 
+    /// <summary>「恢复内置素材」：清空"已移除"名单 + 重铺内置素材；刷新列表。</summary>
+    public void ResetUiLibrary()
+    {
+        Status = _backend.ResetUiLibrary();
+        LoadUiAssets();
+    }
+
     /// <summary>从素材库移除一条（只删本地那份，不动任何包）。</summary>
     public bool RemoveUiAsset(UiAssetItem? item)
     {
@@ -2321,6 +2328,9 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>自检（--ui-selftest）⑰：换图"移动"语义（来源是没人用的包内素材 → 换完自动删来源；见 Backend.SelfTestArtMove）。</summary>
     public string SelfTestArtMove() => _backend.SelfTestArtMove();
+
+    /// <summary>自检（--ui-selftest）⑲：素材库移除要真的移除（内置素材删后不能被 seed 铺回来；见 Backend.SelfTestUiLibraryRemove）。</summary>
+    public string SelfTestUiLibraryRemove() => _backend.SelfTestUiLibraryRemove();
 
     /// <summary>自检（--ui-selftest）⑱：工程多包"识别清单" —— 建临时工程 + 两个包 → 打开工程时两个都自动开；
     /// 清单里去掉一个、关工程重开 → 只开清单里的那个（没识别的不开）。跑完清理。</summary>
