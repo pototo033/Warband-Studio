@@ -14,6 +14,9 @@ namespace WarbandStudio.Pack;
 /// `Yukino_Upgrade_Skv`/`Vmp`/`Emp`（只差大小写）。玩家侧的 MOD 里作者已经把"第二个 skv 文件"
 /// 命名为 `SKV_B` 了，可见这种事真实存在。所以**落表前先做忽略大小写的同名查找**：
 /// 已经有就并进那一份、沿用它的原始拼写，绝不造出大小写孪生文件（游戏按文件名加载，孪生 = 谁赢说不准）。
+///
+/// 另一个坑：**文件名结尾是数字**会被 RPFM 体检报「Table name ends in number」（那个"只有作者本人不崩"的
+/// 怪毛病）——所以生成名字时把结尾的数字换成字母（`SKV2` → `SKVB`，见 <see cref="NoTrailingDigits"/>）。
 /// </summary>
 public static class TabFileNaming
 {
@@ -44,9 +47,32 @@ public static class TabFileNaming
         return sb.Length == 0 ? fallback : sb.ToString();
     }
 
-    /// <summary>`&lt;项目key&gt;_Upgrade_&lt;页签key&gt;`（项目key 空 → studio）。</summary>
+    /// <summary>
+    /// **文件名结尾的数字换成字母**（RPFM 体检「Table name ends in number」：DB 表文件名以数字结尾会触发一个
+    /// "只有做它的人不崩、别人一进就崩"的怪问题）。规则：1=A、2=B、…、9=I、0=J（按顺序接下去），
+    /// 结尾是连续多个数字就整段换（MOD12 → MODAB）。例：页签 SKV2 的文件 → `..._SKVB`，EMP3 → `..._EMPC`。
+    /// 只动文件名，页签 key / 组名 / 图名都不变。
+    /// </summary>
+    public static string NoTrailingDigits(string name)
+    {
+        var end = name.Length;
+        var start = end;
+        while (start > 0 && char.IsAsciiDigit(name[start - 1])) start--;
+        if (start == end) return name;
+        var sb = new System.Text.StringBuilder(name[..start]);
+        for (var i = start; i < end; i++) sb.Append(DigitLetter(name[i]));
+        return sb.ToString();
+    }
+
+    private static char DigitLetter(char d) => d switch
+    {
+        '1' => 'A', '2' => 'B', '3' => 'C', '4' => 'D', '5' => 'E',
+        '6' => 'F', '7' => 'G', '8' => 'H', '9' => 'I', '0' => 'J', _ => d,
+    };
+
+    /// <summary>`&lt;项目key&gt;_Upgrade_&lt;页签key&gt;`（项目key 空 → studio；结尾数字换成字母，见 <see cref="NoTrailingDigits"/>）。</summary>
     public static string FileNameOf(string? projectKey, string? tab) =>
-        $"{Sanitize(projectKey, "studio")}_Upgrade_{Sanitize(tab, FallbackTab)}";
+        NoTrailingDigits($"{Sanitize(projectKey, "studio")}_Upgrade_{Sanitize(tab, FallbackTab)}");
 
     /// <summary>`db/&lt;表&gt;/&lt;项目key&gt;_Upgrade_&lt;页签key&gt;`。</summary>
     public static string PathOf(string table, string? projectKey, string? tab) =>

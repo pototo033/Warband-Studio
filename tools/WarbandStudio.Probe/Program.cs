@@ -43,6 +43,7 @@ try
         "milgroups" => WarbandStudio.Probe.MilGroups.Run(args),
         "tidy-overrides" => WarbandStudio.Probe.TidyOverrides.Run(args),
         "tab-split" => WarbandStudio.Probe.TabSplit.Run(args),
+        "fix-table-names" => WarbandStudio.Probe.FixTableNames.Run(args),
         "new-tab" => WarbandStudio.Probe.NewTabFix.Run(args),
         "add-cost" => WarbandStudio.Probe.AddCost.Run(args),
         "set-file" => WarbandStudio.Probe.SetFile.Run(args),
@@ -83,6 +84,7 @@ void Usage()
           probe table-rows <pack> <表名> <组合键列（逗号分隔）> [原版.pack]
           probe tidy-overrides <pack> [out.pack]
           probe tab-split <pack> [out.pack] --key Yukino [--drop <包内路径>]... [--dry-run]
+          probe fix-table-names <pack> [out.pack] [--dry-run]
           probe new-tab <pack> <KEY> [--donor MOD2] [--bg 路径] [--btn 路径] [--vanilla db.pack] [--out out.pack] [--empty-group]
 
         环境变量 PROBE_TRACE=1 打印每条 WS 收发。
