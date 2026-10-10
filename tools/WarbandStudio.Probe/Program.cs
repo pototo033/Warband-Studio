@@ -42,6 +42,7 @@ try
         "amend-test" => WarbandStudio.Probe.AmendTestRunner.Run(args),
         "milgroups" => WarbandStudio.Probe.MilGroups.Run(args),
         "tidy-overrides" => WarbandStudio.Probe.TidyOverrides.Run(args),
+        "tab-split" => WarbandStudio.Probe.TabSplit.Run(args),
         "new-tab" => WarbandStudio.Probe.NewTabFix.Run(args),
         "add-cost" => WarbandStudio.Probe.AddCost.Run(args),
         "set-file" => WarbandStudio.Probe.SetFile.Run(args),
@@ -81,6 +82,7 @@ void Usage()
           probe roundtrip <pack> <pack内路径> <工作目录>
           probe table-rows <pack> <表名> <组合键列（逗号分隔）> [原版.pack]
           probe tidy-overrides <pack> [out.pack]
+          probe tab-split <pack> [out.pack] --key Yukino [--drop <包内路径>]... [--dry-run]
           probe new-tab <pack> <KEY> [--donor MOD2] [--bg 路径] [--btn 路径] [--vanilla db.pack] [--out out.pack] [--empty-group]
 
         环境变量 PROBE_TRACE=1 打印每条 WS 收发。
@@ -213,10 +215,13 @@ async Task<int> NativeList(string[] a)
     using var pack = WarbandStudio.Packfile.PackArchive.Open(Path.GetFullPath(a[1]));
     sw.Stop();
 
-    if (plain)
+    if (plain || a.Contains("--sizes"))
     {
-        // 用 VisibleEntries：和 RPFM 自己的文件列表语义一致（不含 *.rpfm_reserved 内部文件）
-        foreach (var e in pack.VisibleEntries) Console.WriteLine(e.Path);
+        // --plain：全量路径（和 RPFM 自己的文件列表语义一致，不含 *.rpfm_reserved 内部文件）
+        // --sizes：全量路径 + 存储大小（两个包做差异对比用：大小不同 = 内容多半不同）
+        var withSizes = a.Contains("--sizes");
+        foreach (var e in pack.VisibleEntries)
+            Console.WriteLine(withSizes ? $"{e.Path}\t{e.StoredSize}" : e.Path);
         return 0;
     }
 

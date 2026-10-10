@@ -21,6 +21,12 @@ public sealed class WarbandEdits
     public sealed record LinkEdit(string Child, string Parent, int ChildPos, int ParentPos,
                                   double ParentOffset, double ChildOffset, double MidOffset);
 
+    /// <summary>
+    /// 工程的项目 key：新行落表的文件名要用（`&lt;key&gt;_Upgrade_&lt;页签&gt;`，见 <see cref="TabFileNaming"/>）。
+    /// 空 = studio（无工程时的兜底）。Backend 在导出前设置。
+    /// </summary>
+    public string ProjectKey { get; set; } = "";
+
     public List<(string Unit, string Group)> AddJunction { get; } = [];
     public List<(string Unit, string Group)> RemoveJunction { get; } = [];
     public List<string> AddGroup { get; } = [];
@@ -248,6 +254,7 @@ public sealed class WarbandEdits
     public WarbandEdits Clone()
     {
         var c = new WarbandEdits();
+        c.ProjectKey = ProjectKey;
         c.AddJunction.AddRange(AddJunction);
         c.RemoveJunction.AddRange(RemoveJunction);
         c.AddGroup.AddRange(AddGroup);

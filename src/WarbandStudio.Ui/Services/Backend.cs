@@ -872,8 +872,10 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         {
             var pack = _pack?.Archive;
             if (pack is null) return set;
-            const string EditFileName = WarbandAmender.EditFileName;      // studio_edits
-            const string LayoutFileName = WarbandAmender.LayoutFileName;  // studio_layout
+            const string EditFileName = WarbandAmender.EditFileName;      // studio_edits（页签本体/授权/成本）
+            // v1.5.9：页签内容表（组/兵↔组/坐标/连线/路线）的新行按页签分文件 <项目key>_Upgrade_<页签>；
+            // 红标和落表共用同一个解析器（TabResolver），两边口径不会飘
+            var res = new WarbandStudio.Pack.TabResolver(pack, Edits, GetSchema());
             void Studio(string table, string file) => set.Add($"db/{table}/{file}");
             // **只标真的会被改到的那个文件**：删行是"改原文件"，所以逐个文件解码、看它里面有没有被删的行
             // （以前整张表全标红，"我只改了一部分却全红"就是这么来的）
@@ -900,12 +902,14 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             const string Routes = "unit_upgrade_to_unit_groups_tables";
             const string Links = "unit_upgrade_group_ui_links_tables";
             const string Cats = "unit_upgrade_group_ui_categories_tables";
-            if (Edits.AddJunction.Count > 0 || Edits.RemoveJunction.Count > 0) Studio(Junc, EditFileName);
+            if (Edits.AddJunction.Count > 0)
+                foreach (var j in Edits.AddJunction) set.Add(res.PathFor(Junc, j.Group));
             var dropJ = KeySet(Edits.RemoveJunction.Select(x => x.Unit + "" + x.Group));
             if (dropJ.Count > 0)
                 DropFiles(Junc, t => Enumerable.Range(0, t.Rows.Count)
                     .Any(i => dropJ.Contains(CellOf(t, "unit", i) + "" + CellOf(t, "unit_group", i))));
-            if (Edits.AddGroup.Count > 0) Studio(Groups, EditFileName);
+            if (Edits.AddGroup.Count > 0)
+                foreach (var g in Edits.AddGroup) set.Add(res.PathFor(Groups, g));
             var dropG = KeySet(Edits.RemoveGroup);
             if (dropG.Count > 0)
             {
@@ -919,9 +923,9 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             }
             if (Edits.InfoEdits.Count > 0)
             {
-                Studio(Infos, LayoutFileName);
                 // 坐标/页签是**就地改原文件**的（覆盖表抢不过 MOD 自己的文件，见 WarbandAmender 步骤 3）——
-                // 所以"包里已经有这一行、值又不一样"的文件也要标红
+                // 所以"包里已经有这一行、值又不一样"的文件也要标红；包里**没有**行的组 → 标它要落的新页签文件
+                var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var f in TableFiles.EntriesFor(pack, Infos))
                 {
                     try
@@ -930,21 +934,28 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
                         var kc = t.Columns.FindIndex(c => c.Name.Equals("unit_upgrade_group", StringComparison.OrdinalIgnoreCase));
                         if (kc < 0) continue;
                         var hit = false;
-                        for (var i = 0; i < t.Rows.Count && !hit; i++)
+                        for (var i = 0; i < t.Rows.Count; i++)
                         {
                             if (!Edits.InfoEdits.TryGetValue(t.Rows[i][kc].ToTsv(), out var w)) continue;
-                            hit = CellOf(t, "x", i) != w.X.ToString() || CellOf(t, "y", i) != w.Y.ToString()
-                                  || (w.Category is not null && !CellOf(t, "category", i).Equals(w.Category, StringComparison.OrdinalIgnoreCase));
+                            found.Add(t.Rows[i][kc].ToTsv());
+                            if (CellOf(t, "x", i) != w.X.ToString() || CellOf(t, "y", i) != w.Y.ToString()
+                                || (w.Category is not null && !CellOf(t, "category", i).Equals(w.Category, StringComparison.OrdinalIgnoreCase)))
+                                hit = true;
                         }
                         if (hit) set.Add(f.Path.Replace(Path.DirectorySeparatorChar, '/'));
                     }
                     catch { }
                 }
+                foreach (var g in Edits.InfoEdits.Keys)
+                    if (!found.Contains(g)) set.Add(res.PathForTab(Infos, res.TabOf(g)));
             }
-            if (Edits.AddRoute.Count > 0) Studio(Routes, EditFileName);
+            if (Edits.AddRoute.Count > 0)
+                foreach (var r in Edits.AddRoute) set.Add(res.PathFor(Routes, r.Base));
             var dropR = KeySet(Edits.RemoveRoute);
             if (dropR.Count > 0) DropFiles(Routes, t => Enumerable.Range(0, t.Rows.Count).Any(i => dropR.Contains(CellOf(t, "upgrade_key", i))));
-            if (Edits.AddLink.Count > 0) Studio(Links, EditFileName);
+            if (Edits.AddLink.Count > 0)
+                foreach (var l in Edits.AddLink)
+                    set.Add(res.PathForTab(Links, res.TabOf(l.Child) ?? res.TabOf(l.Parent)));
             var dropL = KeySet(Edits.RemoveLink.Select(x => x.Child + "" + x.Parent));
             if (dropL.Count > 0)
                 DropFiles(Links, t => Enumerable.Range(0, t.Rows.Count)
@@ -2584,6 +2595,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             throw new FileNotFoundException("找不到原版包：" + vanilla);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        Edits.ProjectKey = ProjectKey;      // 新行落表文件名要用：<项目key>_Upgrade_<页签>（见 TabFileNaming）
         var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), Edits);
         sw.Stop();
         Log?.Invoke($"导出完成：{destPath}（解锁 {rep.Unlocked} 个兵，{sw.ElapsedMilliseconds} ms）");

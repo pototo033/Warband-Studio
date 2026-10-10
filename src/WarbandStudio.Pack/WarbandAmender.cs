@@ -7,15 +7,19 @@ namespace WarbandStudio.Pack;
 /// 把画布上的编辑**落进包**（"直接改 pack"：不引入工具自己的项目层）。
 ///
 /// 落表策略（TW 的表是"多文件 + 按 key 覆盖"，两条路子各有适用面）：
-///   · **新增 / 改值** → 写一张覆盖表文件 `db/&lt;表&gt;/studio_edits`（键相同的行覆盖原行，键不同就是新行）；
-///     组坐标/页签沿用原来的 `studio_layout`。
+///   · **新增** → 页签内容表（组/兵↔组/坐标/连线/路线）写进
+///     `db/&lt;表&gt;/&lt;项目key&gt;_Upgrade_&lt;页签key&gt;`（和作者的文件风格对齐，一个页签一套，见 <see cref="TabFileNaming"/>）；
+///     页签本体/授权/成本写 `db/&lt;表&gt;/zzzz_studio_edits`（跨页签共用，不归属单个页签）。
+///   · **改值** → 已经有这一行的文件**就地改**（多文件按文件名定胜负，决不留第二份数据抢同一个 key）。
 ///   · **删行** → 只能改**原来那个文件**（覆盖表删不掉别人的行）：把它解出来、滤掉目标行、原样重编回去。
 /// 编码器与解码器是逐字节往返验证过的（verify_native.py ①），所以重编不会破坏其余内容。
 /// </summary>
 public static class WarbandAmender
 {
-    public const string EditFileName = "zzzz_studio_edits";   // 名字排最后：游戏按文件名加载，后加载的覆盖前面的（以前叫 studio_edits，会被 Yukino_ 这类文件顶掉）
-    public const string LayoutFileName = "zzzz_studio_layout"; // 同上：坐标/页签的覆盖表必须排最后
+    /// <summary>页签本体/授权/成本这些"不归属单个页签"的表的新行文件（名字排最后：同名 key 就是它赢）。</summary>
+    public const string EditFileName = "zzzz_studio_edits";
+    /// <summary>旧版的坐标覆盖表名（新行不再写这里；只在 <see cref="MigrateLegacy"/> 里给老包做旧名搬家）。</summary>
+    public const string LayoutFileName = "zzzz_studio_layout";
 
     private sealed record Meta(SchemaDefinition Def, string Guid, bool Mysterious);
 
@@ -91,6 +95,9 @@ public static class WarbandAmender
         const string Links = "unit_upgrade_group_ui_links_tables";
         const string Costs = "resource_costs_tables";
 
+        // 新行的落表归属：页签内容表按"这一行属于哪个页签"分文件（v1.5.9，见 TabFileNaming）
+        var res = new TabResolver(pack, e, schema, repl);
+
         // ── 1) 兵 ↔ 组 ──
         if (e.AddJunction.Count > 0)
             changed += AddRows(pack, vanilla, Junc, schema, repl, notes,
@@ -98,7 +105,8 @@ public static class WarbandAmender
                 {
                     ["unit"] = j.Unit,
                     ["unit_group"] = j.Group,
-                }));
+                }),
+                pathOf: r => res.PathFor(Junc, (string)r["unit_group"]));
 
         if (e.RemoveJunction.Count > 0)
         {
@@ -111,7 +119,8 @@ public static class WarbandAmender
         if (e.AddGroup.Count > 0)
             changed += AddRows(pack, vanilla, Groups, schema, repl, notes,
                 e.AddGroup.Select(g => new Dictionary<string, object> { ["unit_group"] = g }),
-                keyCols: ["unit_group"]);
+                keyCols: ["unit_group"],
+                pathOf: r => res.PathFor(Groups, (string)r["unit_group"]));
 
         if (e.RemoveGroup.Count > 0)
         {
@@ -198,36 +207,43 @@ public static class WarbandAmender
                     notes.Add($"{f}：就地改 {hit} 个组的坐标/页签");
                 }
 
-                // ② 包里没有行的组 → 覆盖表
+                // ② 包里没有行的组 → 覆盖表（v1.5.9：按归属页签分文件 <项目key>_Upgrade_<页签>，
+                //    认不出页签的落"其他"；名字跟已有的同（忽略大小写）就并进那一份）
                 var need = want.Keys.Where(k => !done.Contains(k)).ToList();
                 if (need.Count > 0)
                 {
-                    var layoutPath = $"db/{Infos}/{LayoutFileName}";
-                    var baseBytes = CurrentBytes(pack, repl, layoutPath);
-                    DbTable? baseT = null;
-                    if (baseBytes is not null) { try { baseT = DbTable.Decode(baseBytes, Infos, schema); } catch { baseT = null; } }
-                    var raws = baseT is null ? new List<DbValue[]>() : baseT.RawRows.Select(r => (DbValue[])r.Clone()).ToList();
-                    var kc2 = baseT is null ? -1 : baseT.Columns.FindIndex(c => c.Name.Equals("unit_upgrade_group", StringComparison.OrdinalIgnoreCase));
                     var added2 = 0;
-                    foreach (var k in need)
+                    var touched = new List<string>();
+                    foreach (var grp in need.GroupBy(k => res.PathForTab(Infos, res.TabOf(k))))
                     {
-                        var w = want[k];
-                        var raw = Build(meta, new Dictionary<string, object>
+                        var targetPath = grp.Key;
+                        var baseBytes = CurrentBytes(pack, repl, targetPath);
+                        DbTable? baseT = null;
+                        if (baseBytes is not null) { try { baseT = DbTable.Decode(baseBytes, Infos, schema); } catch { baseT = null; } }
+                        var raws = baseT is null ? new List<DbValue[]>() : baseT.RawRows.Select(r => (DbValue[])r.Clone()).ToList();
+                        var kc2 = baseT is null ? -1 : baseT.Columns.FindIndex(c => c.Name.Equals("unit_upgrade_group", StringComparison.OrdinalIgnoreCase));
+                        foreach (var k in grp)
                         {
-                            ["unit_upgrade_group"] = k,
-                            ["x"] = (long)w.X,
-                            ["y"] = (long)w.Y,
-                            ["category"] = w.Cat ?? "",
-                        });
-                        var at = -1;
-                        if (baseT is not null && kc2 >= 0)
-                            for (var i = 0; i < baseT.Rows.Count; i++)
-                                if (baseT.Rows[i][kc2].ToTsv().Equals(k, StringComparison.OrdinalIgnoreCase)) { at = i; break; }
-                        if (at >= 0) raws[at] = raw; else { raws.Add(raw); added2++; }
+                            var w = want[k];
+                            var raw = Build(meta, new Dictionary<string, object>
+                            {
+                                ["unit_upgrade_group"] = k,
+                                ["x"] = (long)w.X,
+                                ["y"] = (long)w.Y,
+                                ["category"] = w.Cat ?? "",
+                            });
+                            var at = -1;
+                            if (baseT is not null && kc2 >= 0)
+                                for (var i = 0; i < baseT.Rows.Count; i++)
+                                    if (baseT.Rows[i][kc2].ToTsv().Equals(k, StringComparison.OrdinalIgnoreCase)) { at = i; break; }
+                            if (at >= 0) raws[at] = raw; else { raws.Add(raw); added2++; }
+                        }
+                        repl[targetPath] = baseT is null ? Encode(meta, raws) : EncodeLike(baseT, raws);
+                        changed++;
+                        touched.Add(targetPath);
                     }
-                    repl[layoutPath] = baseT is null ? Encode(meta, raws) : EncodeLike(baseT, raws);
-                    changed++;
-                    notes.Add($"坐标/页签：{need.Count} 个组写进 {LayoutFileName} 覆盖表（包里原本没有它们的行，新增 {added2}）");
+                    notes.Add($"坐标/页签：{need.Count} 个组（包里原本没有它们的行）写进 " +
+                              string.Join("、", touched.Select(System.IO.Path.GetFileName)) + $"（新增 {added2}）");
                 }
             }
             else notes.Add("坐标：包里没有 unit_upgrade_group_ui_infos_tables，这台表的编辑没落。");
@@ -313,7 +329,9 @@ public static class WarbandAmender
                         ["required_rank"] = (long)r.RequiredRank,
                         ["subtracted_rank"] = (long)r.SubtractedRank,
                     }),
-                    keyCols: ["upgrade_key"]);    // 同一条升级改金额/换方向 = 同 key 覆盖（后写的为准）
+                    keyCols: ["upgrade_key"],    // 同一条升级改金额/换方向 = 同 key 覆盖（后写的为准）
+                    // 跨页的路线跟 base 那一端走（用户口径）；base 认不出页签的行落"其他"文件
+                    pathOf: r => res.PathFor(Routes, (string)r["base_unit_group"]));
         }
 
         if (e.RemoveRoute.Count > 0)
@@ -410,7 +428,9 @@ public static class WarbandAmender
                         ["child_link_position_offset"] = l.ChildOffset,
                         ["mid_link_offset"] = l.MidOffset,
                     }),
-                    keyCols: ["child_key", "parent_key"]);   // 键表第一列 child_key 不唯一，不能只看它
+                    keyCols: ["child_key", "parent_key"],   // 键表第一列 child_key 不唯一，不能只看它
+                    // 连线按"对"归属：child 认不出就看 parent（连线本来就不跨页）
+                    pathOf: r => res.PathForTab(Links, res.TabOf((string)r["child_key"]) ?? res.TabOf((string)r["parent_key"])));
         }
 
         if (e.RemoveLink.Count > 0)
@@ -1207,22 +1227,57 @@ public static class WarbandAmender
     }
 
     /// <summary>
-    /// 往 <c>db/&lt;表&gt;/studio_edits</c> 追加行（本包里已有同名文件就接着写）。
-    /// <paramref name="keyCols"/> = 这张表的"身份列"：
-    ///   · 有身份列（键表）→ **同身份以最后一条为准**（覆盖表语义；否则"建了路线再改金额/交换方向"会被静默丢掉）；
-    ///   · 没有身份列（键不唯一的表，如 junction / links）→ 按**整行**去重，追加而不是互相覆盖
-    ///     （同一个兵可以同时在两个组里，按第一列去重会把另一行吃掉）。
+    /// 往覆盖表追加行。**页签内容表按行归属的页签分文件**（`db/&lt;表&gt;/&lt;项目key&gt;_Upgrade_&lt;页签&gt;`，见
+    /// <see cref="TabFileNaming"/>）；其余表（页签本体/授权/成本）仍旧写 `db/&lt;表&gt;/zzzz_studio_edits`。
+    /// 目标文件里已有内容就接着写（repl 优先，避免"先加后删"丢行）。
+    ///   · <paramref name="pathOf"/> = 每行各自的目标文件（返回 null = 该表默认的 zzzz_studio_edits）；
+    ///   · <paramref name="keyCols"/> = 这张表的"身份列"：
+    ///     · 有身份列（键表）→ **同身份以最后一条为准**（覆盖表语义；否则"建了路线再改金额/交换方向"会被静默丢掉）；
+    ///     · 没有身份列（键不唯一的表，如 junction / links）→ 按**整行**去重，追加而不是互相覆盖
+    ///       （同一个兵可以同时在两个组里，按第一列去重会把另一行吃掉）。
     /// </summary>
     private static int AddRows(PackArchive pack, PackArchive? vanilla, string table, Schema schema,
                                Dictionary<string, byte[]> repl, List<string> notes,
-                               IEnumerable<Dictionary<string, object>> rows, string[]? keyCols = null)
+                               IEnumerable<Dictionary<string, object>> rows, string[]? keyCols = null,
+                               Func<Dictionary<string, object>, string?>? pathOf = null)
+    {
+        if (pathOf is null)
+            return AddRowsToFile(pack, vanilla, table, schema, repl, notes, rows, keyCols, null);
+        // 按目标文件分组（先做"忽略大小写同名归并"：两个拼写算同一个文件，不能分两组写 —— 后写的会盖掉先写的）
+        var groups = new Dictionary<string, List<Dictionary<string, object>>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in rows)
+        {
+            var want = pathOf(r) ?? $"db/{table}/{EditFileName}";
+            var key = CanonicalTarget(pack, repl, table, want);
+            if (!groups.TryGetValue(key, out var lst)) groups[key] = lst = [];
+            lst.Add(r);
+        }
+        var n = 0;
+        foreach (var kv in groups)
+            n += AddRowsToFile(pack, vanilla, table, schema, repl, notes, kv.Value, keyCols, kv.Key);
+        return n;
+    }
+
+    /// <summary>表内已存在的同名（忽略大小写）条目 → 用它的原始拼写（防"大小写孪生文件"）。</summary>
+    private static string CanonicalTarget(PackArchive pack, Dictionary<string, byte[]> repl, string table, string want)
+    {
+        foreach (var p in TablePaths(pack, table, repl))
+            if (p.Replace('\\', '/').Equals(want, StringComparison.OrdinalIgnoreCase)) return p.Replace('\\', '/');
+        return want;
+    }
+
+    /// <summary>AddRows 的实际落盘：往 <paramref name="innerPathOverride"/>（null = zzzz_studio_edits）追加行。</summary>
+    private static int AddRowsToFile(PackArchive pack, PackArchive? vanilla, string table, Schema schema,
+                                     Dictionary<string, byte[]> repl, List<string> notes,
+                                     IEnumerable<Dictionary<string, object>> rows, string[]? keyCols,
+                                     string? innerPathOverride)
     {
         if (!TryMeta(pack, vanilla, table, schema, out var meta, out _))
         {
             notes.Add($"{table}：原始包与原版包里都没有这张表，这部分编辑没落表。");
             return 0;
         }
-        var innerPath = $"db/{table}/{EditFileName}";
+        var innerPath = innerPathOverride ?? $"db/{table}/{EditFileName}";
         var raws = new List<DbValue[]>();
         var at = new Dictionary<string, int>(StringComparer.Ordinal);
 
