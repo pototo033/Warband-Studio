@@ -1,5 +1,21 @@
 # 新工具 UI 模块与空间约定
 
+> v1.5.16（2026-10-15）：移除归属逐行等宽按钮，军事组栏列实际命中的组 key，专属栏列“单位 key → 派系 faction”；
+> 只显示当前范围命中的授权，多选汇总去重，无分配时显示明确空状态并禁用对应按钮，长 key 换行及面板滚动。
+
+> v1.5.15（2026-10-14）：取消通用子节点，其单位与编辑并入种族；共用组的传奇派系仍独立显示。
+> 派系归属同时认军事组与专属表 allowed=true，种族也认本种族派系的专属许可；画布单位不因缺权隐藏。
+> 种族加兵默认写该种族全部军事组，派系加兵只写目标派系专属许可。
+> 蓝色表示没有任何军事组或正向专属许可，黄色表示已有其他权限但不满足当前范围；获得当前授权后不打缺权角标。
+> 悬浮列出全部军事组、专属许可与当前来源；右键移除提供专属许可、军事组、全部三种选择，原版授权保留并提示无法取消。
+
+> v1.5.12（2026-10-13）：取消单位重复确认、移出旧组及兵种库灰显。同一单位可以加入多个组、页签和画布。
+> 以下 v0.29 / v0.86 的重复限制为历史记录，已被本规则取代。
+
+> v1.5.11（2026-10-13）：三栏槽位保持，工具栏按工程/保存/工具分组，状态信息移到底栏；
+> 工具栏和素材操作换行，欢迎页与全局选项滚动，右栏默认 300 宽，窗口最小 1100×700。
+> 工作台样式位于 `Themes/Workspace.xaml`，代码维护入口见 `项目结构与维护入口.md`。
+
 > 这份是**设计约定**（用户拍板的），改界面先看它。
 > 原则：**功能照老工坊（战帮树工坊）的做法，UI 按这里的布局；整体模块化，四周预留槽位。**
 
@@ -66,7 +82,7 @@
 - 尚未落表：新组要写 `unit_upgrade_groups_tables` + junction + 组坐标，**写回在下一步**（现在只在内存里记着）；
 - 显示名还没接 loc（现在显示 key）；
 
-## 四、画布（中）——只画"当前页签 + 当前派系"的兵牌树
+## 四、画布（中）——当前页签的完整兵牌树，军事组用角标区分
 
 - 页签来自 `unit_upgrade_group_ui_infos_tables.category`（只列当前坐标层真有组的页签 + 自建页签）；
 - 组按 `x/y` 落位，同组多兵 +46 并排；
@@ -104,7 +120,7 @@
 |---|---|
 | 拖兵牌改坐标 | `unit_upgrade_group_ui_infos_tables` 的 `x/y`（就地改原文件；新组补 `<项目key>_Upgrade_<页签>`） |
 | 卡片面板「归到页签」 | 同上表的 `category` |
-| 兵种库双击 / 拖入画布 | `unit_to_unit_group_junctions_tables`（`unit`+`unit_group`）；新组还写 `unit_upgrade_groups_tables`。**这个兵已在别的组里 → 先弹确认，继续就删掉旧 junction 行（覆盖、只留这次的组）** |
+| 兵种库双击 / 拖入画布 | `unit_to_unit_group_junctions_tables`（`unit`+`unit_group`）；新组还写 `unit_upgrade_groups_tables`。同单位允许属于多个组，不删除其他组的关系；同组关系去重。 |
 | 卡片面板「删除这张兵卡」 | junction 删行；组里只剩它时等于删组 |
 | 「删除整组」 | 删 `unit_upgrade_groups_tables` + junction + infos + 该组两端的 `ui_links` + 该组两端的升级路线 |
 | 连接模式：点两个组 → «建立升级» | `unit_upgrade_to_unit_groups_tables`（`upgrade_key`/`base_unit_group`/`target_unit_group`/`resource_cost`/`required_rank`/`subtracted_rank`）**＋** `unit_upgrade_group_ui_links_tables`（C1：箭头读这张表），勾「互相升级」再写一条反向 |
@@ -413,7 +429,7 @@ restrict_xp_gain_in_campaign=false"（测试特意挑了一个 **RoR** 兵，因
 ### 还没做
 
 - 页签背景图导入（给已有页签换背景：真机上要写回包里的 background_images_<key>.png，目前只做了显示）
-- 派系专属授权（`units_to_exclusive_faction_permissions_tables`，配合加兵时的 `unitXfPlus`）
+- 派系专属授权已于 v1.5.15 接通，入口为派系级加兵与右键添加/移除归属，旧 `unitXfPlus` 方案不再作为待办。
 - 「剔除无效记录」开关（老工坊有：把解析不了的引用行真删掉）
 - 快捷键清单里剩下的那些（`Ctrl+D` 复制组、`Ctrl+M` 移动到页签、空格平移、`+/-` 缩放、`Alt+↑↓` 切页签、`Ctrl+F` 搜索…）
 

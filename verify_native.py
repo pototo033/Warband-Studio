@@ -185,6 +185,7 @@ def main():
                 "links": "db/unit_upgrade_group_ui_links_tables",
                 "infos": "db/unit_upgrade_group_ui_infos_tables",
                 "grants": "db/units_to_groupings_military_permissions_tables",
+                "exclusive": "db/units_to_exclusive_faction_permissions_tables",
             }
             args = []
             for key, inner in folders.items():
@@ -285,6 +286,12 @@ def main():
             check("加兵时按军事组授权写进了 units_to_groupings_military_permissions_tables",
                   has(grants, unit=plan.get("grantUnit", ""), military_group=plan.get("grantGroup", "")) is not None,
                   detail=f"期望 {plan.get('grantUnit')} → {plan.get('grantGroup')}")
+            exclusive = table_rows(os.path.join(ex, "exclusive"))
+            for faction in plan.get("exclusiveFactions", []):
+                row = has(exclusive, key=plan["grantUnit"], faction=faction)
+                check(f"派系专属许可组合键落表：{faction}",
+                      row is not None and row.get("allowed", "").lower() in ("true", "1"),
+                      detail=f"期望 {plan['grantUnit']} → {faction} allowed=true")
             # 加进画布的兵自动解锁战役经验（zzzz_studio_elite_unlock 覆盖表）
             unl = os.path.join(TMP, "unlock")
             cli(cli_exe, "pack", "extract", "-p", amend, "-t", schema,

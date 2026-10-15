@@ -24,6 +24,14 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path $PSScriptRoot -Parent
 $RelDir = Join-Path $Root "release"
 
+function Assert-ReleasePath([string]$Path) {
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $boundary = [IO.Path]::GetFullPath($RelDir).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($boundary, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "发布临时路径超出 release 目录：$resolved"
+    }
+}
+
 # ① 发布名 = **直接用地给的版本号**（2026-10-07 用户拍板：v1.4.1 就发 v1.4.1；旧的"推送改名 v1.x+1"规则废弃）
 $Release = ([string]$Version).Trim().TrimStart('v', 'V')
 $Src = Join-Path $RelDir "WarbandStudio_v$Release"
@@ -51,7 +59,7 @@ $tag = "v$Release"
 
 Write-Host "[=] 发布 $tag → $repo" -ForegroundColor Cyan
 Write-Host "    完整包：$fullZip"
-Write-Host "    程序包：$appZip（只含 exe + WarbandStudio.*.dll + Web/ + update_repo.txt）"
+Write-Host "    程序包：$appZip（exe + WarbandStudio.*.dll + Web/ + schemas/ + update_repo.txt）"
 if ($DryRun) { Write-Host "    [dry] 不打包、不上传" ; return }
 
 # ② 完整包
@@ -61,7 +69,13 @@ if (Test-Path $fullZip) { Remove-Item $fullZip -Force }
 $packsDir = Join-Path $Src "packs"
 $packsParked = $null
 # 暂存位置必须在 $Src **外面**：放里面会被一起打进包（v1.4.1 第一次打包踩过：143 应 133 MB）
-if (Test-Path $packsDir) { $packsParked = Join-Path $RelDir "_packs_parking"; Move-Item $packsDir $packsParked -Force }
+if (Test-Path $packsDir) {
+    $packsParked = Join-Path $RelDir "_packs_parking"
+    Assert-ReleasePath $packsDir
+    Assert-ReleasePath $packsParked
+    if (Test-Path $packsParked) { throw "源包暂存目录已存在，请先检查：$packsParked" }
+    Move-Item -LiteralPath $packsDir -Destination $packsParked -Force
+}
 try {
     Compress-Archive -Path $Src -DestinationPath $fullZip -Force
 } finally {
@@ -69,8 +83,9 @@ try {
 }
 Write-Host ("[✓] 完整包：{0:N1} MB" -f ((Get-Item $fullZip).Length / 1MB)) -ForegroundColor Green
 
-# ③ 程序包（只收"会随版本变"的那几样；rpfm/ 与 bundled/ 不变，不重复下）
+# ③ 程序包（程序、Web 与 schema；rpfm/ 与 bundled/ 不重复下）
 $appTmp = Join-Path $RelDir "_app_pack"
+Assert-ReleasePath $appTmp
 if (Test-Path $appTmp) { Remove-Item $appTmp -Recurse -Force }
 New-Item -ItemType Directory -Path $appTmp | Out-Null
 foreach ($f in @("WarbandStudio.exe", "WarbandStudio.dll", "WarbandStudio.deps.json", "WarbandStudio.runtimeconfig.json",
@@ -80,9 +95,30 @@ foreach ($f in @("WarbandStudio.exe", "WarbandStudio.dll", "WarbandStudio.deps.j
     if (Test-Path $p) { Copy-Item $p $appTmp }
 }
 Copy-Item (Join-Path $Src "Web") $appTmp -Recurse
+# schema 会随游戏补丁更新，老用户覆盖程序包时必须一并获得新版。
+Copy-Item (Join-Path $Src "schemas") $appTmp -Recurse
 Compress-Archive -Path (Join-Path $appTmp "*") -DestinationPath $appZip -Force
 Remove-Item $appTmp -Recurse -Force
 Write-Host ("[✓] 程序包：{0:N1} MB" -f ((Get-Item $appZip).Length / 1MB)) -ForegroundColor Green
+
+# 两种下载必须都带上本次构建的 schema，且字节完全一致。
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$expectedSchemaHash = (Get-FileHash -LiteralPath (Join-Path $Src 'schemas/schema_wh3.ron') -Algorithm SHA256).Hash
+foreach ($archivePath in @($fullZip, $appZip)) {
+    $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        $schemaEntry = @($archive.Entries | Where-Object {
+            $_.FullName.Replace('\', '/') -match '(^|/)schemas/schema_wh3\.ron$'
+        })
+        if ($schemaEntry.Count -ne 1) { throw "发布包 schema 缺失或重复：$archivePath" }
+        $schemaStream = $schemaEntry[0].Open()
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try { $actualHash = [BitConverter]::ToString($hasher.ComputeHash($schemaStream)).Replace('-', '') }
+        finally { $schemaStream.Dispose(); $hasher.Dispose() }
+        if ($actualHash -ne $expectedSchemaHash) { throw "发布包 schema 校验失败：$archivePath" }
+    } finally { $archive.Dispose() }
+}
+Write-Host "[✓] 完整包与程序包的 schema 校验通过" -ForegroundColor Green
 
 # ④ 上传（gh CLI）
 # gh：优先用工作区里的（<工作区>\tools\gh\gh.exe，和 build.ps1 找 dotnet 一个路子），没有就退回 PATH

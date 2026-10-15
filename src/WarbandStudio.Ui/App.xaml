@@ -8,6 +8,7 @@
                 <!-- 顺序照派大星规范：先主题色 → 再控件模板 -->
                 <ResourceDictionary Source="Themes/Tokens.xaml" />
                 <ResourceDictionary Source="Themes/Controls.xaml" />
+                <ResourceDictionary Source="Themes/Workspace.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         </ResourceDictionary>

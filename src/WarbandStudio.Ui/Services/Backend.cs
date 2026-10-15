@@ -12,7 +12,7 @@ namespace WarbandStudio.Ui.Services;
 ///   · **写 / 诊断 / 生成依赖缓存** → 随包的 rpfm_cli（RPFM 4.7.4）：按需拉起，用到才要。
 /// schema（schema_wh3.ron）随包，首次读表时载入一次（约 170ms）。
 /// </summary>
-public sealed class Backend(AppSettings settings) : IAsyncDisposable
+public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private RpfmCli? _cli;
@@ -121,21 +121,11 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
 
     /// <summary>
     /// 兵种库双击/拖入：加兵到组；新组连组一起建。
-    /// <paramref name="overwrite"/> = 画布上已经问过"这个兵已经被使用，是否继续加入" → 继续就**覆盖之前的表单**：
-    /// 把这个兵旧的 junction 行删掉，只留这一次加入的位置。
+    /// 同一单位可以属于多个组，添加关系不移除其他组或页签中的关系。
     /// </summary>
-    public void AddUnitToGroup(string group, string unit, int x, int y, bool isNewGroup, string? category = null,
-                               bool overwrite = false)
+    public void AddUnitToGroup(string group, string unit, int x, int y, bool isNewGroup, string? category = null)
     {
-        NoteElite(unit);                       // RoR/精英：自动解锁战役经验（否则招出来锁 0 级）
-        var movedFrom = new List<string>();
-        if (overwrite)
-            foreach (var g in GroupsOfUnit(unit))
-                if (!g.Equals(group, StringComparison.OrdinalIgnoreCase))
-                {
-                    Edits.SetJunction(unit, g, false);
-                    movedFrom.Add(g);
-                }
+        NoteElite(unit);                       // RoR/精英：自动解锁战役经验
         Edits.SetJunction(unit, group, true);
         if (isNewGroup) Edits.SetGroup(group, true);
         // 加进**已有组**时别用消息里的坐标：那是页面渲染时的快照，刚拖动过就可能过期
@@ -148,8 +138,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         }
         var cat = category ?? (Edits.InfoEdits.TryGetValue(group, out var old) ? old.Category : null);
         Edits.InfoEdits[group] = (x, y, cat);
-        Log?.Invoke($"画布加兵：{unit} → 组 {group}（{x},{y}）{(isNewGroup ? "（新组）" : "")}" +
-                    (movedFrom.Count > 0 ? $"；覆盖：已把旧的从 {string.Join("、", movedFrom)} 移出" : "") + "　待导出");
+        Log?.Invoke($"画布加兵：{unit} → 组 {group}（{x},{y}）{(isNewGroup ? "（新组）" : "")}　待导出");
     }
 
     /// <summary>删一张兵卡（组里只剩它时用 <see cref="RemoveGroup"/>）。</summary>
@@ -265,18 +254,27 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>
     /// 加兵时按当前选中的**种族/派系**自动填军事组授权
     /// （`units_to_groupings_military_permissions_tables`）：
-    ///   传 faction → 只填这个派系的军事组；只传 race → 填该种族的**所有**军事组（通用组 + 各专属组）。
+    ///   传 faction → 写派系专属表 allowed=true；只传 race → 填该种族的**所有**军事组。
     /// </summary>
     public int GrantUnit(string unit, string? race, string? faction)
     {
-        var (byFac, byRace) = MilGroups();
-        var groups = new List<string>();
-        if (!string.IsNullOrWhiteSpace(faction) && byFac.TryGetValue(faction!, out var info)) groups.Add(info.Group);
-        else if (!string.IsNullOrWhiteSpace(race) && byRace.TryGetValue(race!, out var gs)) groups.AddRange(gs);
+        if (faction?.StartsWith("generic:", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            race = faction[8..];
+            faction = null;
+        }
+        if (!string.IsNullOrWhiteSpace(faction))
+        {
+            Edits.SetExclusive(unit, faction, true);
+            InvalidateCanvas();
+            Log?.Invoke($"派系专属授权：{unit} → {faction}（allowed=true）");
+            return 1;
+        }
+        var groups = SelectedMilitaryGroups(race, null);
         foreach (var g in groups.Distinct(StringComparer.OrdinalIgnoreCase))
             Edits.SetUnitGroup(unit, g, true);
         if (groups.Count > 0) InvalidateCanvas();
-        Log?.Invoke($"军事组授权：{unit} → {(groups.Count == 0 ? "（没选种族/派系，未填）" : string.Join(" + ", groups))}");
+        Log?.Invoke($"种族军事组授权：{unit} → {(groups.Count == 0 ? "（没选种族，未填）" : string.Join(" + ", groups))}");
         return groups.Count;
     }
 
@@ -565,23 +563,81 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         if (!Edits.UnlockXp.Contains(unit, StringComparer.OrdinalIgnoreCase)) Edits.UnlockXp.Add(unit);
     }
 
-    /// <summary>把兵从当前军事组里移除（组右键菜单）：删 units_to_groupings_military_permissions 的行。</summary>
-    public void RemoveUnitFromMilGroup(IEnumerable<string> units, string? race, string? faction)
+    /// <summary>按选定渠道移除当前范围的 MOD 授权，保留两类原版许可。</summary>
+    public string RemoveUnitFromMilGroup(IEnumerable<string> units, string? race, string? faction, string kind = "all")
     {
-        var (byFac, byRace) = MilGroups();
-        var groups = new List<string>();
-        if (!string.IsNullOrWhiteSpace(faction) && byFac.TryGetValue(faction!, out var info)) groups.Add(info.Group);
-        else if (!string.IsNullOrWhiteSpace(race) && byRace.TryGetValue(race!, out var gs)) groups.AddRange(gs);
-        var n = 0;
-        foreach (var u in units)
-            foreach (var g in groups.Distinct(StringComparer.OrdinalIgnoreCase))
+        if (kind is not ("military" or "exclusive" or "all")) throw new ArgumentException("未知归属移除类型。", nameof(kind));
+        if (faction?.StartsWith("generic:", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            race = faction[8..];
+            faction = null;
+        }
+        var groups = SelectedMilitaryGroups(race, faction);
+        var original = ReadVanillaMilitaryPermissions();
+        var originalExclusive = ReadVanillaExclusivePermissions();
+        var data = BuildMilitaryAssignmentData();
+        var military = data["units"] as System.Text.Json.Nodes.JsonObject;
+        var exclusive = data["exclusive"] as System.Text.Json.Nodes.JsonObject;
+        var factionRaces = data["factionRaces"] as System.Text.Json.Nodes.JsonObject;
+        IEnumerable<string> Assigned(System.Text.Json.Nodes.JsonObject? map, string key) =>
+            (map?.FirstOrDefault(pair => pair.Key.Equals(key, StringComparison.OrdinalIgnoreCase)).Value as System.Text.Json.Nodes.JsonArray)?
+                .Select(value => value!.GetValue<string>()) ?? [];
+        bool InScope(string f) => !string.IsNullOrWhiteSpace(faction)
+            ? f.Equals(faction, StringComparison.OrdinalIgnoreCase)
+            : !string.IsNullOrWhiteSpace(race) && factionRaces?.Any(pair => pair.Key.Equals(f, StringComparison.OrdinalIgnoreCase)
+                && pair.Value?.GetValue<string>().Equals(race, StringComparison.OrdinalIgnoreCase) == true) == true;
+        var blockedMilitary = new List<string>();
+        var blockedExclusive = new List<string>();
+        var nMilitary = 0;
+        var nExclusive = 0;
+        var retainedMilitary = false;
+        var retainedExclusive = false;
+        foreach (var u in units.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var assignedGroups = new HashSet<string>(Assigned(military, u), StringComparer.OrdinalIgnoreCase);
+            var permitted = new HashSet<string>(Assigned(exclusive, u).Where(InScope), StringComparer.OrdinalIgnoreCase);
+            if (kind is "military" or "all")
+                foreach (var g in groups.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (original.TryGetValue(u, out var originalGroups) && originalGroups.Contains(g))
+                    {
+                        blockedMilitary.Add($"{u} → {g}");
+                        continue;
+                    }
+                    if (!assignedGroups.Contains(g)) continue;
+                    Edits.SetUnitGroup(u, g, false);
+                    nMilitary++;
+                }
+            if (kind is "exclusive" or "all")
             {
-                Edits.SetUnitGroup(u, g, false);
-                n++;
+                var targets = new HashSet<string>(permitted, StringComparer.OrdinalIgnoreCase);
+                if (originalExclusive.TryGetValue(u, out var vanillaFactions)) targets.UnionWith(vanillaFactions.Where(InScope));
+                foreach (var f in targets)
+                {
+                    if (originalExclusive.TryGetValue(u, out var vanillaPermissions) && vanillaPermissions.Contains(f))
+                    {
+                        blockedExclusive.Add($"{u} → {f}");
+                        continue;
+                    }
+                    if (!permitted.Contains(f)) continue;
+                    Edits.SetExclusive(u, f, false);
+                    nExclusive++;
+                }
             }
-        InvalidateCanvas();
-        Log?.Invoke($"移出军事组：{n} 条（{(groups.Count == 0 ? "没选种族/派系" : string.Join(" + ", groups))}）　待导出" +
-                    "　（组不会从画布/页签消失：拿掉全部军事组授权后画布给它们打「不在军事组」角标）");
+            retainedMilitary |= kind == "exclusive" && groups.Any(assignedGroups.Contains);
+            retainedExclusive |= kind == "military" && permitted.Count > 0;
+        }
+        if (nMilitary + nExclusive > 0) InvalidateCanvas();
+        var message = $"移除归属：军事组 {nMilitary} 条，专属许可 {nExclusive} 条，画布单位保留"
+            + (nMilitary + nExclusive > 0 ? "；待导出" : "；未改动授权");
+        if (blockedMilitary.Count > 0)
+            message += "；该单位已由原版授权军事组，无法移除：" + string.Join("；", blockedMilitary);
+        if (blockedExclusive.Count > 0)
+            message += "；该单位已由原版授权（派系专属表），无法取消，派系许可仍保留：" + string.Join("；", blockedExclusive);
+        if (retainedMilitary) message += "；仍有当前军事组授权，派系归属保留；共享军事组还会影响其他派系";
+        if (retainedExclusive) message += "；当前范围的专属许可仍保留";
+        Log?.Invoke(message);
+        return message;
     }
 
     /// <summary>新建页签（整套克隆：hierarchy 节点 + holder_tab + button_toggle_tab + 背景面板/条目，见 WarbandNewTab）。</summary>
@@ -966,6 +1022,17 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
             if (dropU.Count > 0)
                 DropFiles("units_to_groupings_military_permissions_tables", t => Enumerable.Range(0, t.Rows.Count)
                     .Any(i => dropU.Contains(CellOf(t, "unit", i) + "" + CellOf(t, "military_group", i))));
+            if (Edits.AddExclusive.Count > 0)
+            {
+                Studio("units_to_exclusive_faction_permissions_tables", EditFileName);
+                var enableExclusive = KeySet(Edits.AddExclusive.Select(x => x.Unit + "\u0001" + x.Faction));
+                DropFiles("units_to_exclusive_faction_permissions_tables", t => Enumerable.Range(0, t.Rows.Count)
+                    .Any(i => enableExclusive.Contains(CellOf(t, "key", i) + "\u0001" + CellOf(t, "faction", i))));
+            }
+            var dropExclusive = KeySet(Edits.RemoveExclusive.Select(x => x.Unit + "\u0001" + x.Faction));
+            if (dropExclusive.Count > 0)
+                DropFiles("units_to_exclusive_faction_permissions_tables", t => Enumerable.Range(0, t.Rows.Count)
+                    .Any(i => dropExclusive.Contains(CellOf(t, "key", i) + "\u0001" + CellOf(t, "faction", i))));
             if (Edits.UnlockXp.Count > 0) Studio("main_units_tables", WarbandExporter.UnlockTableFileName);
             if (Edits.NewTabs.Count > 0 || Edits.TabRenames.Count > 0)
             {
@@ -1641,438 +1708,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         return false;
     }
 
-    // ───────────────────────── 成本工坊 ─────────────────────────
-
-    /// <summary>资源池里的"资源"清单（成本工坊的「选择资源」下拉）：原版打底 + 本包覆盖。</summary>
-    public List<PooledResource> PooledResources()
-    {
-        var list = new List<PooledResource>();
-        try
-        {
-            var schema = GetSchema();
-            var notes = new List<string>();
-            PackArchive? vp = null;
-            var vanilla = VanillaDbPackPath;
-            if (vanilla is not null && File.Exists(vanilla)) vp = PackArchive.Open(vanilla);
-            try
-            {
-                var t = TableFiles.Merge(
-                    vp is null ? null : TableFiles.ReadMerged(vp, "pooled_resources_tables", schema, notes),
-                    TableFiles.ReadMerged(pack: _pack?.Archive!, "pooled_resources_tables", schema, notes));
-                if (t is not null)
-                {
-                    var k = Col(t, "key");
-                    if (k < 0) k = TableFiles.FindKeyColumn(t);
-                    var dn = Col(t, "display_name");
-                    var ic = Col(t, "optional_icon_path");
-                    foreach (var r in t.Rows)
-                    {
-                        var key = k >= 0 ? r[k].ToTsv() : "";
-                        if (key.Length == 0) continue;
-                        var name = dn >= 0 ? (Loc.Text(r[dn].ToTsv()) ?? "") : "";
-                        var icon = ic >= 0 ? r[ic].ToTsv() : "";
-                        var iconKey = "res_" + IconResolver.Stem(icon);
-                        list.Add(new PooledResource(key,
-                            name.Length > 0 ? name : key,
-                            icon.Length > 0 ? (Icons.UrlByPngName(icon, iconKey) ?? "") : "",
-                            icon.Length > 0 ? (Icons.IconFileFor(icon, iconKey) ?? "") : ""));
-                    }
-                }
-            }
-            finally { vp?.Dispose(); }
-        }
-        catch (Exception ex) { Log?.Invoke("资源清单跳过：" + ex.Message); }
-        // 包里新建的资源 / 池子引用到但资源表里暂时查不到的资源，也补进下拉（"保持可读取"）
-        try
-        {
-            var t2 = TableFiles.ReadMerged(_pack?.Archive!, "pooled_resource_factor_junctions_tables", GetSchema(), null);
-            if (t2 is not null)
-            {
-                var rs = Col(t2, "resource");
-                if (rs >= 0)
-                    foreach (var r in t2.Rows)
-                    {
-                        var key = r[rs].ToTsv();
-                        if (key.Length == 0 || list.Any(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase))) continue;
-                        list.Add(new PooledResource(key, key, "", ""));
-                    }
-            }
-        }
-        catch { }
-        list.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.CurrentCulture));
-        return list;
-    }
-
-    /// <summary>成本工坊的资源项（key / 显示名 / 图标 url）。</summary>
-    public sealed record PooledResource(string Key, string Name, string IconUrl, string IconFile);
-
-    /// <summary>已有成本（成本工坊的"选择修改"下拉）：id + 金币 +（有的话）额外资源、数量与**图标**。</summary>
-    public sealed record WarbandCost(string Id, long Gold, string Resource, long ResourceAmount, string PoolId, string ResourceIcon);
-
-    /// <summary>
-    /// 已有成本清单：**只列打开包里有的成本 id**（用户口径：下拉里只该出现"这个 mod 自己的"成本，
-    /// 原版 db.pack 那两千多条只是噪音；v0.146 以前是"原版打底 + 本包覆盖"）。
-    /// 资源/池的查找仍按"原版打底 + 本包覆盖"（作者的成本可能引用原版的池）。
-    /// 顺带把每条成本的"额外资源"查出来，并解析它的**图标文件**（下拉里资源显示成图标 + 数量，不再显示 key）。
-    /// </summary>
-    public List<WarbandCost> CostList()
-    {
-        var list = new List<WarbandCost>();
-        try
-        {
-            var schema = GetSchema();
-            var notes = new List<string>();
-            PackArchive? vp = null;
-            var vanilla = VanillaDbPackPath;
-            if (vanilla is not null && File.Exists(vanilla)) vp = PackArchive.Open(vanilla);
-            try
-            {
-                // 池 id → 资源 key（工具自己建的池叫 <资源>_warband_upgrade；作者自己起的名字也能查出来）
-                var poolRes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                var ft = TableFiles.Merge(
-                    vp is null ? null : TableFiles.ReadMerged(vp, "pooled_resource_factor_junctions_tables", schema, notes),
-                    TableFiles.ReadMerged(_pack?.Archive!, "pooled_resource_factor_junctions_tables", schema, notes));
-                if (ft is not null)
-                {
-                    var ui = Col(ft, "unique_id");
-                    if (ui < 0) ui = TableFiles.FindKeyColumn(ft);
-                    var rs = Col(ft, "resource");
-                    if (ui >= 0 && rs >= 0)
-                        foreach (var r in ft.Rows)
-                        {
-                            var id = r[ui].ToTsv();
-                            if (id.Length > 0) poolRes[id] = r[rs].ToTsv();
-                        }
-                }
-                // 成本 id → (池 id, 数量)
-                var pools = new Dictionary<string, (string Pool, long Amt)>(StringComparer.OrdinalIgnoreCase);
-                var jt = TableFiles.MergeComposite(
-                    vp is null ? null : TableFiles.ReadComposite(vp, "resource_cost_pooled_resource_junctions_tables",
-                        ["pooled_resource_factor", "resource_cost"], schema, notes),
-                    TableFiles.ReadComposite(_pack?.Archive!, "resource_cost_pooled_resource_junctions_tables",
-                        ["pooled_resource_factor", "resource_cost"], schema, notes),
-                    ["pooled_resource_factor", "resource_cost"]);
-                if (jt is not null)
-                {
-                    var pf = Col(jt, "pooled_resource_factor");
-                    var pc = Col(jt, "resource_cost");
-                    var pa = Col(jt, "amount");
-                    if (pf >= 0 && pc >= 0)
-                        foreach (var r in jt.Rows)
-                        {
-                            var cost = r[pc].ToTsv();
-                            if (cost.Length > 0) pools[cost] = (r[pf].ToTsv(), pa >= 0 ? (long)r[pa].Num : 0);
-                        }
-                }
-                // 资源 key → optional_icon_path（先只记路径；图标**用到才解析** —— 免得为几百种资源白抽一遍图）
-                var resIconPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                var rt = TableFiles.Merge(
-                    vp is null ? null : TableFiles.ReadMerged(vp, "pooled_resources_tables", schema, notes),
-                    TableFiles.ReadMerged(_pack?.Archive!, "pooled_resources_tables", schema, notes));
-                if (rt is not null)
-                {
-                    var rk = Col(rt, "key");
-                    if (rk < 0) rk = TableFiles.FindKeyColumn(rt);
-                    var ri = Col(rt, "optional_icon_path");
-                    if (rk >= 0 && ri >= 0)
-                        foreach (var r in rt.Rows)
-                        {
-                            var key = r[rk].ToTsv();
-                            var icon = r[ri].ToTsv();
-                            if (key.Length > 0 && icon.Length > 0) resIconPath[key] = icon;
-                        }
-                }
-                var iconDone = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                string IconOf(string resKey)
-                {
-                    if (resKey.Length == 0 || !resIconPath.TryGetValue(resKey, out var png)) return "";
-                    if (iconDone.TryGetValue(resKey, out var hit)) return hit;
-                    var f = Icons.IconFileFor(png, "res_" + IconResolver.Stem(png)) ?? "";
-                    iconDone[resKey] = f;
-                    return f;
-                }
-                // **只读本包**的 resource_costs_tables（原版那两千多条不再进下拉）
-                var t = TableFiles.ReadMerged(_pack?.Archive!, "resource_costs_tables", schema, notes);
-                if (t is not null)
-                {
-                    var k = Col(t, "id");
-                    if (k < 0) k = TableFiles.FindKeyColumn(t);
-                    var g = Col(t, "treasury_cost");
-                    if (k >= 0)
-                        foreach (var r in t.Rows)
-                        {
-                            var id = r[k].ToTsv();
-                            if (id.Length == 0) continue;
-                            pools.TryGetValue(id, out var pool);
-                            var res = pool.Pool is { Length: > 0 } pid && poolRes.TryGetValue(pid, out var rk2) ? rk2 : "";
-                            list.Add(new WarbandCost(id, g >= 0 ? (long)r[g].Num : 0, res, pool.Amt, pool.Pool ?? "",
-                                                     IconOf(res)));
-                        }
-                }
-                // —— 合并"待导出编辑"（repl 优先的口径）：新建/改过/删过的成本要**立刻**在清单里体现 ——
-                // 工坊"创建完下拉里马上能看到新 key"就靠这里；以前只读包 → 新成本要保存后才出现（用户实测）。
-                foreach (var id in Edits.RemoveCost)
-                    list.RemoveAll(x => x.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
-                foreach (var kv in Edits.AddCost)
-                {
-                    var gold = (long)kv.Value;
-                    var i = list.FindIndex(x => x.Id.Equals(kv.Key, StringComparison.OrdinalIgnoreCase));
-                    if (i >= 0) list[i] = list[i] with { Gold = gold };
-                    else list.Add(new WarbandCost(kv.Key, gold, "", 0, "", ""));
-                }
-                // 资源关联：先清"改过资源"的旧关联，再把本轮要写的关联并上（池 → 资源 也认本轮新建的池）
-                foreach (var id in Edits.RemovePoolCost)
-                {
-                    var i = list.FindIndex(x => x.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
-                    if (i >= 0) list[i] = list[i] with { Resource = "", ResourceAmount = 0, PoolId = "", ResourceIcon = "" };
-                }
-                foreach (var (poolFactor, costId, amount, _, _) in Edits.PoolCosts)
-                {
-                    var i = list.FindIndex(x => x.Id.Equals(costId, StringComparison.OrdinalIgnoreCase));
-                    if (i < 0) continue;
-                    var res = "";
-                    if (poolRes.TryGetValue(poolFactor, out var rk3)) res = rk3;
-                    else
-                    {
-                        var pf = Edits.PoolFactors.FirstOrDefault(f => f.UniqueId.Equals(poolFactor, StringComparison.OrdinalIgnoreCase));
-                        res = pf.Resource ?? "";
-                    }
-                    list[i] = list[i] with { Resource = res, ResourceAmount = amount, PoolId = poolFactor, ResourceIcon = IconOf(res) };
-                }
-            }
-            finally { vp?.Dispose(); }
-        }
-        catch (Exception ex) { Log?.Invoke("成本清单跳过：" + ex.Message); }
-        list.Sort((a, b) => string.Compare(a.Id, b.Id, StringComparison.OrdinalIgnoreCase));
-        return list;
-    }
-
-    /// <summary>
-    /// 重命名成本 id：**删旧 + 写新**（旧那条连着它的资源关联一起删，资源关联原样搬到新 id 下）。
-    /// 保存后包里不会再留旧 id —— 用户口径："改名后保存要覆盖掉改名前的成本"。
-    /// </summary>
-    public string RenameWarbandCost(string oldId, string newId)
-    {
-        oldId = (oldId ?? "").Trim(); newId = (newId ?? "").Trim();
-        if (newId.Length == 0) return "新 id 不能为空";
-        if (!newId.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-')) return "成本 id 只能用字母/数字/下划线/短横线";
-        if (_pack?.Archive is null) return "先打开一个包";
-        // **只按"完全一样"拦**：只改大小写（小写改大写）是合法的改名（用户实测：以前被当成"一样"拒掉）
-        if (oldId.Equals(newId, StringComparison.Ordinal)) return "新旧 id 完全一样，不用改";
-        // 重名检查要把"自己"排除掉（大小写不同也算同一个 key）——不然"只改大小写"会被当成撞名
-        var caseOnly = oldId.Equals(newId, StringComparison.OrdinalIgnoreCase);
-        if (Edits.AddCost.ContainsKey(newId) && !caseOnly) return $"已经有成本 id「{newId}」了";
-        if (ResourceCostExists(newId) && !caseOnly) return $"已经有成本 id「{newId}」了";
-        var gold = 0.0;
-        if (Edits.AddCost.TryGetValue(oldId, out var g0))
-        {
-            // 本会话新建的（还没落盘）：直接改 key，关联行跟着改 id
-            gold = g0;
-            Edits.AddCost.Remove(oldId);
-            for (var i = 0; i < Edits.PoolCosts.Count; i++)
-                if (Edits.PoolCosts[i].ResourceCost.Equals(oldId, StringComparison.OrdinalIgnoreCase))
-                    Edits.PoolCosts[i] = (Edits.PoolCosts[i].PoolFactor, newId, Edits.PoolCosts[i].Amount,
-                                          Edits.PoolCosts[i].Context, Edits.PoolCosts[i].UiPooled);
-        }
-        else
-        {
-            var hit = CostList().FirstOrDefault(c => c.Id.Equals(oldId, StringComparison.OrdinalIgnoreCase));
-            if (hit is null) return $"包里没有成本 id「{oldId}」（先从下拉里选一个）";
-            gold = hit.Gold;
-            if (!Edits.RemoveCost.Contains(oldId, StringComparer.OrdinalIgnoreCase)) Edits.RemoveCost.Add(oldId);
-            if (!Edits.RemovePoolCost.Contains(oldId, StringComparer.OrdinalIgnoreCase)) Edits.RemovePoolCost.Add(oldId);
-            if (hit.PoolId.Length > 0)
-            {
-                // 资源关联原样搬到新 id（池不动、数量照旧）
-                var (ctx, ui) = PoolJunctionProto();
-                Edits.PoolCosts.Add((hit.PoolId, newId, hit.ResourceAmount, ctx, ui));
-            }
-        }
-        // **本会话新建的路线**（还在待导出里）也要跟着改名：它们不在包里，上面那段读包读不到 ✗
-        // （用户实测：新建的升级 + 重命名成本 → 升级里还是旧成本）
-        for (var i = 0; i < Edits.AddRoute.Count; i++)
-            if (Edits.AddRoute[i].Cost.Equals(oldId, StringComparison.OrdinalIgnoreCase))
-                Edits.AddRoute[i] = Edits.AddRoute[i] with { Cost = newId };
-
-        // **路线表里引用旧 id 的成本要跟着改名**：不然升级会指向一个不存在的成本
-        // （`beastmen_dummy` 在用户包里被 16 条路线引用 —— 改名不带它们走就会留一堆悬空引用）
-        try
-        {
-            var sch = GetSchema();
-            var notes = new List<string>();
-            var routes = TableFiles.ReadConcat(_pack!.Archive!, "unit_upgrade_to_unit_groups_tables", sch, notes);
-            if (routes is not null)
-            {
-                var rk = Col(routes, "upgrade_key");
-                var rc = Col(routes, "resource_cost");
-                var rr = Col(routes, "required_rank");
-                var rs = Col(routes, "subtracted_rank");
-                if (rk >= 0 && rc >= 0)
-                    foreach (var row in routes.Rows)
-                    {
-                        if (!row[rc].ToTsv().Equals(oldId, StringComparison.OrdinalIgnoreCase)) continue;
-                        var rkey = row[rk].ToTsv();
-                        if (rkey.Length == 0) continue;
-                        // **带整行**（base/target/等级照抄作者那一行）：只带成本列要靠"空=不动"的约定，
-                        // 一旦约定没生效就会把两端/等级写坏（用户实测：改名后升级变成"不写成本"）
-                        var rb2 = Col(routes, "base_unit_group");
-                        var rt2 = Col(routes, "target_unit_group");
-                        Edits.SetRoute(new WarbandEdits.RouteEdit(rkey,
-                            rb2 >= 0 ? row[rb2].ToTsv() : "", rt2 >= 0 ? row[rt2].ToTsv() : "", newId,
-                            rr >= 0 ? (int)row[rr].Int : 0, rs >= 0 ? (int)row[rs].Int : 0), true);
-                    }
-            }
-        }
-        catch (Exception ex) { Log?.Invoke("重命名：路线表跟随失败：" + ex.Message); }
-
-        // **先删旧的再写新的**：`AddCost` 字典是"忽略大小写"的，不先删的话"只改大小写"会保留旧写法
-        // （`dict[新写法] = 值` 命中旧 key 时只更新值、**key 还是旧的**）→ 用户看到的"改大写又变回小写"。
-        Edits.AddCost.Remove(oldId);
-        Edits.AddCost[newId] = gold;
-        InvalidateCanvas();
-        var msg = $"成本工坊（重命名）：{oldId} → {newId}（旧的那条连同资源关联一起删）　待导出";
-        Log?.Invoke(msg);
-        return msg;
-    }
-
-    /// <summary>
-    /// 修改已有成本：金币就地改（`resource_costs_tables`）；资源那块**先把这条成本已有的关联清掉**，
-    /// 再按需要写新的一条（`resourceChanged=false` 就完全不碰资源，保留作者原来的池/关联）。
-    /// </summary>
-    public string UpdateWarbandCost(string costId, double gold, string? resourceKey, long resourceAmount, bool resourceChanged,
-                                    string? reusePoolId = null)
-    {
-        costId = (costId ?? "").Trim();
-        if (costId.Length == 0) return "成本 id 不能为空";
-        if (_pack?.Archive is null) return "先打开一个包";
-        Edits.AddCost[costId] = gold;
-        var parts = new List<string> { $"成本 {costId} → 金币 {gold:0}" };
-        if (resourceChanged)
-        {
-            Edits.RemovePoolCost.Add(costId);        // 清掉这条成本原来的资源关联（改原文件）
-            if (!string.IsNullOrWhiteSpace(resourceKey))
-            {
-                // 资源没变（只改数量）时**复用原来那个池**（作者自己起的池名别丢）；换资源才用 <资源>_warband_upgrade
-                var poolId = !string.IsNullOrWhiteSpace(reusePoolId) ? reusePoolId! : resourceKey + "_warband_upgrade";
-                if (!PoolFactorExists(poolId) && !Edits.PoolFactors.Any(x => x.UniqueId.Equals(poolId, StringComparison.OrdinalIgnoreCase)))
-                    Edits.PoolFactors.Add((poolId, "other", resourceKey!, -2147483647L, 2147483647L, "", 0));
-                var (ctx, ui) = PoolJunctionProto();
-                Edits.PoolCosts.Add((poolId, costId, resourceAmount, ctx, ui));
-                parts.Add($"改扣 {resourceAmount} 点 {resourceKey}");
-            }
-            else parts.Add("清掉了额外资源");
-        }
-        InvalidateCanvas();
-        var msg = "成本工坊（修改）：" + string.Join(" + ", parts) + "　待导出";
-        Log?.Invoke(msg);
-        return msg;
-    }
-
-    /// <summary>删成本：`resource_costs_tables` 那一行 + 它的资源关联（都是改原文件）。</summary>
-    public string DeleteWarbandCost(string costId)
-    {
-        costId = (costId ?? "").Trim();
-        if (costId.Length == 0) return "先选一个成本 id";
-        if (_pack?.Archive is null) return "先打开一个包";
-        Edits.AddCost.Remove(costId);                 // 本轮刚建的也撤掉
-        Edits.PoolCosts.RemoveAll(x => x.ResourceCost.Equals(costId, StringComparison.OrdinalIgnoreCase));
-        if (!Edits.RemoveCost.Contains(costId, StringComparer.OrdinalIgnoreCase)) Edits.RemoveCost.Add(costId);
-        if (!Edits.RemovePoolCost.Contains(costId, StringComparer.OrdinalIgnoreCase)) Edits.RemovePoolCost.Add(costId);
-        InvalidateCanvas();
-        var msg = $"成本工坊（删除）：{costId}（成本行 + 它的资源关联都删；资源池本身留着，别的成本可能还在用）　待导出";
-        Log?.Invoke(msg);
-        return msg;
-    }
-
-    /// <summary>
-    /// 成本工坊：建一个"战帮升级成本"——三张表一起写：
-    ///   ① `resource_costs_tables`：id = costId、treasury_cost = gold（**带符号**：负=消耗），
-    ///      后面几列是标签（照抄包里现有成本行）；
-    ///   ② `pooled_resource_factor_junctions_tables`：池 id = `&lt;资源名&gt;_warband_upgrade`（已有就复用），
-    ///      factor=other、resource=资源、min/max=∓2147483647、specific_faction_set 空、sort_order=0；
-    ///   ③ `resource_cost_pooled_resource_junctions_tables`：把成本条目和池关联起来，
-    ///      amount = 资源量（带符号），context/ui 两列照抄包里已有行。
-    /// </summary>
-    public string CreateWarbandCost(string costId, double gold, string? resourceKey, long resourceAmount)
-    {
-        costId = (costId ?? "").Trim();
-        if (costId.Length == 0) return "成本 id 不能为空";
-        if (!costId.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-')) return "成本 id 只能用字母/数字/下划线/短横线";
-        if (_pack?.Archive is null) return "先打开一个包";
-        if (Edits.AddCost.ContainsKey(costId) || ResourceCostExists(costId))
-            return $"已经有成本 id「{costId}」了（换个名字，或直接在升级里选它）";
-        Edits.AddCost[costId] = gold;
-        var parts = new List<string> { $"成本 {costId}（金币 {gold:0}）" };
-        if (!string.IsNullOrWhiteSpace(resourceKey))
-        {
-            var poolId = resourceKey + "_warband_upgrade";
-            if (!PoolFactorExists(poolId) && !Edits.PoolFactors.Any(x => x.UniqueId.Equals(poolId, StringComparison.OrdinalIgnoreCase)))
-            {
-                Edits.PoolFactors.Add((poolId, "other", resourceKey!, -2147483647L, 2147483647L, "", 0));
-                parts.Add($"新建资源池 {poolId}（factor=other）");
-            }
-            else parts.Add($"复用已有资源池 {poolId}");
-            var (ctx, ui) = PoolJunctionProto();
-            Edits.PoolCosts.Add((poolId, costId, resourceAmount, ctx, ui));
-            parts.Add($"{resourceAmount} 点 {resourceKey}");
-        }
-        InvalidateCanvas();
-        var msg = "成本工坊：" + string.Join(" + ", parts) + "　待导出";
-        Log?.Invoke(msg);
-        return msg;
-    }
-
-    /// <summary>包里（+本轮编辑）已经有这个成本 id 了吗。</summary>
-    private bool ResourceCostExists(string id)
-    {
-        try
-        {
-            var t = TableFiles.ReadConcat(_pack?.Archive!, "resource_costs_tables", GetSchema(), null);
-            if (t is null) return false;
-            var c = Col(t, "id");
-            if (c < 0) c = TableFiles.FindKeyColumn(t);
-            if (c < 0) return false;
-            foreach (var r in t.Rows)
-                if (r[c].ToTsv().Equals(id, StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        catch { }
-        return false;
-    }
-
-    /// <summary>包里已经有这个资源池 id 了吗（`pooled_resource_factor_junctions_tables.unique_id`）。</summary>
-    private bool PoolFactorExists(string uniqueId)
-    {
-        try
-        {
-            var t = TableFiles.ReadConcat(_pack?.Archive!, "pooled_resource_factor_junctions_tables", GetSchema(), null);
-            if (t is null) return false;
-            var c = Col(t, "unique_id");
-            if (c < 0) c = TableFiles.FindKeyColumn(t);
-            if (c < 0) return false;
-            foreach (var r in t.Rows)
-                if (r[c].ToTsv().Equals(uniqueId, StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        catch { }
-        return false;
-    }
-
-    /// <summary>成本↔资源池那张表的后两列（context / ui_resource_transaction_pooled_resource）：照抄包里第一行的写法。</summary>
-    private (string Context, string UiPooled) PoolJunctionProto()
-    {
-        try
-        {
-            var t = TableFiles.ReadConcat(_pack?.Archive!, "resource_cost_pooled_resource_junctions_tables", GetSchema(), null);
-            if (t is not null && t.Rows.Count > 0)
-            {
-                var c = Col(t, "context");
-                var u = Col(t, "ui_resource_transaction_pooled_resource");
-                return (c >= 0 ? t.Rows[0][c].ToTsv() : "absolute", u >= 0 ? t.Rows[0][u].ToTsv() : "default");
-            }
-        }
-        catch { }
-        return ("absolute", "default");
-    }
-
+    // 成本读写独立维护，复用原门面状态与资源链。
     /// <summary>twui 里已有的页签 key（新建页签对话框的下拉用）。</summary>
     public List<string> TabKeys()
     {
@@ -2513,6 +2149,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
     public void InvalidateCanvas()
     {
         _rev++;
+        _factionCache = null;
         _canvasCache = null;
         _canvasCacheKey = null;
     }
@@ -2926,46 +2563,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
                 var mine = legendFacs.TryGetValue(kv.Key, out var lc) ? lc : 0;             // 这个兵被几个传奇派系拿到
                 if (total > 1 && mine < total) unitExcl[kv.Key] = ToJsonArray(kv.Value);    // 只有部分传奇能用 → 专属
             }
-            // —— 叠加"待导出"的军事组授权：右键加入/移出之后，黄标要立刻跟着变 ——
-            if (Edits.AddUnitGroup.Count > 0 || Edits.RemoveUnitGroup.Count > 0)
-            {
-                var facByGroup = new Dictionary<string, List<(string Fac, string Race)>>(StringComparer.OrdinalIgnoreCase);
-                foreach (var f in allFactions)
-                    if (milByFac2.TryGetValue(f.Key, out var mi))
-                    {
-                        if (!facByGroup.TryGetValue(mi.Group, out var l)) facByGroup[mi.Group] = l = [];
-                        l.Add((f.Key, f.Subculture));
-                    }
-                void Touch(string unit, string group, bool add)
-                {
-                    if (!facByGroup.TryGetValue(group, out var fs2)) return;
-                    if (!unitFactions.TryGetValue(unit, out var fl)) unitFactions[unit] = fl = [];
-                    if (!unitRaces.TryGetValue(unit, out var rl)) unitRaces[unit] = rl = [];
-                    foreach (var (fac, race) in fs2)
-                    {
-                        if (add)
-                        {
-                            if (!fl.Contains(fac, StringComparer.OrdinalIgnoreCase)) fl.Add(fac);
-                            if (!rl.Contains(race, StringComparer.OrdinalIgnoreCase)) rl.Add(race);
-                        }
-                        else
-                        {
-                            fl.RemoveAll(x => x.Equals(fac, StringComparison.OrdinalIgnoreCase));
-                            rl.RemoveAll(x => x.Equals(race, StringComparison.OrdinalIgnoreCase));
-                        }
-                    }
-                }
-                foreach (var (u, g) in Edits.AddUnitGroup) Touch(u, g, true);
-                foreach (var (u, g) in Edits.RemoveUnitGroup) Touch(u, g, false);
-                unitExcl.Clear();
-                foreach (var kv in unitFactions)
-                {
-                    var races = unitRaces.TryGetValue(kv.Key, out var rl) ? rl : [];
-                    if (races.Count != 1) continue;
-                    var total = raceFactionCount.TryGetValue(races[0], out var n) ? n : 0;
-                    if (total > 1 && kv.Value.Count < total) unitExcl[kv.Key] = ToJsonArray(kv.Value);
-                }
-            }
+            // LoadFactions 已在组合键层叠加本轮授权，无需再次删改派系/种族并集。
             // 画布上"查不到归属"的兵：这类不打黄标（打标会误报），但把数量与样例记下来便于核对
             var unknownUnits = unitsByGroup.Values.SelectMany(x => x)
                 .Where(u => !unitFactions.ContainsKey(u)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -3339,6 +2937,7 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         jso["unitExcl"] = unitExcl;
         jso["groupRaces"] = gRaces;
         jso["groupFactions"] = gFactions;
+        jso["militaryAssignments"] = BuildMilitaryAssignmentData();
         jso["pageRaces"] = pageRaces;
         jso["pageFactions"] = pageFactions;
         jso["pageBg"] = pageBg;
@@ -3448,8 +3047,6 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
                 ["name"] = Loc.Text("cultures_subcultures_name_" + g.Key)
                            ?? Loc.Text("cultures_subcultures_confederation_screen_name_" + g.Key),
                 ["units"] = g.SelectMany(f => f.Units).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-                ["genericUnits"] = g.Where(f => !f.Legendary).SelectMany(f => f.Units)
-                                    .Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                 ["milGroups"] = milByRace.TryGetValue(g.Key, out var mgs) ? ToJsonArray(mgs) : new System.Text.Json.Nodes.JsonArray(),
                 ["factions"] = fs,
             });
@@ -3470,11 +3067,11 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
         else if (faction.StartsWith("race:", StringComparison.OrdinalIgnoreCase)
               || faction.StartsWith("generic:", StringComparison.OrdinalIgnoreCase))
         {
-            // race: 种族全部；generic: 该种族里的**非传奇**派系（界面上的「通用」）
+            // 旧通用 key 也并入整个种族，不再独立授权。
             var generic = faction.StartsWith("generic:", StringComparison.OrdinalIgnoreCase);
             var race = faction[(generic ? "generic:" : "race:").Length..];
-            label = race + (generic ? "（通用）" : "");
-            units = factions.Where(f => f.Subculture.Equals(race, StringComparison.OrdinalIgnoreCase) && (!generic || !f.Legendary))
+            label = race;
+            units = factions.Where(f => f.Subculture.Equals(race, StringComparison.OrdinalIgnoreCase))
                             .SelectMany(f => f.Units)
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
@@ -4014,10 +3611,22 @@ public sealed class Backend(AppSettings settings) : IAsyncDisposable
                 return d;
             }
 
-            var byGroup = grouping is null ? new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
-                                           : Bucket(grouping, Col(grouping, "unit"), Col(grouping, "military_group"), -1);
-            var byExclusive = excl is null ? new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
-                                           : Bucket(excl, Col(excl, "key"), Col(excl, "faction"), Col(excl, "allowed"));
+            // 兵种库与角标使用相同的本轮授权状态，不让缓存保留已移除的关系。
+            var byGroup = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (unit, groups) in ResolveMilitaryPermissions(grouping, Edits))
+                foreach (var group in groups)
+                {
+                    if (!byGroup.TryGetValue(group, out var units)) byGroup[group] = units = new(StringComparer.OrdinalIgnoreCase);
+                    units.Add(unit);
+                }
+            var byExclusive = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (unit, permittedFactions) in ResolveExclusivePermissions(excl, Edits))
+                foreach (var permittedFaction in permittedFactions)
+                {
+                    if (!byExclusive.TryGetValue(permittedFaction, out var permittedUnits))
+                        byExclusive[permittedFaction] = permittedUnits = new(StringComparer.OrdinalIgnoreCase);
+                    permittedUnits.Add(unit);
+                }
             var byBuilding = bua is null ? new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
                                          : Bucket(bua, Col(bua, "unit"), Col(bua, "faction"), Col(bua, "enabled"));
 

@@ -25,7 +25,7 @@ public sealed class ProjectPackRow(string full, string rel, string name, string 
 /// <summary>
 /// 主视图模型：后端生命周期、首跑向导、打开/保存 pack、文件树、诊断、日志。
 /// </summary>
-public sealed class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject
 {
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly Backend _backend;
@@ -320,7 +320,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (!Set(ref _selectedFaction, value)) return;
             _ = LoadLibraryAsync(value?.Key);
-            // 选种族 → 画布切到该种族的页签并显示全部（含专属兵，专属打角标）；选派系 → 只显示该派系的兵
+            // 种族和派系选择只影响归属判定及兵种库，画布仍显示当前页签全部单位
             var race = value?.Race;
             var fac = value is { IsFaction: true } ? value.Key : null;
             if (string.IsNullOrWhiteSpace(race) && value is { IsAll: true }) { FilterBy(null, null); return; }
@@ -530,11 +530,12 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>右上选了种族/派系 → 让画布按它过滤（race 空 = 不过滤）。</summary>
     public event Action<string?, string?>? FilterRequested;
+    public event Action<string>? MilitaryRemovalBlocked;
     public void FilterBy(string? race, string? faction)
     {
         FilterRequested?.Invoke(race, faction);
-        Status = faction is { Length: > 0 } ? $"画布只显示派系：{faction}"
-               : race is { Length: > 0 } ? $"画布只显示种族：{race}"
+        Status = faction is { Length: > 0 } ? $"画布保留全部单位，军事组范围：{faction}"
+               : race is { Length: > 0 } ? $"画布保留全部单位，种族范围：{race}"
                : "画布显示全部";
     }
 
@@ -627,282 +628,7 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>把素材库里的一张图加进**当前编辑的包**（按建议路径；导出时落盘）。</summary>
-    // ───────────────────────── 成本工坊（右上角第二页）─────────────────────────
-
-    /// <summary>已有成本（「成本 id」下拉）：原版打底 + 本包覆盖，带金币和额外资源。</summary>
-    public System.Collections.ObjectModel.ObservableCollection<Services.Backend.WarbandCost> CostListAll { get; } = [];
-    /// <summary>成本下拉里"当前显示"的（打字就按 id 过滤；不打字显示全部）。</summary>
-    public System.Collections.ObjectModel.ObservableCollection<Services.Backend.WarbandCost> CostListShown { get; } = [];
-    /// <summary>资源清单（全量）。</summary>
-    public System.Collections.ObjectModel.ObservableCollection<Services.Backend.PooledResource> PooledResAll { get; } = [];
-    /// <summary>资源下拉里"当前显示"的（打字按名称/ key 过滤；不打字显示全部）。</summary>
-    public System.Collections.ObjectModel.ObservableCollection<Services.Backend.PooledResource> PooledResShown { get; } = [];
-
-    private string _costId = "";
-    private string _costGold = "";
-    private string _costResAmount = "";
-    private string _costResText = "";
-    private string _pickedCostId = "";        // 下拉里选中的成本 id（过滤时保留它，别被 ComboBox 清掉）
-    private string _pickedResKey = "";        // 资源下拉里选中的资源 key（同上）
-    private string _costStatus = "";
-    private string _loadedResKey = "";        // 选中已有成本时，它现在挂的资源（用来判断"资源改没改"）
-    private long _loadedResAmount;            // 选中已有成本时，它现在扣的数量（用来判断"数量改没改"）
-    private string _loadedPoolId = "";        // 它现在用的池 id（只改数量时复用它，别把作者起的池名换掉）
-    private bool _loadedExisting;
-
-    /// <summary>成本 id（可在下拉里选已有的，也可以直接打新的）。</summary>
-    public string CostId
-    {
-        get => _costId;
-        set
-        {
-            _costId = value;
-            Raise(nameof(CostId));
-            FilterCostList();
-            SyncCostFromId();
-            UpdateCostPreview();
-        }
-    }
-    /// <summary>金币消耗：**带符号**（负 = 消耗、正 = 获得）。</summary>
-    public string CostGold { get => _costGold; set { _costGold = value; Raise(nameof(CostGold)); UpdateCostPreview(); } }
-    /// <summary>其他资源的量：同样带符号（负 = 消耗）。</summary>
-    public string CostResAmount { get => _costResAmount; set { _costResAmount = value; Raise(nameof(CostResAmount)); UpdateCostPreview(); } }
-    /// <summary>资源输入框的文本：**默认空 = 不用其他资源**；打字按名称/key 过滤，选中就用它。</summary>
-    public string CostResText
-    {
-        get => _costResText;
-        set { _costResText = value; Raise(nameof(CostResText)); FilterResList(); UpdateCostPreview(); }
-    }
-    /// <summary>创建工作坊里的一行提示（结果/错误）。</summary>
-    public string CostStatus { get => _costStatus; set { _costStatus = value; Raise(nameof(CostStatus)); } }
-    /// <summary>主按钮文字：这个 id 已经在包里 → 保存修改；否则 → 创建成本。</summary>
-    public string CostActionText => _loadedExisting ? "保存修改" : "创建成本";
-    /// <summary>这个 id 在包里存在（决定"保存修改/删除成本"可不可用）。</summary>
-    public bool CostIsExisting => _loadedExisting;
-
-    /// <summary>资源文本解析出来的资源（空 / 打了一半没选中 → null = 不建资源池、不写 junction 表）。</summary>
-    private Services.Backend.PooledResource? ResolvedResource()
-    {
-        var t = (_costResText ?? "").Trim();
-        if (t.Length == 0) return null;
-        return PooledResAll.FirstOrDefault(x => x.Name.Equals(t, StringComparison.OrdinalIgnoreCase))
-            ?? PooledResAll.FirstOrDefault(x => x.Key.Equals(t, StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// 把"过滤后的结果"**增量**同步进显示集合。
-    /// 不能用 Clear + 重填：那会触发 Reset，而 Reset 会把 ComboBox 的选中项清掉，
-    /// 可编辑下拉随即把输入框也清空（用户实测："点了下拉里的选项没有自动填入"）。
-    /// 增量（Remove/Move/Insert）不动其它项，选中项只要还在结果里就能活下来。
-    /// </summary>
-    private static void SyncFiltered<T>(System.Collections.ObjectModel.ObservableCollection<T> shown, List<T> want)
-    {
-        for (var i = shown.Count - 1; i >= 0; i--)
-            if (!want.Contains(shown[i])) shown.RemoveAt(i);
-        for (var i = 0; i < want.Count; i++)
-        {
-            if (i >= shown.Count) { shown.Add(want[i]); continue; }
-            if (EqualityComparer<T>.Default.Equals(shown[i], want[i])) continue;
-            var at = shown.IndexOf(want[i]);
-            if (at >= 0) shown.Move(at, i);
-            else shown.Insert(i, want[i]);
-        }
-    }
-
-    private void FilterCostList()
-    {
-        var keep = _costId;      // 过滤会移除"选中项" → ComboBox 顺手把输入框清空（连带写回 VM）→ 事后补回来
-        var t = (_costId ?? "").Trim();
-        var want = CostListAll
-            .Where(c => t.Length == 0 || c.Id.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)
-            .ToList();
-        // **下拉里当前选中的那条永远留在结果里**：它被过滤掉的话 ComboBox 会把选中项清掉，
-        // 可编辑下拉随即把输入框也清空（"选了一条再改字 → 字突然没了"）。钉在第一条。
-        if (_pickedCostId.Length > 0 && !want.Any(c => c.Id.Equals(_pickedCostId, StringComparison.OrdinalIgnoreCase)))
-        {
-            var sel = CostListAll.FirstOrDefault(c => c.Id.Equals(_pickedCostId, StringComparison.OrdinalIgnoreCase));
-            if (sel is not null) want.Insert(0, sel);
-        }
-        SyncFiltered(CostListShown, want);
-        if (keep.Length > 0 && _costId.Length == 0) { _costId = keep; Raise(nameof(CostId)); }   // 补回被 ComboBox 清掉的文字
-    }
-
-    private void FilterResList()
-    {
-        var keep = _costResText;
-        var t = (_costResText ?? "").Trim();
-        var want = PooledResAll
-            .Where(r => t.Length == 0 || r.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0
-                                      || r.Key.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)
-            .ToList();
-        if (_pickedResKey.Length > 0 && !want.Any(r => r.Key.Equals(_pickedResKey, StringComparison.OrdinalIgnoreCase)))
-        {
-            var sel = PooledResAll.FirstOrDefault(r => r.Key.Equals(_pickedResKey, StringComparison.OrdinalIgnoreCase));
-            if (sel is not null) want.Insert(0, sel);
-        }
-        SyncFiltered(PooledResShown, want);
-        if (keep.Length > 0 && _costResText.Length == 0) { _costResText = keep; Raise(nameof(CostResText)); }
-    }
-
-    /// <summary>下拉里选中了一条成本 → 记下来（过滤时永远保留它，见 FilterCostList）。</summary>
-    public void NotePickedCost(string id) => _pickedCostId = (id ?? "").Trim();
-
-    /// <summary>资源下拉里选中了一条 → 同上。</summary>
-    public void NotePickedRes(string key) => _pickedResKey = (key ?? "").Trim();
-
-    /// <summary>id 打全了且命中已有成本 → 预填金币/资源，并把按钮切成「保存修改」。</summary>
-    private void SyncCostFromId()
-    {
-        var hit = CostListAll.FirstOrDefault(c => c.Id.Equals((_costId ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
-        var wasExisting = _loadedExisting;
-        _loadedExisting = hit is not null;
-        if (hit is not null)
-        {
-            _costGold = hit.Gold.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            Raise(nameof(CostGold));
-            var resName = hit.Resource.Length > 0
-                ? (PooledResAll.FirstOrDefault(x => x.Key.Equals(hit.Resource, StringComparison.OrdinalIgnoreCase))?.Name ?? hit.Resource)
-                : "";
-            _costResText = resName;
-            Raise(nameof(CostResText));
-            _costResAmount = hit.Resource.Length > 0
-                ? hit.ResourceAmount.ToString(System.Globalization.CultureInfo.InvariantCulture) : "";
-            Raise(nameof(CostResAmount));
-            _loadedResKey = hit.Resource;
-            _loadedResAmount = hit.ResourceAmount;     // 记下"加载时的数量"：只改数量也要能写回去
-            _loadedPoolId = hit.PoolId;                // 只改数量时复用原来那个池（作者起的池名别丢）
-        }
-        else if (wasExisting)
-        {
-            // 从"已有"改成新名字：把预填的值清掉，别把上一个成本的金额带过去
-            _costGold = ""; Raise(nameof(CostGold));
-            _costResText = ""; Raise(nameof(CostResText));
-            _costResAmount = ""; Raise(nameof(CostResAmount));
-            _loadedResKey = "";
-            _loadedResAmount = 0;
-            _loadedPoolId = "";
-        }
-        Raise(nameof(CostActionText));
-        Raise(nameof(CostIsExisting));
-    }
-
-    /// <summary>「重命名」按钮：把当前成本 id 改成 newId（= 删旧 + 写新；保存后包里不会留旧 id 那条）。</summary>
-    public void RenameCurrentCost(string newId)
-    {
-        var oldId = (CostId ?? "").Trim();
-        newId = (newId ?? "").Trim();
-        if (newId.Length == 0) { CostStatus = "新 id 不能为空"; return; }
-        if (oldId.Length == 0) { CostStatus = "先在「成本 id」里选/填一个要改名的成本"; return; }
-        var msg = _backend.RenameWarbandCost(oldId, newId);
-        CostStatus = msg;
-        if (msg.StartsWith("成本工坊", StringComparison.Ordinal))
-        {
-            RebuildTree();
-            RefreshPooledResources();
-            PackOpened?.Invoke();
-            AutoSaveSoon();
-            _pickedCostId = "";          // 旧 id 没了，别再钉着它
-            CostId = newId;              // 输入框跟着换成新 id
-        }
-    }
-
-    /// <summary>创建前的预览：写哪三张表、什么值（用户确认用）。</summary>
-    public string CostPreview
-    {
-        get
-        {
-            var id = (CostId ?? "").Trim();
-            var gold = ParseDouble(CostGold);
-            var act = _loadedExisting ? "修改已有" : "新建";
-            var parts = new List<string>
-            {
-                $"resource_costs_tables（{act}）：id = {(id.Length > 0 ? id : "（还没填）")}，treasury_cost = {gold:0}（{(gold < 0 ? "消耗" : gold > 0 ? "获得" : "0")}）",
-            };
-            var res = ResolvedResource();
-            if (res is not null)
-            {
-                var amt = (long)ParseDouble(CostResAmount);
-                parts.Add($"pooled_resource_factor_junctions_tables：unique_id = {res.Key}_warband_upgrade（factor=other / resource={res.Key} / min=-2147483647 / max=2147483647 / sort_order=0）");
-                parts.Add($"resource_cost_pooled_resource_junctions_tables：{res.Key}_warband_upgrade ← 成本 {id}，amount = {amt}（{(amt < 0 ? "消耗" : "获得")}）");
-            }
-            else
-            {
-                parts.Add("其他资源：**空的**（不建资源池、不写 resource_cost_pooled_resource_junctions_tables）");
-                if (_loadedExisting) parts.Add("（保存时会把这条成本原来的资源关联清掉）");
-            }
-            return string.Join("\n", parts);
-        }
-    }
-
-    private static double ParseDouble(string? s) =>
-        double.TryParse((s ?? "").Trim(), System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
-
-    private void UpdateCostPreview() => Raise(nameof(CostPreview));
-
-    /// <summary>包打开/切换后刷新：成本清单 + 资源清单（原版打底 + 本包覆盖；包里新建的资源也读得到）。</summary>
-    public void RefreshPooledResources()
-    {
-        try
-        {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            CostListAll.Clear();
-            foreach (var c in _backend.CostList()) CostListAll.Add(c);
-            PooledResAll.Clear();
-            foreach (var r in _backend.PooledResources()) PooledResAll.Add(r);
-            FilterCostList();
-            FilterResList();
-            SyncCostFromId();
-            sw.Stop();
-            Status = $"成本工坊：已有成本 {CostListAll.Count} 个 / 资源 {PooledResAll.Count} 种";
-            FileLog.Write($"[成本工坊] 清单已读：成本 {CostListAll.Count} 个 / 资源 {PooledResAll.Count} 种（{sw.ElapsedMilliseconds} ms）");
-            Raise(nameof(CostPackLine));      // "成本写进哪个包"那行跟着当前包变
-        }
-        catch (Exception ex) { Status = "成本工坊清单读取失败：" + ex.Message; }
-    }
-
-    /// <summary>主按钮：新建 或 保存修改（资源那块只有"用户真的改了"才动，没动就保留作者原来的池/关联）。</summary>
-    public void CreateWarbandCost()
-    {
-        var id = (CostId ?? "").Trim();
-        var gold = ParseDouble(CostGold);
-        var res = ResolvedResource();
-        var resKey = res?.Key ?? "";
-        var amount = (long)ParseDouble(CostResAmount);
-        string msg;
-        if (_loadedExisting)
-        {
-            var resSame = _loadedResKey.Equals(resKey, StringComparison.OrdinalIgnoreCase);
-            // **资源或数量变了都要重写关联**：以前只看"资源 key 改没改"，只改数量会被整块跳过（用户实测"改数量没生效"）
-            msg = _backend.UpdateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount,
-                                             !resSame || amount != _loadedResAmount,
-                                             resSame ? _loadedPoolId : null);
-        }
-        else
-            msg = _backend.CreateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount);
-        CostStatus = msg;
-        if (msg.StartsWith("成本工坊", StringComparison.Ordinal))
-        {
-            RebuildTree();
-            RefreshPooledResources();      // 清单里立刻出现/更新
-            PackOpened?.Invoke();          // 升级对话框的成本下拉跟着刷新
-            AutoSaveSoon();
-        }
-    }
-
-    /// <summary>删除这条成本（成本行 + 它的资源关联；资源池留着给别的成本用）。</summary>
-    public bool DeleteWarbandCost()
-    {
-        var id = (CostId ?? "").Trim();
-        if (!_loadedExisting) { CostStatus = "这个 id 不在包里（下拉里选一个已有成本再删）"; return false; }
-        CostStatus = _backend.DeleteWarbandCost(id);
-        RebuildTree();
-        RefreshPooledResources();
-        PackOpened?.Invoke();
-        AutoSaveSoon();
-        return true;
-    }
-
+    // 成本表单状态与操作集中到 MainViewModel.Costs.cs。
     public bool AddUiAssetToPack(UiAssetItem? item)
     {
         if (item is null) return false;
@@ -979,12 +705,11 @@ public sealed class MainViewModel : ObservableObject
                     // 新组命名：全局选项填了前缀就按 `<前缀>_<页签>_<兵种词…>`（见 GroupNaming），没填退回时间戳名
                     if (isNew) g = _backend.MakeGroupKey(cat.Length > 0 ? cat : null, new[] { S("unit") },
                                                          "studio_new_" + DateTime.Now.ToString("HHmmssff"));
-                    // overwrite：画布上问过"这个兵已经被使用"且用户选了继续 → 覆盖旧的 junction（只留这次的位置）
-                    _backend.AddUnitToGroup(g, S("unit"), I("x"), I("y"), isNew, cat.Length > 0 ? cat : null,
-                                            overwrite: B("overwrite"));
+                    // 保留单位在其他组中的关系，只新增目标组关系。
+                    _backend.AddUnitToGroup(g, S("unit"), I("x"), I("y"), isNew, cat.Length > 0 ? cat : null);
                     // 军事组授权：选了派系只填它那一个组；只选种族就填该种族所有组
                     _backend.GrantUnit(S("unit"), _selectedFaction?.Race, _selectedFaction is { IsFaction: true } ? _selectedFaction.Key : null);
-                    RefreshLibrarySoon();          // 兵种库的"已在画布上"灰显立刻跟上
+                    RefreshLibrarySoon();          // 授权变化后同步刷新兵种库
                     break;
                 }
                 case "removeUnit":
@@ -1037,6 +762,7 @@ public sealed class MainViewModel : ObservableObject
                 case "newGroup":
                     _backend.NewGroup(S("group"), I("x"), I("y"), S("category").Length > 0 ? S("category") : null);
                     break;
+                case "grantUnitPermissions":
                 case "addToMilGroup":
                 {
                     var u1 = new List<string>();
@@ -1047,15 +773,21 @@ public sealed class MainViewModel : ObservableObject
                     RefreshLibrarySoon();
                     break;
                 }
+                case "removeUnitPermissions":
                 case "removeFromMilGroup":
                 {
                     var u2 = new List<string>();
                     if (m.TryGetProperty("units", out var ub) && ub.ValueKind == JsonValueKind.Array)
                         foreach (var x4 in ub.EnumerateArray()) { var s4 = x4.GetString() ?? ""; if (s4.Length > 0) u2.Add(s4); }
-                    _backend.RemoveUnitFromMilGroup(u2, _selectedFaction?.Race,
-                                                   _selectedFaction is { IsFaction: true } ? _selectedFaction.Key : null);
+                    var removalRace = m.TryGetProperty("race", out _) ? S("race") : _selectedFaction?.Race;
+                    var removalFaction = m.TryGetProperty("faction", out _) ? S("faction") : _selectedFaction is { IsFaction: true } ? _selectedFaction.Key : null;
+                    Status = _backend.RemoveUnitFromMilGroup(u2, removalRace, removalFaction, S("kind").Length > 0 ? S("kind") : "all");
+                    if (Status.Contains("已由原版授权", StringComparison.Ordinal)) MilitaryRemovalBlocked?.Invoke(Status);
                     RefreshLibrarySoon();
-                    break;
+                    PackOpened?.Invoke();
+                    RebuildTree();
+                    AutoSaveSoon();
+                    return;
                 }
                 case "deletePackArt":
                 {
@@ -1279,38 +1011,30 @@ public sealed class MainViewModel : ObservableObject
                     Key = "race:" + sub,
                     Race = sub,
                     Display = raceName,
-                    Tip = $"种族（亚文化）key：{sub}",
+                    Tip = $"种族（亚文化）key：{sub}；添加单位授权该种族全部军事组",
                     UnitCount = r.TryGetProperty("units", out var ru) ? ru.GetInt32() : 0,
                 };
-                var genericUnits = r.TryGetProperty("genericUnits", out var gu) ? gu.GetInt32() : 0;
-                var legendaries = 0;
                 foreach (var f in r.GetProperty("factions").EnumerateArray())
                 {
-                    if (!(f.TryGetProperty("legendary", out var lg) && lg.GetBoolean())) continue;   // 非传奇 → 归「通用」
+                    if (!(f.TryGetProperty("legendary", out var lg) && lg.GetBoolean())) continue;   // 非传奇单位并入种族
                     var uc = f.GetProperty("units").GetInt32();
-                    if (uc == 0) continue;
+                    // 没有授权的派系也保留入口，才能在画布上重新分配军事组。
                     var key = f.GetProperty("key").GetString() ?? "";
                     var name = f.TryGetProperty("name", out var nm) && nm.ValueKind == JsonValueKind.String
                         ? nm.GetString()! : key;
                     node.Children.Add(new FactionNode
                     {
                         Key = key, Race = sub, Display = name, UnitCount = uc,
-                        Badge = f.TryGetProperty("milGeneric", out var gv) && gv.ValueKind == JsonValueKind.True ? "通" : "专",
-                        Tip = f.TryGetProperty("milGroup", out var mgv) && mgv.ValueKind == JsonValueKind.String
-                            ? $"派系 key：{key}　军事组：{mgv.GetString()}（{(f.TryGetProperty("milGeneric", out var g2) && g2.ValueKind == JsonValueKind.True ? "通用军事组" : "专属军事组")}）"
-                            : $"派系 key：{key}",
+                        Badge = "派",
+                        Tip = $"派系 key：{key}；添加单位写派系专属表；军事组："
+                            + (f.TryGetProperty("milGroup", out var mgv) && mgv.ValueKind == JsonValueKind.String ? mgv.GetString() : "无"),
                     });
-                    legendaries++;
                 }
-                if (genericUnits > 0)
-                    node.Children.Add(new FactionNode
-                    {
-                        Key = "generic:" + sub, Race = sub, Display = "通用军事组",
-                        Tip = $"「{raceName}」里非传奇派系的兵（合并显示）", UnitCount = genericUnits,
-                    });
-                if (node.Children.Count > 0 || legendaries > 0) fresh.Add(node);
+                fresh.Add(node); // 非传奇派系及共享军事组的单位并入种族，种族节点始终保留。
             }
             SyncFactionTree(fresh);
+            if (_selectedFaction?.Key.StartsWith("generic:", StringComparison.OrdinalIgnoreCase) == true)
+                SelectedFaction = Factions.FirstOrDefault(node => node.Race.Equals(_selectedFaction.Race, StringComparison.OrdinalIgnoreCase));
             Status = $"种族/派系：{Factions.Count} 个种族（选一个看它的兵）";
             Raise(nameof(LibraryTitle));
         }
@@ -1574,332 +1298,7 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    // ── 工程（v1.5.0）──────────────────────────────────────────
-
-    /// <summary>切工程/关工程/还原前统一处理未导出编辑：三选（是=**保存所有有编辑的包** / 否=放弃 / 取消=中止）。
-    /// 返回 false = 用户取消或保存失败（调用方应中止操作）。</summary>
-    private async Task<bool> ConfirmUnsavedBeforeAsync(string what)
-    {
-        var (packs, edits) = UnsavedEdits();
-        if (packs == 0) return true;
-        var choice = AskSave?.Invoke(what, $"{edits} 处未导出（{packs} 个包）") ?? 1;
-        if (choice == 2) { Status = "已取消"; return false; }
-        if (choice == 0) return await SaveAllEditsAsync();
-        foreach (var s in _backend.Packs.ToList()) _backend.DiscardEditsOf(s.PackPath);
-        return true;
-    }
-
-    /// <summary>新建工程（"新建工程"对话框的结果）：工程目录 + 生成 Pack 目录 + 项目 key；
-    /// 建好骨架（project.json + old/ + Pack 目录），**不自动导入任何包**。</summary>
-    public async Task<bool> NewProjectAsync(string dir, string? packDir = null, string? projectKey = null)
-    {
-        try
-        {
-            dir = Path.GetFullPath(dir);
-            if (!await ConfirmUnsavedBeforeAsync("新建工程")) return false;
-            var info = ProjectStore.Ensure(dir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
-            if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
-            if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
-            ProjectStore.Save(dir, info);
-            _projectDir = dir;
-            Project = info;
-            _backend.ProjectKey = info.ProjectKey;
-            ProjectStore.TouchRecent(_settings.RecentProjects, dir);
-            _settings.Save();
-            PruneRecentProjects();
-            var packs = ProjectStore.PacksIn(dir);
-            if (packs.Count > 0) await OpenPackPathAsync(packs[0], open: true, asUnitPack: false);
-            Status = packs.Count > 0
-                ? $"工程「{info.Name}」已打开：{Path.GetFileName(packs[0])}"
-                : $"工程「{info.Name}」已建好（Pack 目录 {info.PackDir}）—— 用「导入 WUU 模板」或「导入 Pack」放一个包进来";
-            FileLog.Write($"工程：新建 {dir}（Pack 目录 {ProjectStore.PackDirOf(dir, info)}，项目 key「{info.ProjectKey}」）");
-            return true;
-        }
-        catch (Exception ex) { Status = "新建工程失败：" + ex.Message; FileLog.Write("新建工程失败", ex); return false; }
-    }
-
-    /// <summary>打开一个已有工程（打开它的 lastPack；里面没包就登记着，等导入）。</summary>
-    public Task<bool> OpenProjectAsync(string dir) => OpenProjectAtAsync(dir);
-
-    /// <summary>「打开上次工程」：直接开最近工程列表里的第一个（没有就提示从哪开始）。</summary>
-    public async Task<bool> OpenLastProjectAsync()
-    {
-        PruneRecentProjects();
-        var last = RecentProjects.FirstOrDefault();
-        if (last is null)
-        {
-            Status = "还没有最近工程 —— 用「新建工程」，或在菜单「工程」里选「从 Pack 打开工程」";
-            return false;
-        }
-        return await OpenRecentProjectAsync(last);
-    }
-
-    private async Task<bool> OpenProjectAtAsync(string dir)
-    {
-        try
-        {
-            dir = Path.GetFullPath(dir);
-            if (!ProjectStore.IsProject(dir))
-            {
-                Status = "这个文件夹还不是工程（没有 project.json）——用「新建工程」，或菜单「从 Pack 打开工程」";
-                return false;
-            }
-            if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
-            var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
-            // **识别清单迁移**（旧工程只有 LastPack 单包字段）：并进 Packs，之后就按清单多开
-            if (info.Packs.Count == 0 && !string.IsNullOrWhiteSpace(info.LastPack) && File.Exists(info.LastPack))
-            {
-                ProjectStore.AddPack(info, ProjectStore.RelPath(dir, info.LastPack));
-                ProjectStore.Save(dir, info);
-            }
-            _projectDir = dir;
-            Project = info;
-            _backend.ProjectKey = info.ProjectKey;
-            ProjectStore.TouchRecent(_settings.RecentProjects, dir);
-            _settings.Save();
-            PruneRecentProjects();
-            // **按识别清单打开所有包**（工程目录里没被识别的包不自动开）；LastPack 放最后开 = 激活的画布
-            var all = ProjectStore.PacksIn(dir);
-            var toOpen = info.Packs
-                .Select(rel => ProjectStore.FullPath(dir, rel))
-                .Where(f => f.Length > 0 && File.Exists(f))
-                .ToList();
-            var missing = info.Packs.Count - toOpen.Count;
-            if (info.LastPack is { Length: > 0 } lp && File.Exists(lp))
-            {
-                toOpen.RemoveAll(f => f.Equals(lp, StringComparison.OrdinalIgnoreCase));
-                toOpen.Add(lp);
-            }
-            foreach (var f in toOpen) await OpenPackPathAsync(f, open: true, asUnitPack: false);
-            Status = toOpen.Count switch
-            {
-                0 => $"工程「{info.Name}」已打开 —— 用「导入 WUU 模板」或「导入 Pack」放一个包进来" +
-                     (all.Count > 0 ? "（目录里有包但都没被识别：工程根右键「工程内的包…」勾一下）" : ""),
-                _ => $"工程「{info.Name}」已打开，同时开 {toOpen.Count} 个包：{string.Join("、", toOpen.Select(Path.GetFileName))}" +
-                     (all.Count > toOpen.Count ? $"（另有 {all.Count - toOpen.Count} 个未识别，不自动开）" : "") +
-                     (missing > 0 ? $"（{missing} 个清单里的包不在了，已跳过）" : ""),
-            };
-            FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，识别 {info.Packs.Count} / 目录 {all.Count} 个包，本次开 {toOpen.Count} 个）");
-            return true;
-        }
-        catch (Exception ex) { Status = "打开工程失败：" + ex.Message; FileLog.Write("打开工程失败", ex); return false; }
-    }
-
-    /// <summary>「从 Pack 打开工程」：把**源 pack 复制**到工程的"生成 Pack 目录"再编辑（**源文件不动**），
-    /// 然后建工程并打开复制件。工程目录 / Pack 目录 / 项目 key 来自"新建工程"对话框。</summary>
-    public async Task<bool> OpenProjectFromPackAsync(string sourcePack, string projectDir,
-                                                     string? packDir = null, string? projectKey = null)
-    {
-        try
-        {
-            var src = Path.GetFullPath(sourcePack);
-            if (!File.Exists(src)) { Status = "找不到源 pack：" + src; return false; }
-            projectDir = Path.GetFullPath(projectDir);
-            if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
-            var info = ProjectStore.Ensure(projectDir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
-            if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
-            if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
-            var targetDir = ProjectStore.PackDirOf(projectDir, info);
-            Directory.CreateDirectory(targetDir);
-            var dest = Path.Combine(targetDir, Path.GetFileName(src));
-            if (!Path.GetFullPath(dest).Equals(src, StringComparison.OrdinalIgnoreCase))
-            {
-                if (File.Exists(dest))
-                    FileLog.Write($"工程：目标已有 {Path.GetFileName(dest)} → 直接打开现有那份（**不覆盖**；源文件也不动）");
-                else File.Copy(src, dest);
-            }
-            info.LastPack = dest;
-            ProjectStore.AddPack(info, ProjectStore.RelPath(projectDir, dest));   // 识别
-            ProjectStore.Save(projectDir, info);
-            _projectDir = projectDir;
-            Project = info;
-            _backend.ProjectKey = info.ProjectKey;
-            ProjectStore.TouchRecent(_settings.RecentProjects, projectDir);
-            _settings.Save();
-            PruneRecentProjects();
-            await OpenPackPathAsync(dest, open: true, asUnitPack: false);
-            Status = $"已复制进工程并打开：{Path.GetFileName(dest)}（源文件不动，编辑都在工程里）";
-            FileLog.Write($"工程：从 Pack 建立 {projectDir}（复制 {src} → {dest}，项目 key「{info.ProjectKey}」）");
-            return true;
-        }
-        catch (Exception ex) { Status = "从 Pack 打开工程失败：" + ex.Message; FileLog.Write("从 Pack 打开工程失败", ex); return false; }
-    }
-
-    /// <summary>打开"最近工程"里的一个（欢迎面板/菜单的快捷入口）。</summary>
-    public async Task<bool> OpenRecentProjectAsync(string dir)
-    {
-        if (!Directory.Exists(dir) || !ProjectStore.IsProject(dir))
-        {
-            PruneRecentProjects();
-            Status = "这个工程目录已经不在了（已从最近列表移除）";
-            return false;
-        }
-        return await OpenProjectAsync(dir);
-    }
-
-    /// <summary>关闭工程：它下面打开的包全关掉（有未导出编辑先问）。</summary>
-    public async Task CloseProjectAsync()
-    {
-        if (_project is null) return;
-        if (!await ConfirmUnsavedBeforeAsync("关闭工程")) return;
-        foreach (var s in _backend.Packs.ToList()) await _backend.CloseSessionAsync(s);
-        AfterPackClosed();
-        Project = null;
-        _projectDir = "";
-        _backend.ProjectKey = "";
-        RebuildTree();
-        FileLog.Write("工程：已关闭");
-        Status = "工程已关闭";
-    }
-
-    /// <summary>当前包的历史版本列表（工程 old/ 里的备份，新到旧）。没工程/没包时为空。</summary>
-    public List<HistoryRow> HistoryOfCurrentPack()
-    {
-        var list = new List<HistoryRow>();
-        var pack = _backend.Pack?.PackPath;
-        if (pack is null || _project is null || _projectDir.Length == 0) return list;
-        foreach (var f in ProjectStore.HistoryOf(_projectDir, pack))
-            list.Add(new HistoryRow(f.Name, f.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                                    $"{f.Length / 1024.0 / 1024.0:N1} MB", f.FullName));
-        return list;
-    }
-
-    /// <summary>当前包所在工程的历史版本目录（对话框的「打开文件夹」用；没工程返回空）。</summary>
-    public string HistoryDirOfCurrentPack()
-    {
-        var pack = _backend.Pack?.PackPath;
-        if (pack is null || _project is null || _projectDir.Length == 0) return "";
-        return ProjectStore.HistoryDirOf(_projectDir);
-    }
-
-    /// <summary>还原到某个历史版本：有未导出编辑先问；Backend 负责"先把当前包也备份一份再拷回"，
-    /// 然后走正常打开链路把包重开（画布/树/清单一起刷新）。</summary>
-    public async Task<bool> RestoreHistoryAsync(string backupFile)
-    {
-        var pack = _backend.Pack?.PackPath;
-        if (pack is null) { Status = "先打开一个包"; return false; }
-        if (!await ConfirmUnsavedBeforeAsync("还原历史版本")) return false;
-        try
-        {
-            var msg = await _backend.RestoreFromBackupAsync(pack, backupFile);
-            await OpenPackPathAsync(pack, open: true, asUnitPack: false);   // 重开 + 画布/树/清单全刷
-            Status = msg;
-            return true;
-        }
-        catch (Exception ex) { Status = "还原失败：" + ex.Message; FileLog.Write("还原失败", ex); return false; }
-    }
-
-    /// <summary>有未导出编辑的包数 / 编辑总处数（关窗口提醒用）。</summary>
-    public (int Packs, int Edits) UnsavedEdits()
-    {
-        var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
-        return (dirty.Count, dirty.Sum(s => _backend.EditCountOf(s.PackPath)));
-    }
-
-    /// <summary>保存**指定包**（写回原包；工程模式下同时留一份 old/ 历史版本）。失败返回 false。</summary>
-    public async Task<bool> SavePackByPathAsync(string packPath)
-    {
-        var session = _backend.Packs.FirstOrDefault(x =>
-            string.Equals(x.PackPath, packPath, StringComparison.OrdinalIgnoreCase));
-        if (session is null) return false;
-        try
-        {
-            _backend.SwitchTo(session);
-            await _backend.SaveInPlaceAsync();
-            return true;
-        }
-        catch (Exception ex) { Status = "保存失败：" + ex.Message; FileLog.Write("保存失败", ex); return false; }
-    }
-
-    /// <summary>把所有有编辑的包都写回原包（关窗口/关工程"保存后继续"用）。返回是否全部成功。</summary>
-    public async Task<bool> SaveAllEditsAsync()
-    {
-        var dirty = _backend.Packs.Where(s => _backend.EditCountOf(s.PackPath) > 0).ToList();
-        foreach (var s in dirty)
-            if (!await SavePackByPathAsync(s.PackPath)) return false;
-        RebuildTree();
-        return true;
-    }
-
-    /// <summary>把外部 pack 拷进当前工程并打开（"往工程里加一个包"的正路）。</summary>
-    public async Task<bool> ImportPackToProjectAsync(string externalPack)
-    {
-        if (_project is null || _projectDir.Length == 0) { Status = "先新建/打开一个工程"; return false; }
-        try
-        {
-            var srcFull = Path.GetFullPath(externalPack);
-            var targetDir = ProjectStore.PackDirOf(_projectDir, _project);
-            Directory.CreateDirectory(targetDir);
-            var dest = Path.Combine(targetDir, Path.GetFileName(srcFull));
-            if (srcFull.Equals(Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
-            {
-                // 已经在"生成 Pack 目录"里 → 不复制，直接**识别 + 打开**（给"手动拷进工程的包"用的入口）
-            }
-            else
-            {
-                if (File.Exists(dest)) { Status = $"工程里已经有 {Path.GetFileName(dest)}（要么给导入的包改个名，要么先删旧的那份）"; return false; }
-                File.Copy(srcFull, dest);
-            }
-            ProjectStore.AddPack(_project, ProjectStore.RelPath(_projectDir, dest));   // 识别：下次打开工程一起开
-            ProjectStore.Save(_projectDir, _project);
-            await OpenPackPathAsync(dest, open: true, asUnitPack: false);
-            FileLog.Write($"工程：导入包 {Path.GetFileName(dest)}（已识别；下次打开工程会一起开）");
-            return true;
-        }
-        catch (Exception ex) { Status = "导入包失败：" + ex.Message; return false; }
-    }
-
-    /// <summary>导入内置的 WUU 模板到当前工程并打开（空工程起步用；素材在 exe 旁 bundled/wuu）。</summary>
-    public async Task<bool> ImportWuuTemplateAsync()
-    {
-        if (_project is null || _projectDir.Length == 0) { Status = "先新建/打开一个工程"; return false; }
-        var pack = _backend.BuildWuuTemplatePack(_projectDir);
-        if (pack is null) { Status = "导入失败：内置 WUU 素材缺失（exe 旁 bundled\\wuu 里应有 .pack）"; return false; }
-        ProjectStore.AddPack(_project, ProjectStore.RelPath(_projectDir, pack));   // 识别：下次打开工程一起开
-        ProjectStore.Save(_projectDir, _project);
-        await OpenPackPathAsync(pack, open: true, asUnitPack: false);
-        FileLog.Write($"工程：导入 WUU 模板 {Path.GetFileName(pack)}（已识别）");
-        return true;
-    }
-
-    /// <summary>「工程内的包…」对话框的数据：目录里每个包 + 是否已识别（在清单里）+ 大小。</summary>
-    public List<ProjectPackRow> ProjectPacksList()
-    {
-        var list = new List<ProjectPackRow>();
-        if (_project is null || _projectDir.Length == 0) return list;
-        foreach (var f in ProjectStore.PacksIn(_projectDir))
-        {
-            var rel = ProjectStore.RelPath(_projectDir, f);
-            var fi = new FileInfo(f);
-            var rec = _project.Packs.Any(p => p.Equals(rel, StringComparison.OrdinalIgnoreCase));
-            list.Add(new ProjectPackRow(f, rel, fi.Name, $"{fi.Length / 1024.0 / 1024.0:N1} MB", rec));
-        }
-        return list;
-    }
-
-    /// <summary>应用「工程内的包…」的勾选（= 识别清单）：保存清单；**新勾上的立刻打开**；
-    /// 取消勾选的不主动关（已经开着就开着，下次打开工程起不再自动开）。</summary>
-    public async Task ApplyProjectPacksAsync(List<string> rels)
-    {
-        if (_project is null || _projectDir.Length == 0) return;
-        _project.Packs = rels.Where(r => !string.IsNullOrWhiteSpace(r))
-                             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        ProjectStore.Save(_projectDir, _project);
-        var opened = _backend.Packs.Select(s => s.PackPath).ToList();
-        var n = 0;
-        foreach (var rel in _project.Packs)
-        {
-            var f = ProjectStore.FullPath(_projectDir, rel);
-            if (f.Length == 0 || !File.Exists(f)) continue;
-            if (opened.Any(p => p.Equals(f, StringComparison.OrdinalIgnoreCase))) continue;
-            await OpenPackPathAsync(f, open: true, asUnitPack: false);
-            n++;
-        }
-        FileLog.Write($"工程：识别清单更新为 {_project.Packs.Count} 个包" + (n > 0 ? $"（顺手打开了 {n} 个新勾的）" : ""));
-        Status = $"识别清单已更新：{_project.Packs.Count} 个包会在打开工程时自动打开" +
-                 (n > 0 ? $"（已打开 {n} 个新勾选的）" : "");
-    }
-
+    // 工程打开、识别清单与历史版本独立维护，复用未保存确认流程。
     // ── 游戏目录 ────────────────────────────────────────────────
 
     /// <summary>弹"选择游戏目录"框（候选列表 + 手动 + 浏览），选了就套用。</summary>

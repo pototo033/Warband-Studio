@@ -193,23 +193,25 @@ vm.runInContext("document.getElementById('rpOk').onclick()", ctx);
 chk('对话框里点「保存修改」→ updateRoute（不动连线，无 routeOnly 依赖）',
     last().type === 'updateRoute' && last().key === 'r1' && last().cost === 'cost_400', last());
 
-console.log('⑤ 加兵统一入口 reportAddUnit（重复兵确认 + 覆盖旗标）');
+console.log('⑤ 加兵统一入口：同一单位允许跨组、跨页签使用');
 clear();
-const r1 = vm.runInContext('reportAddUnit("u1", 10, 20, true, "P1", "")', ctx);   // u1 已在组 a
-chk('已经在别组的兵 → 弹确认，确认后带 overwrite=true 且不带 group（走新建组）',
-    r1 === true && last().type === 'addUnit' && last().overwrite === true && last().group === undefined
-    && last().isNew === true, last());
+let confirmCalls = 0;
+ctx.confirm = () => { confirmCalls++; return false; };
+const r1 = vm.runInContext('reportAddUnit("u1", 10, 20, true, "P2", "")', ctx);
+chk('已有单位加入新页签，不确认且不覆盖旧关系',
+    r1 === true && last().type === 'addUnit' && last().overwrite === undefined
+    && last().category === 'P2' && confirmCalls === 0, last());
 clear();
-ctx.confirm = () => false;
-const r2 = vm.runInContext('reportAddUnit("u1", 10, 20, true, "P1", "")', ctx);
-chk('确认框选「取消」→ 一条消息都不发', r2 === false && msgs().length === 0, msgs());
+const r2 = vm.runInContext('reportAddUnit("u1", 10, 20, false, "", "b")', ctx);
+chk('已有单位加入另一组，不发送覆盖旗标',
+    r2 === true && last().group === 'b' && last().overwrite === undefined && confirmCalls === 0, last());
+clear();
+const r3 = vm.runInContext('reportAddUnit("u9", 10, 20, true, "P1", "")', ctx);
+chk('未使用单位正常加入新组', r3 === true && last().isNew === true && last().group === undefined, last());
+clear();
+vm.runInContext('reportAddUnit("u1", 10, 20, false, "", "a")', ctx);
+chk('同组关系仍由后端去重', last().group === 'a' && confirmCalls === 0, last());
 ctx.confirm = () => true;
-clear();
-const r3 = vm.runInContext('reportAddUnit("u9", 10, 20, true, "P1", "")', ctx);   // 没用过的兵
-chk('没用过的兵 → 不弹确认，overwrite=false', r3 === true && last().overwrite === false, last());
-clear();
-vm.runInContext('reportAddUnit("u1", 10, 20, false, "", "a")', ctx);              // 落回自己所在的组
-chk('拖回自己所在的那个组 → 不弹确认（不误报）', last().overwrite === false && last().group === 'a', last());
 
 console.log('⑥ 源码防呆：拖动的坐标必须真的回报（v0.85 的"拖了弹回原位"就是这里断的）');
 chk('mousemove 里有把 drag.moved 置 true 的语句', /drag\.moved\s*=\s*true/.test(script));
@@ -302,6 +304,7 @@ vm.runInContext(`
     pageRaces: { PA: ['R_A'], PB: ['R_B'] }, pageFactions: {},
     pageBg: { PA: 'http://x/bgA.png', PB: 'http://x/bgB.png' },   // 切种族要**立刻**换背景（不用再点兵牌）
     groupRaces: { ga: ['R_A'], gb: ['R_B'] }, groupFactions: {}, unitExcl: {},
+    militaryAssignments: { known: true, units: { ua: ['MA'], ub: ['MB'] }, races: { R_A: ['MA'], R_B: ['MB'], R_Z: ['MZ'] } },
     openedTabs: [], newTabs: [],
   };
   activePage = null;
@@ -310,8 +313,8 @@ vm.runInContext(`
 `, ctx);
 const foreignVisible = () => vm.runInContext(
   "document.querySelectorAll('#tree .card.foreign').filter(c => c.style.display !== 'none').length", ctx);
-chk('带着不匹配的种族渲染时：可见的牌都该有黄标（R_Z 谁的都不是）…（此时被范围过滤，可见 0 张）',
-    foreignVisible() === 0, { visible: foreignVisible() });
+chk('缺少当前种族军事组的单位仍显示并打角标',
+    foreignVisible() === 2, { visible: foreignVisible() });
 vm.runInContext("canvasFilterBy({ race: 'R_A', faction: '' })", ctx);
 chk('切到真正属于它的种族 R_A：本页可见的牌**没有**黄标（旧代码会把上一次烤的标留着 → 1）',
     foreignVisible() === 0, { visible: foreignVisible() });
@@ -604,6 +607,7 @@ vm.runInContext(`
                      { unit_group: 'gn', x: 60, y: 0, category: 'PA', units: ['u2'] } ],
            links: [], icons: {}, names: { u1: '甲', u2: '乙' }, pages: ['PA'],
            pageRaces: {}, pageFactions: {}, groupRaces: { ga: ['R_A'] }, groupFactions: {},
+           militaryAssignments: { known: true, units: { u1: ['MA'], u2: [] }, races: { R_A: ['MA'] } },
            unitExcl: {}, openedTabs: [], newTabs: [], pageBg: {}, skin: {}, costKeys: [] };
   activePage = 'PA';
   renderWarband(DATA);
@@ -612,16 +616,16 @@ vm.runInContext(`
 chk('没有军事组授权的组**不被过滤掉**（还在画面里）',
     vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c.dataset.group === 'gn')[0].style.display", ctx) !== 'none',
     vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c.dataset.group === 'gn')[0].style.display", ctx));
-chk('这种组打「不在军事组」角标（nomil 类 + 文案）',
+chk('没有任何派系授权时打蓝色角标（nomil 类 + 文案）',
     (function () {
       const el = vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c.dataset.group === 'gn')[0]", ctx);
       const host = el.querySelector('.bdg');
-      return el.classList.contains('nomil') && (host.innerHTML || '').indexOf('不在军事组') >= 0;
+      return el.classList.contains('nomil') && host.children.some(c => (c.textContent || '').indexOf('未分配派系权限') >= 0);
     })(),
     vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c.dataset.group === 'gn')[0].querySelector('.bdg').innerHTML", ctx));
 chk('正常有军事组的组不打这个角标',
     (function () {
-      const el = vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c.dataset.group === 'ga')[0]", ctx);
+      const el = vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c._unit === 'u1')[0]", ctx);
       return !el.classList.contains('nomil') && !el.classList.contains('foreign');
     })(),
     vm.runInContext("document.querySelectorAll('#tree .card').filter(c => c.dataset.group === 'ga')[0].className", ctx));
@@ -1036,6 +1040,136 @@ chk('主动点「全部」→ 真的进全部（并钉住）',
 vm.runInContext("renderWarband(DATA)", ctx);
 chk('钉住之后重推画布也不会被自动切走',
     vm.runInContext("activePage", ctx) === null, vm.runInContext("activePage", ctx));
+
+console.log('㉖ 军事组角标按单位和实际授权判定');
+vm.runInContext(`
+  DATA = { militaryAssignments: { known: true,
+    units: { mixed: ['SPECIAL'], shared: ['COMMON', 'SPECIAL'], empty: [], Ua: ['common'] },
+    factions: { F_COMMON: 'COMMON', F_SPECIAL: 'SPECIAL' },
+    races: { R_A: ['COMMON', 'SPECIAL'] }, generic: { R_A: ['COMMON'] } } };
+  filterRace = 'R_A'; filterFaction = '';
+`, ctx);
+chk('种族：任一属于该种族的军事组即可', !vm.runInContext('militaryStatus("mixed").missing', ctx));
+vm.runInContext("canvasFilterBy({ faction: 'generic:R_A' })", ctx);
+chk('旧通用入口消息并入种族，专属军事组也满足归属', !vm.runInContext('militaryStatus("mixed").missing', ctx)
+  && vm.runInContext('filterRace === "R_A" && filterFaction === ""', ctx));
+chk('原通用军事组同样纳入种族归属', !vm.runInContext('militaryStatus("shared").missing', ctx));
+vm.runInContext("filterFaction = 'F_SPECIAL'", ctx);
+chk('派系：单位拥有当前军事组不打角标', !vm.runInContext('militaryStatus("mixed").missing', ctx));
+chk('同组中的另一单位单独判断，不能借用组内其他单位的授权', vm.runInContext('militaryStatus("Ua").missing', ctx));
+chk('没有任何军事组也打角标', vm.runInContext('militaryStatus("empty").missing', ctx));
+chk('完整保留同单位的多个军事组', vm.runInContext('militaryStatus("shared").assigned.length', ctx) === 2);
+vm.runInContext("filterFaction = 'F_COMMON'", ctx);
+chk('单位与军事组大小写不同也能准确匹配', !vm.runInContext('militaryStatus("ua").missing', ctx));
+vm.runInContext("DATA.militaryAssignments.units.shared = ['SPECIAL']", ctx);
+chk('移除当前军事组后立即打角标', vm.runInContext('militaryStatus("shared").missing', ctx));
+vm.runInContext("DATA.militaryAssignments.units.shared.push('COMMON')", ctx);
+chk('重新授权后角标立即清除', !vm.runInContext('militaryStatus("shared").missing', ctx));
+vm.runInContext("DATA.militaryAssignments.known = false", ctx);
+chk('读取失败时不误报缺少军事组', !vm.runInContext('militaryStatus("shared").known', ctx)
+  && !vm.runInContext('militaryStatus("shared").missing', ctx));
+chk('画布不再按军事组过滤单位', vm.runInContext('groupMatches("any")', ctx));
+
+console.log('㉗ 派系专属许可与军事组共同判定归属');
+vm.runInContext(`
+  DATA.militaryAssignments = { known: true,
+    units: { both: ['COMMON'], military: ['COMMON'] },
+    exclusive: { only: ['F_ONE'], both: ['F_ONE'], outsider: ['F_OTHER'], noGroup: ['F_EMPTY'] },
+    factions: { F_ONE: 'COMMON', F_TWO: 'COMMON', F_OTHER: 'OTHER' },
+    factionRaces: { F_ONE: 'R_A', F_TWO: 'R_A', F_OTHER: 'R_B', F_EMPTY: 'R_C' },
+    races: { R_A: ['COMMON'], R_B: ['OTHER'] }, generic: { R_A: ['COMMON'] } };
+  filterRace = 'R_A'; filterFaction = 'F_ONE';
+`, ctx);
+chk('专属表单独授权：没有军事组也属于当前派系', !vm.runInContext('militaryStatus("only").missing', ctx)
+  && vm.runInContext('militaryStatus("only").exclusiveGranted', ctx));
+chk('两渠道同时授权：保留完整来源', vm.runInContext('militaryStatus("both").militaryGranted && militaryStatus("both").exclusiveGranted', ctx));
+chk('只有军事组授权仍属于派系', !vm.runInContext('militaryStatus("military").missing', ctx));
+chk('其他派系的专属授权不算当前派系授权', vm.runInContext('militaryStatus("outsider").missing', ctx));
+vm.runInContext("filterFaction = 'F_TWO'", ctx);
+chk('共享军事组的另一派系不能借用专属许可', vm.runInContext('militaryStatus("only").missing', ctx));
+vm.runInContext("filterFaction = ''; filterRace = 'R_A'", ctx);
+chk('种族模式识别本种族派系的专属许可', !vm.runInContext('militaryStatus("only").missing', ctx));
+chk('种族模式不借用其他种族的专属许可', vm.runInContext('militaryStatus("outsider").missing', ctx));
+vm.runInContext("canvasFilterBy({ faction: 'generic:R_A' })", ctx);
+chk('取消通用入口后，旧入口并入种族并识别专属许可', !vm.runInContext('militaryStatus("only").missing', ctx));
+vm.runInContext("filterFaction = 'f_one'; DATA.militaryAssignments.units.both = []", ctx);
+chk('移除军事组后，专属许可继续保留派系归属', !vm.runInContext('militaryStatus("both").missing', ctx));
+chk('专属许可的单位和派系匹配忽略大小写', vm.runInContext('militaryStatus("ONLY").exclusiveGranted', ctx));
+vm.runInContext("filterFaction = 'F_EMPTY'; filterRace = 'R_C'", ctx);
+chk('没有军事组的派系可以通过专属许可授权', !vm.runInContext('militaryStatus("noGroup").missing', ctx));
+chk('没有军事组的已知派系仍能判定缺少授权', vm.runInContext('militaryStatus("only").known && militaryStatus("only").missing', ctx));
+vm.runInContext("filterFaction = ''; filterRace = ''", ctx);
+chk('未选范围时专属许可单位不标为未授权', !vm.runInContext('militaryStatus("only").missing', ctx));
+// 使用前面已经渲染的兵牌，验证颜色和提示经过实际 updateBadges 更新。
+vm.runInContext(`
+  DATA.militaryAssignments.exclusive.u1 = ['F_ONE'];
+  filterRace = 'R_A'; filterFaction = 'F_ONE'; updateBadges();
+`, ctx);
+chk('专属许可兵牌不会出现蓝色或黄色缺权角标', vm.runInContext(`(function () {
+  const el = document.querySelectorAll('#tree .card').find(c => c._unit === 'u1');
+  return !el.classList.contains('nomil') && !el.classList.contains('foreign')
+    && el.querySelector('.bdg').title.includes('F_ONE') && el.querySelector('.bdg').title.includes('派系专属表');
+})()`, ctx));
+vm.runInContext("filterFaction = 'F_TWO'; updateBadges()", ctx);
+chk('其他派系专属兵显示黄色缺权角标', vm.runInContext(`(function () {
+  const el = document.querySelectorAll('#tree .card').find(c => c._unit === 'u1');
+  return el.classList.contains('foreign') && !el.classList.contains('nomil');
+})()`, ctx));
+
+console.log('㉘ 归属移除明确选择渠道与范围');
+vm.runInContext(`
+  DATA.militaryAssignments.units.only = ['COMMON'];
+  filterRace = 'R_A'; filterFaction = 'F_ONE'; ctxUnits = ['only', 'only'];
+  document.getElementById('ctxDel').onclick();
+`, ctx);
+chk('两类归属同时存在时三种移除选项均可选', !byId.permissionMilitary.disabled && !byId.permissionExclusive.disabled && !byId.permissionAll.disabled);
+chk('派系范围移除军事组明确提示影响共享派系', byId.permissionHint.textContent.includes('共用该组的其他派系'));
+clear();
+vm.runInContext("document.getElementById('permissionExclusive').onclick()", ctx);
+chk('只移除专属许可，消息带目标派系且单位去重', last()?.type === 'removeUnitPermissions' && last().kind === 'exclusive'
+  && last().faction === 'F_ONE' && last().units.join(',') === 'only');
+vm.runInContext("ctxUnits = ['only']; document.getElementById('ctxDel').onclick()", ctx);
+clear();
+vm.runInContext("document.getElementById('permissionMilitary').onclick()", ctx);
+chk('军事组移除单独传军事组渠道', last()?.kind === 'military');
+vm.runInContext("filterFaction = ''; document.getElementById('ctxDel').onclick()", ctx);
+clear();
+vm.runInContext("document.getElementById('permissionAll').onclick()", ctx);
+chk('种族全部移除传种族范围与 all 渠道', last()?.kind === 'all' && last().race === 'R_A' && last().faction === '');
+vm.runInContext("DATA.militaryAssignments.units.only = []; document.getElementById('ctxDel').onclick()", ctx);
+chk('只有专属许可时禁用军事组移除', byId.permissionMilitary.disabled && !byId.permissionExclusive.disabled);
+clear();
+vm.runInContext("document.getElementById('permissionCancel').onclick()", ctx);
+chk('取消移除不发送修改消息', msgs().length === 0);
+vm.runInContext("document.getElementById('ctxDel').onclick(); canvasFilterBy({race:'R_B'})", ctx);
+chk('切换归属范围时关闭旧移除面板', byId.permissionPop.classList.contains('hidden'));
+clear();
+vm.runInContext("ctxUnits = ['only']; document.getElementById('ctxAdd').onclick()", ctx);
+chk('添加按钮使用统一归属消息，后端按所选层级落表', last()?.type === 'grantUnitPermissions');
+
+console.log('㉙ 移除按钮显示当前范围实际拥有的组合键');
+vm.runInContext(`
+  DATA.militaryAssignments = { known: true,
+    units: { a: ['MG1', 'OTHER'], b: ['MG1', 'MG2'] },
+    exclusive: { a: ['F_A', 'F_OTHER'], b: ['F_B'] },
+    factions: { F_A: 'MG1', F_B: 'MG2', F_OTHER: 'OTHER' },
+    factionRaces: { F_A: 'R_A', F_B: 'R_A', F_OTHER: 'R_B' },
+    races: { R_A: ['MG1', 'MG2'], R_B: ['OTHER'] } };
+  filterRace = 'R_A'; filterFaction = 'F_A'; ctxUnits = ['a'];
+  document.getElementById('ctxDel').onclick();
+`, ctx);
+chk('派系军事组 key 栏只显示实际命中的军事组', byId.permissionMilitaryKeys.textContent.includes('MG1')
+  && !byId.permissionMilitaryKeys.textContent.includes('OTHER'));
+chk('专属许可显示单位 key 和目标 faction，不混入其他派系', byId.permissionExclusiveKeys.textContent.includes('a → F_A')
+  && !byId.permissionExclusiveKeys.textContent.includes('F_OTHER'));
+vm.runInContext("filterFaction = ''; ctxUnits = ['a', 'b']; document.getElementById('ctxDel').onclick()", ctx);
+chk('种族多选汇总全部实际军事组并去重', byId.permissionMilitaryKeys.textContent.split('\n').slice(1).join(',') === 'MG1,MG2');
+chk('种族多选显示本种族各单位的专属组合键', byId.permissionExclusiveKeys.textContent.includes('a → F_A')
+  && byId.permissionExclusiveKeys.textContent.includes('b → F_B') && !byId.permissionExclusiveKeys.textContent.includes('F_OTHER'));
+vm.runInContext("ctxUnits = ['unknown']; document.getElementById('ctxDel').onclick()", ctx);
+chk('无授权显示明确空状态且禁用对应按钮', byId.permissionMilitaryKeys.textContent === '无军事组分配'
+  && byId.permissionExclusiveKeys.textContent === '无专属许可分配'
+  && byId.permissionMilitary.disabled && byId.permissionExclusive.disabled && byId.permissionAll.disabled);
 
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }

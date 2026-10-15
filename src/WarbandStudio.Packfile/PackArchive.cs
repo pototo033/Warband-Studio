@@ -146,12 +146,12 @@ public sealed class PackArchive : IDisposable
     /// <summary>读一条的**原始**字节（压缩的就是压缩态）。</summary>
     public byte[] ReadRaw(PackEntry entry)
     {
-        _stream.Position = entry.Offset;
         var buf = new byte[entry.StoredSize];
         var read = 0;
         while (read < buf.Length)
         {
-            var n = _stream.Read(buf, read, buf.Length - read);
+            // 后台派系/兵种库与画布并发读取，不能共用可变的流位置。
+            var n = RandomAccess.Read(_stream.SafeFileHandle, buf.AsSpan(read), entry.Offset + read);
             if (n <= 0) throw new EndOfStreamException($"读 {entry.Path} 时数据提前结束。");
             read += n;
         }

@@ -1,13 +1,13 @@
 namespace WarbandStudio.Ui.ViewModels;
 
 /// <summary>
-/// 右栏的种族/派系节点：种族为父节点，下面是**传奇派系**（新战役可选的那些）+ 一个「通用」（非传奇合并）。
+/// 右栏的种族/派系节点：种族为父节点，下面是**传奇派系**（新战役可选的那些），共享军事组与非传奇单位并入种族。
 /// 名字用 loc 里的中文名，真实 key 放 <see cref="Tip"/>（鼠标悬浮显示）。
 /// </summary>
 public sealed class FactionNode
 {
     /// <summary>
-    /// 取数据用的 key：派系 = 派系 key；种族节点 = "race:亚文化"；通用节点 = "generic:亚文化"；「全部兵」= 空。
+    /// 取数据用的 key：派系 = 派系 key；种族节点 = "race:亚文化"；「全部兵」= 空。
     /// </summary>
     public string Key { get; init; } = "";
 
@@ -29,7 +29,7 @@ public sealed class FactionNode
         && !Key.StartsWith("race:", StringComparison.Ordinal)
         && !Key.StartsWith("generic:", StringComparison.Ordinal);
 
-    /// <summary>小标签（如"通"= 属于通用军事组）。</summary>
+    /// <summary>小标签（"派"= 派系专属编辑入口）。</summary>
     public string Badge { get; init; } = "";
 
     public string Label => IsAll

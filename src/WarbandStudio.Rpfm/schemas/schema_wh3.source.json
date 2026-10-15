@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/Frodo45127/rpfm-schemas",
+  "path": "schema_wh3.ron",
+  "commit": "57a23a849fcaa805ccf3afe743bf46fd14a1a43c",
+  "commit_date_utc": "2026-10-01T16:30:38Z",
+  "description": "Updated wh3 schemas for patch 9.0.2",
+  "sha256": "f5fed7eb28deee26405643b37b8d2d2f77b1b2b95b804169edceef501351a83a",
+  "retrieved_date": "2026-10-15"
+}

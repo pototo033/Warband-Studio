@@ -284,8 +284,8 @@
 <div id="ctxMenu" class="pop hidden" style="left:0;top:0;transform:none">
   <div class="t" id="ctxTitle">—</div>
   <div class="row" id="ctxRow1">
-    <button id="ctxAdd" class="primary">加入当前军事组</button>
-    <button id="ctxDel">从当前军事组移除</button>
+    <button id="ctxAdd" class="primary">添加归属</button>
+    <button id="ctxDel">移除归属…</button>
     <button id="ctxUpg">查看已有升级…</button>
     <button id="ctxSplit">拆分成单兵组</button>
     <button id="ctxMove">移动到页签…</button>
@@ -293,6 +293,23 @@
   </div>
   <!-- 第二页：可移动到的页签（只列当前已打开/可见的页签） -->
   <div class="row" id="ctxRow2" style="display:none;max-width:420px;flex-wrap:wrap"></div>
+</div>
+<div id="permissionPop" class="pop hidden" style="width:min(620px,calc(100vw - 48px));box-sizing:border-box;max-height:calc(100vh - 48px);overflow:auto">
+  <div class="t">移除当前范围的归属</div>
+  <div id="permissionScope" style="margin-bottom:8px"></div>
+  <div id="permissionHint" style="color:#B7C0CC;max-width:520px;margin-bottom:10px"></div>
+  <div class="permission-actions" style="display:flex;flex-direction:column;gap:8px;align-items:stretch">
+    <button id="permissionExclusive" style="text-align:left;white-space:normal;padding:10px 12px">
+      <span style="display:block">移除专属许可</span>
+      <span id="permissionExclusiveKeys" style="display:block;margin-top:5px;font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere">无专属许可分配</span>
+    </button>
+    <button id="permissionMilitary" style="text-align:left;white-space:normal;padding:10px 12px">
+      <span style="display:block">移除军事组</span>
+      <span id="permissionMilitaryKeys" style="display:block;margin-top:5px;font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere">无军事组分配</span>
+    </button>
+    <button id="permissionAll">全部移除</button>
+    <button id="permissionCancel">取消</button>
+  </div>
 </div>
 <div id="band"></div>
 
@@ -614,8 +631,7 @@ function renderWarband(data) {
       // 黄标/专属角标**不在渲染时定死**：存下判断要用的数据，由 updateBadges() 按"当前过滤"实时算。
       // 渲染时定死的话，切种族/派系后画布不重渲染（数据没变）→ 上一次选择的黄标会一直挂在卡上，
       // 看起来就是"所有单位都有黄标"（实测日志：foreign == shown，同一页再点一次又变成 0）。
-      d._gR = (DATA.groupRaces || {})[g.unit_group] || [];      // 只在"确实知道这个组属于谁"时才判黄标
-      d._gF = (DATA.groupFactions || {})[g.unit_group] || [];
+      d._unit = u; // 按单位的真实军事组关系判角标，不使用整组的派系并集。
       d._excl = DATA.unitExcl ? DATA.unitExcl[u] : null;
       d.innerHTML = (icon ? '<img src="' + icon + '" loading="lazy">' : '') +
                     '<div class="nm">' + cn + '</div>';
@@ -625,6 +641,7 @@ function renderWarband(data) {
       d.appendChild(bdg);
       d.title = cn + '　' + u + '　坐标(' + x + ',' + y + ')' + (g.category ? '　页签 ' + g.category : '') +
                 '　（左键拖=移动，Ctrl+拖到右侧兵种库=删除）';
+      d._baseTitle = d.title;
       d.addEventListener('mousedown', e => {
         if (e.button !== 0) return;
         if (mode === 'connect') return;                       // 连接模式：点击选端点，不拖
@@ -658,7 +675,7 @@ function renderWarband(data) {
         selectCard(g.unit_group, u);
         paintMulti();
       });
-      // 右键：加入 / 移出「当前军事组」（按右上选中的种族/派系）
+      // 右键：按种族或派系添加归属，移除时明确选择授权渠道
       d.addEventListener('contextmenu', ev => {
         ev.preventDefault();
         // 右键作用于**当前选中的组**（框选/Ctrl 多选都在内）；如果右键的这个组没被选中，就只作用于它
@@ -672,7 +689,8 @@ function renderWarband(data) {
         const t0 = document.getElementById('ctxTitle');
         t0.textContent = '组 ' + (units[0] ? ((DATA.names || {})[units[0]] || shortName(units[0])) : ctxGroup)
           + '（' + units.length + ' 个兵）'
-          + (filterFaction ? '　当前军事组：' + filterFaction : (filterRace ? '　当前种族：' + filterRace : '　（右侧没选种族/派系）'));
+          + '　当前范围：' + (filterFaction || filterRace || '未选范围');
+        document.getElementById('ctxAdd').textContent = filterFaction ? '授予当前派系专属许可' : '授权该种族全部军事组';
         t0.title = '组 key：' + ctxGroups.join(' / ');
         m.style.left = ev.clientX + 'px';
         m.style.top = ev.clientY + 'px';
@@ -1302,6 +1320,8 @@ function buildRail(pages) {
   let shown = (pages || []).filter(p => isOurs(p) || opened.indexOf(p) >= 0 || mine.indexOf(p) >= 0);
   for (const t of mine) if (shown.indexOf(t) < 0) shown = shown.concat([t]);
   for (const t of opened) if (shown.indexOf(t) < 0) shown = shown.concat([t]);
+  // 移除最后一条授权后，当前编辑页签仍留在列表。
+  if (activePage && (pages || []).includes(activePage) && !shown.includes(activePage)) shown.push(activePage);
   const mk = (label, value, foreign) => {
     const b = document.createElement('div');
     b.className = 'rp' + ((activePage === value) ? ' on' : '') + (foreign ? ' foreign' : '');
@@ -1342,39 +1362,62 @@ function buildRail(pages) {
       + (filterFaction ? '这个派系还没有页签' : '这个种族还没有页签') + '（点下面「＋ 新建页签」）</div>';
 }
 // 种族/派系过滤：种族 = 组里任意一个兵属于该种族；派系 = 组里任意一个兵属于该派系
-function groupMatches(gk) {
-  if (!filterRace && !filterFaction) return true;
-  const races = (DATA.groupRaces || {})[gk];
-  const facs = (DATA.groupFactions || {})[gk];
-  // **查不到任何军事组授权（gR/gF 都空）→ 不隐藏**：它不属于"别的种族"，只是不在任何军事组里
-  //（角标会标"不在军事组"）。老行为是当"不属于当前种族"直接滤掉 → 用户以为"移出军事组把单位弄没了"。
-  const known = (races && races.length > 0) || (facs && facs.length > 0);
-  if (!known) return true;
-  if (filterFaction) return !!facs && facs.indexOf(filterFaction) >= 0;
-  return !!races && races.indexOf(filterRace) >= 0;
+// 授权与可见性分离：页签内容不因缺少军事组关系而消失。
+function groupMatches(gk) { return true; }
+function militaryStatus(unit) {
+  const data = DATA.militaryAssignments || {};
+  const lookup = (map, key, fallback) => {
+    map = map || {};
+    if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
+    const actual = Object.keys(map).find(k => k.toLowerCase() === String(key || '').toLowerCase());
+    return actual === undefined ? fallback : map[actual];
+  };
+  const assigned = lookup(data.units, unit, []);
+  const exclusive = lookup(data.exclusive, unit, []);
+  let required = [];
+  if (filterFaction) {
+    const group = lookup(data.factions, filterFaction, '');
+    if (group) required = [group];
+  } else if (filterRace) required = lookup(data.races, filterRace, []);
+  const scoped = !!(filterFaction || filterRace);
+  const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+  const scopedMilitary = scoped ? assigned.filter(a => required.some(g => same(a, g))) : assigned;
+  const militaryGranted = scopedMilitary.length > 0;
+  // 种族和派系均认两条渠道；添加授权的落表目标由所选层级决定。
+  const scopedExclusive = filterFaction ? exclusive.filter(f => same(f, filterFaction))
+    : filterRace ? exclusive.filter(f => same(lookup(data.factionRaces, f, ''), filterRace))
+    : exclusive;
+  const exclusiveGranted = scopedExclusive.length > 0;
+  const knownScope = !scoped || required.length > 0 || exclusiveGranted
+    || (filterFaction && lookup(data.factionRaces, filterFaction, null) !== null)
+    || (!filterFaction && filterRace && Object.values(data.factionRaces || {}).some(r => same(r, filterRace)));
+  const known = data.known === true && !!knownScope;
+  const missing = known && !militaryGranted && !exclusiveGranted;
+  return { assigned, exclusive, required, known, missing, militaryGranted, exclusiveGranted, scopedMilitary, scopedExclusive };
 }
-// 黄标（"不属于当前军事组"）/ 专属角标：**按当前 filterRace / filterFaction 实时算**。
-// 触发条件：① 选了种族/派系而组确实不属于它；② 页签是「打开页签」进来的（设计上跳过范围过滤、打黄标提示）。
-// 只在"确实知道这个组属于谁"（gR/gF 非空）时才判，免得把查不到授权的兵误标成不属于当前军事组。
 function updateBadges() {
   for (const el of document.querySelectorAll('#tree .card')) {
     const host = el.querySelector('.bdg');
-    if (!host) continue;                                   // 空组占位框没有角标位
-    const gR = el._gR || [], gF = el._gF || [];
-    const known = gF.length > 0 || gR.length > 0;
-    const foreign = known && ((filterFaction && gF.indexOf(filterFaction) < 0)
-                 || (!filterFaction && filterRace && gR.indexOf(filterRace) < 0));
-    // 一个军事组都没有（gR/gF 全空）→ 标"不在军事组"：**这种组不隐藏**（见 groupMatches），
-    // 角标告诉用户"它不在任何军事组里，游戏里该军事组下不会出现；右键可以加回来"
-    const nomil = !known;
-    el.classList.toggle('foreign', !!foreign);
-    el.classList.toggle('nomil', nomil);
-    host.innerHTML = nomil
-      ? '<div class="ex nm"></div><div class="exTxt nmTxt">不在军事组（游戏里该军事组下不会出现；右键可加回）</div>'
-      : (foreign
-        ? '<div class="ex"></div><div class="exTxt">不属于当前军事组（可右键添加到当前军事组）</div>'
-        : (el._excl ? '<div class="ex"></div><div class="exTxt">专属：' +
-                      (Array.isArray(el._excl) ? el._excl.join(' / ') : '部分派系') + '</div>' : ''));
+    if (!host) continue;
+    const status = militaryStatus(el._unit);
+    const noGroups = status.known && status.assigned.length === 0 && status.exclusive.length === 0;
+    el.classList.toggle('foreign', status.missing && !noGroups);
+    el.classList.toggle('nomil', status.missing && noGroups);
+    host.title = status.known
+      ? '当前军事组范围：' + (status.required.join(' / ') || '未选范围') + '；已分配军事组：' + (status.assigned.join(' / ') || '无')
+        + '；专属派系许可（allowed=true）：' + (status.exclusive.join(' / ') || '无')
+        + '；当前授权来源：' + ([status.militaryGranted ? '军事组' : '', status.exclusiveGranted ? '派系专属表' : ''].filter(Boolean).join(' + ') || '无')
+      : '派系归属数据未读全，暂不判定角标';
+    el.title = (el._baseTitle || '') + '；' + host.title;
+    host.innerHTML = '';
+    if (status.missing) {
+      const marker = document.createElement('div');
+      marker.className = 'ex' + (noGroups ? ' nm' : '');
+      const label = document.createElement('div');
+      label.className = 'exTxt' + (noGroups ? ' nmTxt' : '');
+      label.textContent = (noGroups ? '未分配派系权限' : '不属于当前范围') + (filterFaction ? '（右键可添加专属许可）' : '（右键可添加种族军事组）');
+      host.appendChild(marker); host.appendChild(label);
+    }
   }
 }
 
@@ -1391,7 +1434,7 @@ function applyFilter() {
   let shown = 0;
   for (const el of document.querySelectorAll('#tree .card')) {
     const okPage = !activePage || el.dataset.cat === activePage;
-    const okScope = openedTab ? true : groupMatches(el.dataset.group);
+    const okScope = true; // 授权缺失只用角标表示，不隐藏。
     const ok = okPage && okScope;
     el.style.display = ok ? '' : 'none';
     if (ok) shown++;
@@ -1400,7 +1443,7 @@ function applyFilter() {
   for (const p of document.querySelectorAll('#links path')) {
     const cats = (p.dataset.cat || '').split('|');
     const okPage = !activePage || (cats[0] === activePage && cats[1] === activePage);
-    const okScope = openedTab ? true : (groupMatches(p.dataset.c) || groupMatches(p.dataset.p));
+    const okScope = true;
     const ok = okPage && okScope;
     p.style.display = ok ? '' : 'none';
     if (ok && !p.classList.contains('nolink')) linksShown++;      // 虚线是临时可视化，不算"连线"计数
@@ -1423,6 +1466,9 @@ function applyFilter() {
 function canvasFilterBy(msg) {
   filterRace = msg.race || '';
   filterFaction = msg.faction || '';
+  if (filterFaction.startsWith('generic:')) { filterRace = filterFaction.slice(8); filterFaction = ''; }
+  hidePop('permissionPop');
+  permissionRemoval = null;
   const pageRaces = DATA.pageRaces || {};
   const pageFactions = DATA.pageFactions || {};
   const has = (arr, v) => (arr || []).indexOf(v) >= 0;
@@ -1456,27 +1502,12 @@ function applySkin() {
 }
 
 /* ───────────── 兵种库双击/拖入 ───────────── */
-// 加兵的**统一入口**：这个兵已经在别的组里 → 先问一句；确认继续就"覆盖之前的表单"（后端把旧 junction 删掉）。
-// 双击（canvasAddUnit）与三种拖入都走这里，规则只有一份。
-function groupsOfUnit(unit) {
-  const out = [];
-  for (const g of (DATA.groups || [])) if ((g.units || []).indexOf(unit) >= 0) out.push(g);
-  return out;
-}
+// 加兵统一入口：允许同一单位加入多个组和页签，不删除已有关系。
 function reportAddUnit(unit, x, y, isNew, category, group) {
   if (!unit) return false;
   const tgt = group || '';
-  const used = groupsOfUnit(unit).filter(g => g.unit_group !== tgt);
-  let overwrite = false;
-  if (used.length > 0) {
-    const where = used.map(g => '「' + groupName(g.unit_group) + '」' + (g.category ? '（页签 ' + g.category + '）' : '（无页签）')).join('、');
-    if (!confirm('这个兵已经被使用：' + where +
-                 '\n\n继续加入会覆盖之前的表单 —— 把它从上面这些组里移出来，只保留这次加入的位置。' +
-                 '\n（选「取消」= 这次不加入）')) return false;
-    overwrite = true;
-  }
   const msg = { type: 'addUnit', unit: unit, x: Math.round(x), y: Math.round(y),
-                isNew: !!isNew, category: category || '', overwrite: overwrite };
+                isNew: !!isNew, category: category || '' };
   if (tgt) msg.group = tgt;                 // 新建组时不带 group，由后端生成组名
   report(msg);
   return true;
@@ -1867,14 +1898,43 @@ document.getElementById('npOk').onclick = () => {
 
 /* ───────────── 组右键：军事组 ───────────── */
 let ctxUnits = [], ctxGroup = '', ctxGroups = [];
+let permissionRemoval = null;
 document.getElementById('ctxAdd').onclick = () => {
-  report({ type: 'addToMilGroup', units: ctxUnits });
+  report({ type: 'grantUnitPermissions', units: ctxUnits });
   document.getElementById('ctxMenu').classList.add('hidden');
 };
 document.getElementById('ctxDel').onclick = () => {
-  report({ type: 'removeFromMilGroup', units: ctxUnits });
+  permissionRemoval = { units: [...new Set(ctxUnits)], race: filterRace, faction: filterFaction };
+  const states = permissionRemoval.units.map(militaryStatus);
+  const scoped = !!(filterRace || filterFaction);
+  const military = scoped && states.some(s => s.militaryGranted);
+  const exclusive = scoped && states.some(s => s.exclusiveGranted);
+  const distinct = values => [...new Map(values.map(value => [value.toLowerCase(), value])).values()];
+  const militaryKeys = scoped ? distinct(states.flatMap(s => s.scopedMilitary)) : [];
+  const exclusiveKeys = scoped ? distinct(states.flatMap((s, i) => s.scopedExclusive.map(f => permissionRemoval.units[i] + ' → ' + f))) : [];
+  document.getElementById('permissionMilitaryKeys').textContent = militaryKeys.length ? '军事组 key：\n' + militaryKeys.join('\n') : '无军事组分配';
+  document.getElementById('permissionExclusiveKeys').textContent = exclusiveKeys.length ? '专属许可 key（单位） → faction（派系）：\n' + exclusiveKeys.join('\n') : '无专属许可分配';
+  document.getElementById('permissionScope').textContent = (filterFaction ? '派系：' + filterFaction : '种族：' + (filterRace || '未选择'))
+    + '；' + permissionRemoval.units.length + ' 个单位';
+  document.getElementById('permissionHint').textContent = '原版授权会保留并提示无法移除；画布单位始终保留。'
+    + (filterFaction && military ? ' 移除军事组会影响共用该组的其他派系。' : '')
+    + (!military && !exclusive ? ' 当前范围没有可移除的授权。' : '');
+  document.getElementById('permissionMilitary').disabled = !military;
+  document.getElementById('permissionExclusive').disabled = !exclusive;
+  document.getElementById('permissionAll').disabled = !military && !exclusive;
   document.getElementById('ctxMenu').classList.add('hidden');
+  showPop('permissionPop');
 };
+function removePermissions(kind) {
+  if (!permissionRemoval) return;
+  report({ type: 'removeUnitPermissions', ...permissionRemoval, kind });
+  permissionRemoval = null;
+  hidePop('permissionPop');
+}
+document.getElementById('permissionMilitary').onclick = () => removePermissions('military');
+document.getElementById('permissionExclusive').onclick = () => removePermissions('exclusive');
+document.getElementById('permissionAll').onclick = () => removePermissions('all');
+document.getElementById('permissionCancel').onclick = () => { permissionRemoval = null; hidePop('permissionPop'); };
 document.getElementById('ctxSplit').onclick = () => {
   // 右键菜单里的"拆分成单兵组"：第一个兵留在原组（保住连线/路线），其余各自成组
   let n = 0;
@@ -2460,6 +2520,7 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     hidePop('cardPop'); hidePop('routePop'); hidePop('multiPop'); hidePop('newPop'); hidePop('openPop'); hidePop('upgPop');
     hidePop('linePop'); lineCur = null;
+    hidePop('permissionPop'); permissionRemoval = null;
     const cm = document.getElementById('ctxMenu'); if (cm) cm.classList.add('hidden');
     const sm = document.getElementById('snapMenu'); if (sm) sm.style.display = 'none';
     multiGroups = []; selected = null; connectFrom = null; linkSel = null;

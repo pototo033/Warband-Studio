@@ -130,6 +130,19 @@ public static class AmendTestRunner
         // 本地素材当来源：目标条目在包里本来是没的 → 导出时新增，字节 = 本地文件
         e.FileReplacements.Add(("ui/skins/default/warband_upgrades/background_images_studio_local.png", localBg));
         e.AddUnitGroup.Add((sampleUnit, "wh_main_group_empire"));  // 军事组授权（种族级：填该种族所有组）
+        // 同一个单位新增两家派系专属许可，确保写表不能按 unit 单键合并。
+        string[] exclusiveFactions;
+        using (var permissionVanilla = PackArchive.Open(vanillaPath))
+        {
+            var originalExclusive = TableFiles.ReadComposite(permissionVanilla, "units_to_exclusive_faction_permissions_tables", ["key", "faction"], schema)!;
+            var alreadyGranted = originalExclusive.Rows.Where(r => r[Col(originalExclusive, "key")].ToTsv().Equals(sampleUnit, StringComparison.OrdinalIgnoreCase)
+                && (r[Col(originalExclusive, "allowed")].ToTsv().Equals("true", StringComparison.OrdinalIgnoreCase) || r[Col(originalExclusive, "allowed")].ToTsv() == "1"))
+                .Select(r => r[Col(originalExclusive, "faction")].ToTsv()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var factionTable = TableFiles.ReadMerged(permissionVanilla, "factions_tables", schema)!;
+            exclusiveFactions = factionTable.Rows.Select(r => r[Col(factionTable, "key")].ToTsv())
+                .Where(f => f.Length > 0 && !alreadyGranted.Contains(f)).Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToArray();
+        }
+        foreach (var permissionFaction in exclusiveFactions) e.SetExclusive(sampleUnit, permissionFaction, true);
         e.RemoveRoute.Add(delRoute);
         e.RemoveLink.Add((delLinkChild, delLinkParent));
         e.RemoveJunction.Add((delJunctionUnit, delJunctionGroup));
@@ -384,6 +397,7 @@ public static class AmendTestRunner
             ["grantUnit"] = sampleUnit,
             ["unlockUnit"] = unlockUnit,
             ["grantGroup"] = "wh_main_group_empire",
+            ["exclusiveFactions"] = exclusiveFactions,
             ["renameOld"] = "BRT",
             ["renameNew"] = "BRTREN",
             ["artTarget"] = "ui/skins/default/warband_upgrades/background_images_brt.png",

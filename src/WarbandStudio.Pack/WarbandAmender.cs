@@ -597,7 +597,7 @@ public static class WarbandAmender
                 {
                     ["unit"] = x.Unit,
                     ["military_group"] = x.MilitaryGroup,
-                }));
+                }), keyCols: ["unit", "military_group"]);
 
         // ── 6b-2) 移出军事组（删 units_to_groupings_military_permissions 的行）──
         if (e.RemoveUnitGroup.Count > 0)
@@ -605,6 +605,62 @@ public static class WarbandAmender
             var drop = KeySet(e.RemoveUnitGroup.Select(x => x.Unit + "\u0001" + x.MilitaryGroup));
             changed += RewriteDropping(pack, "units_to_groupings_military_permissions_tables", schema, repl, notes,
                 (t, i) => drop.Contains(Cell(t, i, "unit") + "\u0001" + Cell(t, i, "military_group")));
+        }
+
+        // 派系专属许可：已有组合键只就地改 allowed；新组合键写 zzzz_studio_edits。
+        const string Exclusive = "units_to_exclusive_faction_permissions_tables";
+        if (e.AddExclusive.Count > 0)
+        {
+            var wanted = KeySet(e.AddExclusive.Select(x => x.Unit + "\u0001" + x.Faction));
+            var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in TablePaths(pack, Exclusive, repl))
+            {
+                var bytes = CurrentBytes(pack, repl, path);
+                if (bytes is null) continue;
+                var table = DbTable.Decode(bytes, Exclusive, schema);
+                var allowedColumn = table.Definition.Fields.FindIndex(field => field.Name.Equals("allowed", StringComparison.OrdinalIgnoreCase));
+                if (allowedColumn < 0) throw new InvalidDataException("派系专属表缺少 allowed 列。");
+                var raws = new List<DbValue[]>();
+                var hits = 0;
+                for (var i = 0; i < table.Rows.Count; i++)
+                {
+                    var raw = table.RawRows[i];
+                    var pair = Cell(table, i, "key") + "\u0001" + Cell(table, i, "faction");
+                    if (wanted.Contains(pair))
+                    {
+                        placed.Add(pair);
+                        if (!raw[allowedColumn].ToTsv().Equals("true", StringComparison.OrdinalIgnoreCase) && raw[allowedColumn].ToTsv() != "1")
+                        {
+                            raw = (DbValue[])raw.Clone();
+                            raw[allowedColumn] = DbValue.Of(true);
+                            hits++;
+                        }
+                    }
+                    raws.Add(raw);
+                }
+                if (hits == 0) continue;
+                repl[path] = EncodeLike(table, raws);
+                notes.Add($"{path}：专属许可就地启用 {hits} 行。");
+                changed++;
+            }
+            // 原版已有的正向许可无需再造重复覆盖行。
+            var vanillaPermitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var vanillaExclusive = vanilla is null ? null : TableFiles.ReadComposite(vanilla, Exclusive, ["key", "faction"], schema);
+            if (vanillaExclusive is not null)
+                for (var i = 0; i < vanillaExclusive.Rows.Count; i++)
+                    if (Cell(vanillaExclusive, i, "allowed").Equals("true", StringComparison.OrdinalIgnoreCase) || Cell(vanillaExclusive, i, "allowed") == "1")
+                        vanillaPermitted.Add(Cell(vanillaExclusive, i, "key") + "\u0001" + Cell(vanillaExclusive, i, "faction"));
+            changed += AddRows(pack, vanilla, Exclusive, schema, repl, notes,
+                e.AddExclusive.Where(x => !placed.Contains(x.Unit + "\u0001" + x.Faction) && !vanillaPermitted.Contains(x.Unit + "\u0001" + x.Faction))
+                    .Select(x => new Dictionary<string, object> { ["key"] = x.Unit, ["faction"] = x.Faction, ["allowed"] = true }),
+                keyCols: ["key", "faction"]);
+        }
+        if (e.RemoveExclusive.Count > 0)
+        {
+            var drop = KeySet(e.RemoveExclusive.Select(x => x.Unit + "\u0001" + x.Faction));
+            changed += RewriteDropping(pack, Exclusive, schema, repl, notes,
+                (t, i) => drop.Contains(Cell(t, i, "key") + "\u0001" + Cell(t, i, "faction"))
+                    && (Cell(t, i, "allowed").Equals("true", StringComparison.OrdinalIgnoreCase) || Cell(t, i, "allowed") == "1"));
         }
 
         // ── 6c) 文件替换（换背景/按钮图、素材库往包里搬图：目标条目的字节换成来源的）──

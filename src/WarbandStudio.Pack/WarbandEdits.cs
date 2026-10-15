@@ -93,6 +93,9 @@ public sealed class WarbandEdits
     /// 种族级编辑填该种族**所有**军事组，派系级只填它自己那一个。</summary>
     public List<(string Unit, string MilitaryGroup)> AddUnitGroup { get; } = [];
 
+    public List<(string Unit, string Faction)> AddExclusive { get; } = [];
+    public List<(string Unit, string Faction)> RemoveExclusive { get; } = [];
+
     /// <summary>新建页签（key, 克隆哪个母版页签）。页签本体由 <see cref="WarbandNewTab"/> 生成。</summary>
     /// <summary>新建页签（key, 克隆哪个母版, 背景图来源, 按钮图来源；来源为空 = 跟母版一样）。</summary>
     public List<(string Key, string Donor, string? BgSource, string? BtnSource)> NewTabs { get; } = [];
@@ -211,10 +214,19 @@ public sealed class WarbandEdits
         }
     }
 
+    /// <summary>兵→派系专属许可：添加 true / 移除当前包的正向许可。</summary>
+    public void SetExclusive(string unit, string faction, bool present)
+    {
+        RemoveExclusive.RemoveAll(x => Same(x.Unit, unit) && Same(x.Faction, faction));
+        AddExclusive.RemoveAll(x => Same(x.Unit, unit) && Same(x.Faction, faction));
+        if (present) AddExclusive.Add((unit, faction));
+        else RemoveExclusive.Add((unit, faction));
+    }
+
     public int Count =>
         AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
         AddRoute.Count + RemoveRoute.Count + AddLink.Count + RemoveLink.Count + AddCost.Count + NewTabs.Count + AddUnitGroup.Count + FileReplacements.Count + RemoveUnitGroup.Count + TabScopes.Count + OpenedTabs.Count + TabRenames.Count + UnlockXp.Count + TabRaceScopes.Count + RemoveFiles.Count +
-        PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count;
+        PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count;
 
     public bool IsEmpty => Count == 0;
 
@@ -235,6 +247,8 @@ public sealed class WarbandEdits
         P("新成本", AddCost.Count);
         P("军事组授权", AddUnitGroup.Count);
         P("移出军事组", RemoveUnitGroup.Count);
+        P("派系专属授权", AddExclusive.Count);
+        P("移除专属许可", RemoveExclusive.Count);
         P("新页签", NewTabs.Count);
         P("打开页签", OpenedTabs.Count);
         P("页签归属", TabScopes.Count);
@@ -269,6 +283,18 @@ public sealed class WarbandEdits
         c.PoolCosts.AddRange(PoolCosts);
         c.RemoveCost.AddRange(RemoveCost);
         c.RemovePoolCost.AddRange(RemovePoolCost);
+        c.AddUnitGroup.AddRange(AddUnitGroup);
+        c.RemoveUnitGroup.AddRange(RemoveUnitGroup);
+        c.AddExclusive.AddRange(AddExclusive);
+        c.RemoveExclusive.AddRange(RemoveExclusive);
+        c.NewTabs.AddRange(NewTabs);
+        c.FileReplacements.AddRange(FileReplacements);
+        c.RemoveFiles.AddRange(RemoveFiles);
+        c.TabScopes.AddRange(TabScopes);
+        c.OpenedTabs.AddRange(OpenedTabs);
+        c.TabRenames.AddRange(TabRenames);
+        c.UnlockXp.AddRange(UnlockXp);
+        c.TabRaceScopes.AddRange(TabRaceScopes);
         return c;
     }
 }

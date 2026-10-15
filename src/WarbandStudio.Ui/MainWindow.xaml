@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:WarbandStudio.Ui.ViewModels"
         xmlns:views="clr-namespace:WarbandStudio.Ui.Views"
-        Title="战帮树工坊 WarbandStudio" Height="900" Width="1560"
+        Title="战帮树工坊 WarbandStudio" Height="900" Width="1560" MinWidth="1100" MinHeight="700"
         Background="{DynamicResource Bg.Window}"
         Foreground="{DynamicResource Text.Primary}"
         FontFamily="{DynamicResource AppFont}"
@@ -95,40 +95,43 @@
         <!-- 工具栏 -->
         <Border Grid.Row="1" Background="{DynamicResource Bg.Panel}"
                 BorderBrush="{DynamicResource Border.Line}" BorderThickness="0,1,0,1"
-                Padding="6,4">
-            <StackPanel Orientation="Horizontal">
+                Padding="12,8">
+            <!-- 工程、保存、工具分组；窄窗口自动换行，避免状态文字把操作挤出窗口。 -->
+            <WrapPanel>
+                <TextBlock Text="工程" Style="{StaticResource Workspace.ToolbarLabel}" />
                 <Button Content="打开上次工程" Padding="10,3" Margin="0,0,6,0" Click="OnOpenLastProject"
                         ToolTip="直接打开最近一次用的工程（没有的话会提示从哪开始）" />
                 <Button Content="新建工程" Padding="10,3" Margin="0,0,6,0" Click="OnNewProject"
                         ToolTip="弹「新建工程」页：工程文件夹 / 生成 Pack 目录 / 项目 key" />
                 <Button Content="打开工程" Padding="10,3" Margin="0,0,6,0" Click="OnOpenProject"
                         ToolTip="选一个已有工程目录（里面有 project.json）" />
-                <Button Content="加载兵种mod" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenUnitPackCommand}"
-                        ToolTip="加载一个兵种 mod 当参考包：图标/中文名/右上「mod 兵种」页读它；不进战帮树、不占画布" />
-                <Button Content="保存" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" />
+                <Border Style="{StaticResource Workspace.ToolbarDivider}" />
+                <Button Content="保存" Style="{StaticResource AeButton.Primary}" Padding="14,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" ToolTip="保存当前 Pack（Ctrl+S）" />
                 <Button Content="另存为" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackAsCommand}" />
                 <Button Content="关闭 Pack" Padding="10,3" Margin="0,0,12,0" Command="{Binding ClosePackCommand}"
                         ToolTip="关掉当前画布这个包（别的包留着）；有未导出的编辑会先问" />
-                <Button Content="跑诊断" Padding="10,3" Margin="0,0,6,0" Command="{Binding DiagnosticsCommand}" />
+                <Border Style="{StaticResource Workspace.ToolbarDivider}" />
+                <TextBlock Text="工具" Style="{StaticResource Workspace.ToolbarLabel}" />
+                <Button Content="加载兵种 mod" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenUnitPackCommand}"
+                        ToolTip="加载兵种参考包，为兵种库提供图标、中文名与单位数据" />
+                <Button Content="诊断" Padding="10,3" Margin="0,0,6,0" Command="{Binding DiagnosticsCommand}" />
                 <Button Content="教程" Padding="10,3" Margin="0,0,10,0" VerticalAlignment="Center"
                         Click="OnStartTour" ToolTip="再看一遍使用教程（PPT 式指引）" />
                 <CheckBox Content="自动保存" VerticalAlignment="Center" Margin="0,0,10,0"
                           IsChecked="{Binding AutoSave}"
                           Foreground="{DynamicResource Text.Secondary}"
                           ToolTip="打开后：每次编辑停下来约 2 秒自动写回原包（RPFM 那种随时保存的手感；原文件会留 .bak 备份）" />
-                <TextBlock VerticalAlignment="Center" Margin="8,0,0,0" FontSize="12"
-                           Foreground="{DynamicResource Text.Secondary}" Text="{Binding Status}" />
-            </StackPanel>
+            </WrapPanel>
         </Border>
 
         <!-- 主区 -->
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="2" Margin="8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="320" MinWidth="220" />
                 <ColumnDefinition Width="6" />
                 <ColumnDefinition Width="*" MinWidth="420" />
                 <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="260" MinWidth="180" />
+                <ColumnDefinition Width="300" MinWidth="240" />
             </Grid.ColumnDefinitions>
 
             <!-- 左栏 -->
@@ -145,7 +148,7 @@
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Content="?" Padding="6,0" Margin="4,0,0,0" FontSize="11"
                                     Click="OnHelpTree" ToolTip="这个面板是干嘛的" />
-                            <TextBlock Text="Pack 文件（战帮相关默认展开）" Style="{StaticResource PanelHeaderText}" />
+                            <TextBlock Text="工程与 Pack" Style="{StaticResource PanelHeaderText}" ToolTip="工程 → Pack → 文件；双击数据表打开表视图" />
                         </DockPanel>
                     </Border>
                     <TreeView x:Name="TreeFiles" ItemsSource="{Binding TreeRoots}" Background="Transparent"
@@ -223,6 +226,7 @@
                 <!-- 左下：分页面板 -->
                 <TabControl x:Name="LeftTabs" Grid.Row="2" Background="{DynamicResource Bg.Panel}" BorderThickness="0">
                     <TabItem Header="全局选项">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel Margin="8">
                             <TextBlock Text="游戏目录（含 data 那一层）" FontSize="12"
                                        Foreground="{DynamicResource Text.Secondary}" />
@@ -270,15 +274,16 @@
                                      Foreground="{DynamicResource Text.Secondary}"
                                      BorderBrush="{DynamicResource Border.Line}" />
                         </StackPanel>
+                        </ScrollViewer>
                     </TabItem>
                     <TabItem Header="诊断 · 引用">
                         <DockPanel Margin="8">
-                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                            <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                                 <Button Content="跑一遍诊断" Padding="10,3" Command="{Binding DiagnosticsCommand}" />
                                 <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="12"
                                            Foreground="{DynamicResource Text.Secondary}"
-                                           Text="（rpfm DiagnosticsCheck：坏引用 / 非法枚举 / 空 key…）" />
-                            </StackPanel>
+                                           Text="检查坏引用、非法枚举与空 key" />
+                            </WrapPanel>
                             <ListBox ItemsSource="{Binding DiagnosticsLines}" FontSize="11"
                                      Background="{DynamicResource Bg.Window}"
                                      Foreground="{DynamicResource Text.Primary}"
@@ -287,7 +292,7 @@
                     </TabItem>
                     <TabItem Header="UI 素材库">
                         <DockPanel Margin="8">
-                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                            <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                                 <Button Content="刷新" Padding="10,3" Command="{Binding LoadUiAssetsCommand}" />
                                 <Button Content="导入背景图…" Padding="10,3" Margin="6,0,0,0" Click="OnUiAssetImport" Tag="bg"
                                         ToolTip="选一张或多张 .png 作为**背景图**加进本地素材库（导入时先改成 background_images_new_added&lt;N&gt;.png，用到页签上再改成 background_images_&lt;页签key&gt;.png）" />
@@ -295,10 +300,10 @@
                                         ToolTip="选一张或多张 .png 作为**按钮图**加进本地素材库（导入时先改成 button_upgrade_new_added&lt;N&gt;.png，用到页签上再改成 button_upgrade_&lt;页签key&gt;.png）" />
                                 <Button Content="恢复内置素材" Padding="10,3" Margin="6,0,0,0" Click="OnUiAssetReset"
                                         ToolTip="把删掉的内置素材重新铺回来（清空&quot;已移除&quot;名单；你自己导入的不受影响）" />
-                                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontSize="11"
+                                <TextBlock Margin="0,6,0,0" VerticalAlignment="Center" FontSize="11" TextWrapping="Wrap" Width="270"
                                            Foreground="{DynamicResource Text.Secondary}"
-                                           Text="本地素材库（内置 WUU+雪乃 + 你导入的）；右键一张图 →「添加到当前包」= 导出时写进你编辑的 pack（不动画布）" />
-                            </StackPanel>
+                                           Text="右键素材可添加到当前 Pack；保存后写入包。" />
+                            </WrapPanel>
                             <TextBox DockPanel.Dock="Top" Margin="0,0,0,6" Padding="4,3"
                                      Text="{Binding UiAssetFilter, UpdateSourceTrigger=PropertyChanged}"
                                      ToolTip="按文件名过滤，例如 background_images_ / button_upgrade_ / subtitle"
@@ -410,20 +415,24 @@
                 <Border x:Name="WelcomeHost" Margin="0,28,0,0"
                         Visibility="{Binding IsWelcomeVisible, Converter={StaticResource BoolToVisibility}}"
                         Background="{DynamicResource Bg.Window}">
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="620" Margin="24">
-                        <TextBlock Text="WarbandStudio 战帮树工坊" FontSize="23" HorizontalAlignment="Center"
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="620" Margin="28">
+                        <TextBlock Text="战帮树工坊" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Left"
                                    Foreground="{DynamicResource Text.Primary}" />
-                        <TextBlock Text="还没有打开工程 —— 选一个开始（工程目录里放你改的 pack、项目 key 和历史版本，多个工程互不影响）："
-                                   FontSize="13" Margin="0,12,0,16" TextWrapping="Wrap" TextAlignment="Center"
+                        <TextBlock Text="WARBAND STUDIO" Style="{StaticResource AeText.Caption}" Margin="0,6,0,0" />
+                        <TextBlock Text="打开工程，在画布上编排兵种与升级路线。保存时自动保留历史版本。"
+                                   FontSize="13" Margin="0,16,0,24" TextWrapping="Wrap"
                                    Foreground="{DynamicResource Text.Secondary}" />
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                            <Button Content="从 Pack 打开工程…" Padding="14,6" Margin="0,0,8,0" Click="OnOpenProjectFromPack"
+                        <WrapPanel>
+                            <Button Content="从 Pack 开始…" Style="{StaticResource AeButton.Primary}" Padding="14,8" Margin="0,0,8,8" Click="OnOpenProjectFromPack"
                                     ToolTip="直接选你的 .pack：工具把它复制进新工程的「生成 Pack 目录」再编辑（源文件不动）" />
-                            <Button Content="新建工程…" Padding="14,6" Margin="0,0,8,0" Click="OnNewProject"
+                            <Button Content="新建工程…" Padding="14,8" Margin="0,0,8,8" Click="OnNewProject"
                                     ToolTip="选一个空文件夹建工程骨架（不自动放包；之后可「导入 WUU 模板」或「导入 Pack」）" />
-                            <Button Content="打开工程…" Padding="14,6" Click="OnOpenProject"
+                            <Button Content="打开工程…" Padding="14,8" Margin="0,0,0,8" Click="OnOpenProject"
                                     ToolTip="选一个已有工程目录（里面有 project.json）" />
-                        </StackPanel>
+                        </WrapPanel>
+                        <TextBlock Text="工程保存你的 Pack、项目 key 和历史版本。已有 Pack 会复制进工程，原文件保留。"
+                                   Style="{StaticResource AeText.Caption}" TextWrapping="Wrap" Margin="0,4,0,0" />
                         <TextBlock Text="最近工程（点击直接打开）" FontSize="12" Margin="0,24,0,6"
                                    HorizontalAlignment="Left" Foreground="{DynamicResource Text.Secondary}" />
                         <ItemsControl ItemsSource="{Binding RecentProjects}">
@@ -438,6 +447,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </StackPanel>
+                    </ScrollViewer>
                 </Border>
                 <!-- 战帮画布：WebView2 覆盖在中间栏（留出页签条高度），只在画布页签选中时显示 -->
                 <views:WarbandCanvas x:Name="CanvasHost" Margin="0,28,0,0"
@@ -476,7 +486,7 @@
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Content="?" Padding="6,0" Margin="4,0,0,0" FontSize="11"
                                 Click="OnHelpFaction" ToolTip="这个面板是干嘛的" />
-                        <TextBlock Text="种族 / 派系（实时读 DB）" Style="{StaticResource PanelHeaderText}" />
+                        <TextBlock Text="种族与派系" Style="{StaticResource PanelHeaderText}" />
                     </DockPanel>
                 </Border>
                 <TreeView x:Name="TreeFactions" Grid.Row="1" ItemsSource="{Binding Factions}"
@@ -524,16 +534,6 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate DataType="{x:Type vm:UnitCard}">
                             <StackPanel Width="62" Margin="2" ToolTip="{Binding Key}">
-                                <StackPanel.Style>
-                                    <Style TargetType="StackPanel">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding InTree}" Value="True">
-                                                <Setter Property="Opacity" Value="0.28" />
-                                                <Setter Property="ToolTip" Value="已经在画布上了（再拖会重复）" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </StackPanel.Style>
                                 <Border Height="87" Background="{DynamicResource Bg.Window}"
                                         BorderBrush="{DynamicResource Border.Line}" BorderThickness="1"
                                         CornerRadius="3">
@@ -607,16 +607,6 @@
                                     <ListBox.ItemTemplate>
                                         <DataTemplate DataType="{x:Type vm:UnitCard}">
                                             <StackPanel Width="62" Margin="2" ToolTip="{Binding Key}">
-                                                <StackPanel.Style>
-                                                    <Style TargetType="StackPanel">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding InTree}" Value="True">
-                                                                <Setter Property="Opacity" Value="0.28" />
-                                                                <Setter Property="ToolTip" Value="已经在画布上了（再拖会重复）" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </StackPanel.Style>
                                                 <Border Height="87" Background="{DynamicResource Bg.Window}"
                                                         BorderBrush="{DynamicResource Border.Line}" BorderThickness="1"
                                                         CornerRadius="3">
@@ -765,18 +755,20 @@
         <!-- 状态栏 -->
         <Border Grid.Row="3" Background="{DynamicResource Bg.Header}"
                 BorderBrush="{DynamicResource Border.Line}" BorderThickness="0,1,0,0"
-                Padding="8,3">
+                Padding="12,6">
             <DockPanel>
                 <ProgressBar DockPanel.Dock="Right" Width="90" Height="12" Margin="8,0,0,0"
                              IsIndeterminate="True" Visibility="{Binding IsBusy,
                              Converter={StaticResource BoolToVisibility}}" />
-                <StackPanel Orientation="Horizontal">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="16,0,0,0" ToolTip="运行环境、当前 Pack 与数据库结构">
                     <TextBlock Text="{Binding ServerText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                     <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                     <TextBlock Text="{Binding PackText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                     <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                     <TextBlock Text="{Binding SchemaText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                 </StackPanel>
+                <TextBlock Text="{Binding Status}" Foreground="{DynamicResource Text.Primary}" FontSize="12"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip="{Binding Status}" />
             </DockPanel>
         </Border>
     </Grid>

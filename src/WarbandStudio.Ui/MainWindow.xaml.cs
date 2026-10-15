@@ -24,6 +24,10 @@ public partial class MainWindow : Window
         _vm.FilterRequested += (race, faction) => CanvasHost.SendFilter(race, faction);
         // **自检模式（--ui-selftest）无人值守**：所有确认自动应答（否则某个确认框一弹就卡死整轮自检 —— ⑱ 踩过）
         var selfTest = Environment.GetCommandLineArgs().Contains("--ui-selftest");
+        _vm.MilitaryRemovalBlocked += message =>
+        {
+            if (!selfTest) MessageBox.Show(this, message, "军事组授权", MessageBoxButton.OK, MessageBoxImage.Information);
+        };
         // 一般性确认（是/否）：素材库移除、换图里删"还在用"的图等都走它（以前只在代码里预留、没接线 → 那些确认被静默跳过）
         _vm.Confirm = msg => selfTest
             || MessageBox.Show(this, msg, "WarbandStudio", MessageBoxButton.YesNo, MessageBoxImage.Question)
