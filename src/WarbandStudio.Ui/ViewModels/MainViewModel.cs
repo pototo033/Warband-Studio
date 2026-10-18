@@ -172,7 +172,12 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>本程序版本（build.ps1 编进来的）+ 检查更新入口（启动时后台查一次；菜单/全局选项里可手动查）。</summary>
     public string AppVersion => "v" + Services.Updater.CurrentVersion;
 
-    public async Task CheckUpdatesAsync() => await Services.Updater.CheckAsync(_settings, s => UpdateStatus = s);
+    public event Action? UpdateRestartRequested;
+    public Task CheckUpdatesAsync() => CheckUpdatesCoreAsync(manual: true);
+    public Task CheckUpdatesOnStartupAsync() => CheckUpdatesCoreAsync(manual: false);
+    private Task CheckUpdatesCoreAsync(bool manual) => Services.Updater.CheckAsync(_settings, s => UpdateStatus = s, manual,
+        () => ConfirmUnsavedBeforeAsync("安装更新并重启"), () => UpdateRestartRequested?.Invoke());
+    public void ReportUpdateInstallation() => Services.Updater.ReportInstallation(s => UpdateStatus = s);
 
     /// <summary>当前打开包的路径（文件树右键"打开所在文件夹"用；没打开就是空）。</summary>
     public string CurrentPackPath => _backend.Pack?.PackPath ?? "";

@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <!-- 画布页面（WebView2 打开它） -->
+    <EmbeddedResource Include="Updates\apply-update.ps1" />
     <None Update="Web\canvas.html" CopyToOutputDirectory="PreserveNewest" />
     <!-- 内置的 WUU 内容：建「WUU战帮升级」包时优先用这份（不依赖你机器上的 workshop 目录） -->
     <None Update="bundled\**\*" CopyToOutputDirectory="PreserveNewest" />

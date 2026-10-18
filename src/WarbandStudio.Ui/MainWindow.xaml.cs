@@ -51,6 +51,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _vm;
+        _vm.UpdateRestartRequested += () => { _forceClosing = true; Close(); };
         _vm.FlushTableEdits = async () =>
         {
             // 工具栏保存/关闭同样等待最后一个单元格事务，不能只依靠焦点变化。
@@ -100,7 +101,8 @@ public partial class MainWindow : Window
             if (!_vm.TourDone) { await Task.Delay(700); StartTour(); }
             // **启动时检查更新**（只提示、不自动替换；延迟几秒、后台跑，失败静默）
             await Task.Delay(5000);
-            _ = _vm.CheckUpdatesAsync();
+            _vm.ReportUpdateInstallation();
+            _ = _vm.CheckUpdatesOnStartupAsync();
         };
         // 成本工坊两个下拉展开时各记一行（含选项条数）：以后"点了没反应"看日志就能判 ——
         // 没有这一行 = 点击没到达下拉；有这一行但 0 条 = 清单是空的（v0.145 用户报的就是这种）。
