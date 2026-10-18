@@ -1171,6 +1171,125 @@ chk('无授权显示明确空状态且禁用对应按钮', byId.permissionMilita
   && byId.permissionExclusiveKeys.textContent === '无专属许可分配'
   && byId.permissionMilitary.disabled && byId.permissionExclusive.disabled && byId.permissionAll.disabled);
 
+console.log('㉚ 多组合并继承所选组坐标，不能按整包组数排到画布外');
+clear();
+vm.runInContext(`
+  DATA.groups = Array.from({length: 866}, (_, i) => ({unit_group: 'other_' + i}));
+  GROUPS.mergeA = {x: 274, y: 600, category: 'EMP'};
+  GROUPS.mergeB = {x: 350, y: 600, category: 'EMP'};
+  GROUPS.mergeC = {x: 425, y: 600, category: 'EMP'};
+  activePage = 'EMP'; multiGroups = ['mergeA', 'mergeB', 'mergeC']; paintMulti();
+`, ctx);
+byId.mButtons.children.slice().reverse().find(b => b.textContent === '合并成一个组').onclick();
+chk('整包有866组，三组合并仍落在首个所选组原位', last().type === 'mergeMany' && last().x === 274 && last().y === 600);
+chk('合并发送全部三组并保留页签', last().groups.join(',') === 'mergeA,mergeB,mergeC' && last().category === 'EMP');
+clear();
+vm.runInContext(`
+  GROUPS.mergeA = {x: -20, y: 0, category: 'EMP'};
+  activePage = null; multiGroups = ['mergeA', 'mergeB', 'mergeC']; paintMulti();
+`, ctx);
+byId.mButtons.children.slice().reverse().find(b => b.textContent === '合并成一个组').onclick();
+chk('全部页签模式保留来源页签与合法的零/负坐标', last().x === -20 && last().y === 0 && last().category === 'EMP');
+
+console.log('㉛ 打开的外来/空页签可作为移动目标');
+clear();
+vm.runInContext(`
+  DATA = {pages: ['EMP'], openedTabs: ['EMP2'], newTabs: [], pageRaces: {EMP: ['empire']}, pageFactions: {}};
+  GROUPS.moveSource = {x: 225, y: 300, category: 'EMP', units: ['unit_move']};
+  filterRace = 'empire'; filterFaction = ''; activePage = 'EMP';
+  buildRail(DATA.pages); ctxGroups = ['moveSource'];
+  document.getElementById('ctxRow2').children.length = 0;
+  document.getElementById('ctxMove').onclick();
+`, ctx);
+const openedMoveTarget = byId.ctxRow2.children.find(b => b.textContent === 'EMP2');
+chk('打开但尚无单位的EMP2仍列入移动目标', !!openedMoveTarget);
+if (openedMoveTarget) openedMoveTarget.onclick();
+chk('选择打开的EMP2发送批量移动消息并保留坐标', last() && last().type === 'setCategories' && last().category === 'EMP2' && last().groups[0].group === 'moveSource' && last().groups[0].x === 225 && last().groups[0].y === 300);
+vm.runInContext("document.getElementById('ctxMove').onclick()", ctx);
+chk('移动子菜单提供明确返回按钮', byId.ctxRow1.style.display === 'none' && byId.ctxRow3.style.display === '');
+byId.ctxMoveBack.onclick();
+chk('返回恢复操作首页并收起目标列表', byId.ctxRow1.style.display === '' && byId.ctxRow2.style.display === 'none' && byId.ctxRow3.style.display === 'none');
+vm.runInContext("document.getElementById('ctxMove').onclick(); closeCardContextMenu()", ctx);
+chk('取消菜单同时清除移动子菜单状态', byId.ctxMenu.classList.contains('hidden') && byId.ctxRow1.style.display === '' && byId.ctxRow2.style.display === 'none');
+vm.runInContext(`
+ DATA.openedTabs.push('EMP3');
+ document.getElementById('ctxRow2').children.length = 0;
+ document.getElementById('ctxMove').onclick();
+`, ctx);
+chk('取消后新增打开的EMP3进入重新生成的目标列表', byId.ctxRow2.children.some(b => b.textContent === 'EMP3'));
+chk('每次右键打开菜单先重置旧子菜单', /addEventListener\('contextmenu', ev => \{\s*ev.preventDefault\(\);\s*resetCardContextMenu\(\)/.test(SOURCE));
+clear();
+vm.runInContext(`
+ ctxGroups = Array.from({length: 50}, (_, i) => 'batch_' + i);
+ for (const [i, key] of ctxGroups.entries()) GROUPS[key] = {x: i * 10, y: 300, category: 'EMP'};
+ ctxGroups.push('batch_0');
+ document.getElementById('ctxRow2').children.length = 0;
+ document.getElementById('ctxMove').onclick();
+`, ctx);
+byId.ctxRow2.children.find(b => b.textContent === 'EMP2').onclick();
+chk('多选50组仅发送一条移动消息，组去重', msgs().length === 1 && last().type === 'setCategories' && last().groups.length === 50);
+chk('批量移动保留每组不同的坐标', last().groups.every((g, i) => g.x === i * 10 && g.y === 300));
+
+console.log('㉜ 折线与拖动手柄统一按父端计算几何');
+const knobCases = vm.runInContext(`
+ (() => {
+  GROUPS.knobParent = {x: 200, y: 180, units: ['p']};
+  GROUPS.knobChild = {x: 480, y: 430, units: ['c']};
+  const results = [];
+  for (let pp = 1; pp <= 4; pp++) for (let cp = 1; cp <= 4; cp++) for (const mo of [-60, 0, 80]) {
+   const rec = {p: 'knobParent', c: 'knobChild', pp, cp, mo};
+   const points = linkPath3(rec).match(/-?[\\d.]+/g).map(Number);
+   const k = knobPosOf(rec), child = anchor(GROUPS.knobChild, cp).p, parent = anchor(GROUPS.knobParent, pp).p;
+   results.push({pp, cp, mo,
+    center: Math.abs(k.x - (points[4] + points[6]) / 2) < 0.001 && Math.abs(k.y - (points[5] + points[7]) / 2) < 0.001,
+    endpoints: points[0] === child.x && points[1] === child.y && points[10] === parent.x && points[11] === parent.y,
+    axis: k.vertical === (pp === 1 || pp === 3)});
+  }
+  return results;
+ })()
+`, ctx);
+chk('16种端口组合及正/零/负偏移，手柄都在线段中点', knobCases.length === 48 && knobCases.every(c => c.center));
+chk('改变几何计算顺序不改变子端箭头和两端锚点', knobCases.every(c => c.endpoints));
+chk('手柄拖动轴始终和父端出线方向一致', knobCases.every(c => c.axis));
+
+console.log('㉝ 页签显示派系：跨筛选选择、取消与清空');
+clear();
+vm.runInContext(`
+ DATA.tabVisibility = {known: true, allowed: {EMP: ['reikland', 'missing_mod_faction']}, factions: [
+  {key: 'reikland', name: '瑞克领', race: 'empire', legendary: true},
+  {key: 'wissenland', name: '努恩', race: 'empire', legendary: true},
+  {key: 'dwarf', name: '矮人', race: 'dwarfs', legendary: true}]};
+ DATA.allRaces = [{r:'empire',n:'帝国'}, {r:'dwarfs',n:'矮人'}];
+ filterRace = 'empire'; openTabFactionPop('EMP');
+`, ctx);
+chk('重开设置读取已有名单，并保留缺失 MOD 派系 key', vm.runInContext("tfSelected.has('reikland') && tfSelected.has('missing_mod_faction')",ctx));
+chk('默认按当前种族筛选', byId.tfRace.value === 'empire');
+vm.runInContext("tfSelected.add('wissenland');",ctx);
+byId.tfRace.value = 'dwarfs'; byId.tfRace.onchange();
+chk('切换筛选不丢失其他种族已选派系', vm.runInContext("tfSelected.size === 3",ctx));
+byId.tfCancel.onclick();
+chk('取消不发送编辑消息', msgs().length === 0);
+vm.runInContext("openTabFactionPop('EMP');",ctx);
+chk('取消后的草稿不会污染已有名单', vm.runInContext("!tfSelected.has('wissenland')",ctx));
+byId.tfClear.onclick(); byId.tfSave.onclick();
+chk('清空后应用发送明确的空名单以取消限制', last().type === 'setTabAllowedFactions' && last().category === 'EMP' && last().factions.length === 0);
+clear();
+vm.runInContext("openTabFactionPop('EMP'); tfSelected.add('wissenland');",ctx);
+byId.tfSave.onclick();
+chk('多选按页签发送完整名单', last().factions.length === 3 && last().factions.includes('wissenland'));
+
+clear();
+vm.runInContext("ctxGroups = ['a']; prompt = () => 'renamed_group';", ctx);
+byId.ctxRename.onclick();
+chk('兵组重命名发送旧新 key', last().type === 'renameGroup' && last().old === 'a' && last().new === 'renamed_group');
+clear();
+vm.runInContext("ctxGroups = ['a', 'b'];", ctx);
+byId.ctxRename.onclick();
+chk('多选不重命名任意单组', msgs().length === 0);
+vm.runInContext("ctxGroups = ['a']; prompt = () => null;", ctx);
+byId.ctxRename.onclick();
+chk('取消重命名不产生编辑', msgs().length === 0);
+
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }
 console.log('【结果】✓ 全部 ' + good + ' 项通过');

@@ -288,11 +288,13 @@
     <button id="ctxDel">移除归属…</button>
     <button id="ctxUpg">查看已有升级…</button>
     <button id="ctxSplit">拆分成单兵组</button>
+    <button id="ctxRename">重命名兵组…</button>
     <button id="ctxMove">移动到页签…</button>
     <button id="ctxClose">关闭</button>
   </div>
   <!-- 第二页：可移动到的页签（只列当前已打开/可见的页签） -->
   <div class="row" id="ctxRow2" style="display:none;max-width:420px;flex-wrap:wrap"></div>
+  <div class="row" id="ctxRow3" style="display:none"><button id="ctxMoveBack">← 返回操作</button></div>
 </div>
 <div id="permissionPop" class="pop hidden" style="width:min(620px,calc(100vw - 48px));box-sizing:border-box;max-height:calc(100vh - 48px);overflow:auto">
   <div class="t">移除当前范围的归属</div>
@@ -335,12 +337,29 @@
     <button id="tmArt">换图…</button>
     <button id="tmImport">从其他 mod 导入页签…</button>
     <button id="tmScope">应用到其他种族…</button>
+    <button id="tmFactions">允许显示的派系…</button>
     <button id="tmClose">关闭</button>
   </div>
   <div class="row" id="tmRow2" style="display:none;max-height:220px;overflow:auto;max-width:420px;flex-wrap:wrap"></div>
   <div class="row" id="tmRow3" style="display:none">
     <button id="tmScopeOk" class="primary">应用</button>
     <button id="tmScopeCancel">取消</button>
+  </div>
+</div>
+
+<div id="tabFactionPop" class="pop hidden" style="width:560px;max-width:90vw;max-height:85vh;overflow:auto">
+  <div class="t" id="tfTitle">页签允许显示的派系</div>
+  <div style="color:#9CA9B5;font-size:12px;margin-bottom:10px">控制游戏中当前军队能看到的页签，不修改兵种授权。未勾选表示不限制。</div>
+  <div class="row">
+    <select id="tfRace" style="max-width:180px" aria-label="筛选种族"></select>
+    <input id="tfSearch" placeholder="搜索派系名或 key" aria-label="搜索派系" style="flex:1;min-width:100px">
+  </div>
+  <div id="tfSummary" style="color:#C7D6E2;font-size:12px;margin:10px 0"></div>
+  <div id="tfList" style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:4px"></div>
+  <div class="row" style="margin-top:12px;flex-wrap:wrap">
+    <button id="tfClear">清空名单（不限制）</button>
+    <button id="tfSave" class="primary">应用</button>
+    <button id="tfCancel">取消</button>
   </div>
 </div>
 
@@ -429,7 +448,7 @@
 window.onerror = function (msg, src, line, col) { report({ type: 'jsError', msg: String(msg), line: line, col: col }); };
 // 自检：浮层里的按钮必须真的在浮层里（早期标签不配平时按钮会飘到页面左上角）
 window.addEventListener('load', function () {
-  const chk = ['npOk', 'npClose', 'mButtons', 'ctxRow1', 'upClose'];
+  const chk = ['npOk', 'npClose', 'mButtons', 'ctxRow1', 'upClose', 'tfSave', 'tfCancel', 'tfList'];
   const bad = [];
   for (const id of chk) {
     const el = document.getElementById(id);
@@ -486,7 +505,7 @@ function anchor(g, pos) {
 //   mid_link_offset = 从起点沿**起始方向**先走这么多像素（游戏坐标单位，正负跟坐标轴）**才转第一个弯**；
 //   0 = 就在起始点转（游戏原本的单折路径）。所以中间那一小段的位置 = a1 + mo，
 //   起始方向是上下 → 挪 y；左右 → 挪 x。（以前这里按"两端中点"画，游戏里对不上。）
-function linkPath(a, b, mo) {
+function linkPath(a, b, mo, reverse = false) {
   const A = a.p, B = b.p;
   const a1 = { x: A.x + a.d[0] * STUB, y: A.y + a.d[1] * STUB };
   const b1 = { x: B.x + b.d[0] * STUB, y: B.y + b.d[1] * STUB };
@@ -499,6 +518,7 @@ function linkPath(a, b, mo) {
     const mx = a1.x + mv;
     pts = [A, a1, { x: mx, y: a1.y }, { x: mx, y: b1.y }, b1, B];
   }
+  if (reverse) pts.reverse(); // 只反转 SVG 点序以保留子端箭头，几何始终按父端计算。
   return pts.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ');
 }
 
@@ -523,6 +543,8 @@ function positionsFor(parentG, childG) {
 }
 
 function renderWarband(data) {
+  closeCardContextMenu();
+  if (DATA.sourcePack !== (data || {}).sourcePack) hidePop('tabFactionPop');
   DATA = data || { groups: [], links: [] };
   const tree = document.getElementById('tree');
   for (const el of Array.from(tree.querySelectorAll('.card'))) el.remove();
@@ -574,7 +596,7 @@ function renderWarband(data) {
     // ② 可见线（真正画出来的那条；不吃事件，由命中线负责 hover 高亮它）
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     el.setAttribute('d', d);
-    // 箭头挂**起点**：路径是从 child 画到 parent 的（linkPath(anchor(gc…), anchor(gp…))），
+    // 几何从 parent 计算，再反转点序；箭头挂 SVG 起点 child。
     // 用 auto-start-reverse 反向定向 → 箭头落在 child 端、**指向 child** = parent → child 的升级方向 ✓
     el.setAttribute('marker-start', 'url(#arrowDir)');
     el.dataset.c = L.c; el.dataset.p = L.p;
@@ -678,9 +700,11 @@ function renderWarband(data) {
       // 右键：按种族或派系添加归属，移除时明确选择授权渠道
       d.addEventListener('contextmenu', ev => {
         ev.preventDefault();
+        resetCardContextMenu();
         // 右键作用于**当前选中的组**（框选/Ctrl 多选都在内）；如果右键的这个组没被选中，就只作用于它
         const keys = multiGroups.includes(g.unit_group) ? multiGroups.slice() : [g.unit_group];
         ctxGroups = keys.slice();
+        document.getElementById('ctxRename').disabled = keys.length !== 1;
         const units = [];
         for (const k of keys) units.push(...(((GROUPS[k] || {}).units) || []));
         ctxUnits = units.slice();
@@ -747,7 +771,7 @@ function renderWarband(data) {
 function linkPath3(L) {
   const gc = GROUPS[L.c], gp = GROUPS[L.p];
   if (!gc || !gp) return null;
-  return linkPath(anchor(gc, L.cp), anchor(gp, L.pp), L.mo);
+  return linkPath(anchor(gp, L.pp), anchor(gc, L.cp), L.mo, true);
 }
 // 转点手柄：放在"中间那段"的中点。拖动它 → 改 rec.mo（沿起始方向挪多少像素）→ 立刻重画，
 // 松手把新 mo 发给后端（写进 ui_links.mid_link_offset，游戏里同一条走线）。
@@ -759,9 +783,6 @@ function knobPosOf(rec) {
   const a1 = { x: A.p.x + A.d[0] * STUB, y: A.p.y + A.d[1] * STUB };
   const b1 = { x: B.p.x + B.d[0] * STUB, y: B.p.y + B.d[1] * STUB };
   const mv = rec.mo || 0;
-  const mid = A.d[0] === 0
-    ? { x: a1.x, y: a1.y + mv, x2: b1.x, y2: b1.y }
-    : { x: a1.x + mv, y: a1.y, x2: a1.x, y2: b1.y };
   return A.d[0] === 0
     ? { x: (a1.x + b1.x) / 2, y: a1.y + mv, a1: a1, vertical: true }
     : { x: a1.x + mv, y: (a1.y + b1.y) / 2, a1: a1, vertical: false };
@@ -785,17 +806,16 @@ function hideKnob() { document.getElementById('linkKnob').classList.add('hidden'
 document.getElementById('linkKnob').addEventListener('mousedown', e => {
   if (e.button !== 0 || !linkSel) return;
   e.preventDefault(); e.stopPropagation();
-  knobDrag = { rec: linkSel, start: (linkSel.mo || 0) };
+  const point = knobPosOf(linkSel);
+  if (!point) return;
+  knobDrag = { rec: linkSel, start: (linkSel.mo || 0), x: e.clientX, y: e.clientY, vertical: point.vertical, zoom: zoom };
   document.getElementById('linkKnob').classList.add('drag');
 });
 addEventListener('mousemove', e => {
   if (!knobDrag) return;
   const rec = knobDrag.rec;
-  const p = knobPosOf(rec);
-  if (!p) return;
-  const t = document.getElementById('tree').getBoundingClientRect();
-  const px = (e.clientX - t.left) / zoom, py = (e.clientY - t.top) / zoom;   // 画布像素 = 游戏坐标
-  rec.mo = Math.round(p.vertical ? (py - p.a1.y) : (px - p.a1.x));
+  const delta = knobDrag.vertical ? e.clientY - knobDrag.y : e.clientX - knobDrag.x;
+  rec.mo = Math.round(knobDrag.start + delta / knobDrag.zoom);
   const d = linkPath3(rec);
   if (d !== null) setLinkD(rec, d);
   showKnob(rec);
@@ -833,7 +853,7 @@ function drawNoLinkRoutes() {
     if (!gb || !gt || pairHasLink(r.b, r.t)) continue;
     const pos = positionsFor(gb, gt);
     const mo = autoMidOffset(gb, gt, pos.parentPos, pos.childPos);
-    const d = linkPath(anchor(gt, pos.childPos), anchor(gb, pos.parentPos), mo);
+    const d = linkPath(anchor(gb, pos.parentPos), anchor(gt, pos.childPos), mo, true);
     if (!d) continue;
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     el.classList.add('nolink');
@@ -1662,9 +1682,11 @@ function paintMulti() {
     mk('合并成一个组', 'primary', () => {
       // 组名交给后端起（按"前缀_页签_兵种词…"的命名规则；空 group = 让后端生成）——
       // 前端不知道包里已有组名，去重要在后端做
-      const n = (DATA.groups || []).length;
+      // 继承第一个所选组的游戏坐标，不能按整包组数排到当前页签外。
+      const anchor = GROUPS[multiGroups[0]];
+      if (!anchor) return;
       report({ type: 'mergeMany', group: '', groups: multiGroups.slice(),
-               x: 40 + (n % 10) * 60, y: 40 + Math.floor(n / 10) * 105, category: activePage || '' });
+               x: anchor.x, y: anchor.y, category: anchor.category || activePage || '' });
       multiGroups = []; paintMulti();
     });
     mk('删除这些组', 'danger', () => {
@@ -1899,9 +1921,22 @@ document.getElementById('npOk').onclick = () => {
 /* ───────────── 组右键：军事组 ───────────── */
 let ctxUnits = [], ctxGroup = '', ctxGroups = [];
 let permissionRemoval = null;
+
+function resetCardContextMenu() {
+  document.getElementById('ctxRow1').style.display = '';
+  document.getElementById('ctxRow2').style.display = 'none';
+  document.getElementById('ctxRow2').innerHTML = '';
+  document.getElementById('ctxRow3').style.display = 'none';
+}
+function closeCardContextMenu() {
+  const menu = document.getElementById('ctxMenu');
+  menu.classList.add('hidden');
+  resetCardContextMenu();
+}
+document.getElementById('ctxMoveBack').onclick = resetCardContextMenu;
 document.getElementById('ctxAdd').onclick = () => {
   report({ type: 'grantUnitPermissions', units: ctxUnits });
-  document.getElementById('ctxMenu').classList.add('hidden');
+  closeCardContextMenu();
 };
 document.getElementById('ctxDel').onclick = () => {
   permissionRemoval = { units: [...new Set(ctxUnits)], race: filterRace, faction: filterFaction };
@@ -1922,7 +1957,7 @@ document.getElementById('ctxDel').onclick = () => {
   document.getElementById('permissionMilitary').disabled = !military;
   document.getElementById('permissionExclusive').disabled = !exclusive;
   document.getElementById('permissionAll').disabled = !military && !exclusive;
-  document.getElementById('ctxMenu').classList.add('hidden');
+  closeCardContextMenu();
   showPop('permissionPop');
 };
 function removePermissions(kind) {
@@ -1945,12 +1980,19 @@ document.getElementById('ctxSplit').onclick = () => {
       n++;
     }
   }
-  document.getElementById('ctxMenu').classList.add('hidden');
+  closeCardContextMenu();
   if (n === 0) document.getElementById('xy').textContent = '这个组只有一个兵，不用拆';
   else document.getElementById('xy').textContent = '已拆分 ' + n + ' 个组（待导出）';
 };
+document.getElementById('ctxRename').onclick = () => {
+  if (ctxGroups.length !== 1) return;
+  const oldKey = ctxGroups[0];
+  const newKey = prompt('兵组新 key（字母、数字、下划线；同步更新组、单位关联、坐标、升级路线与连线）', oldKey);
+  closeCardContextMenu();
+  if (newKey !== null && newKey.trim() && newKey.trim() !== oldKey) report({ type: 'renameGroup', old: oldKey, new: newKey.trim() });
+};
 document.getElementById('ctxClose').onclick = () => {
-  document.getElementById('ctxMenu').classList.add('hidden');
+  closeCardContextMenu();
   document.getElementById('ctxRow2').style.display = 'none';
   document.getElementById('ctxRow1').style.display = '';
 };
@@ -1961,21 +2003,22 @@ document.getElementById('ctxMove').onclick = () => {
     const b = document.createElement('button');
     b.textContent = label;
     b.onclick = () => {
-      for (const k of ctxGroups) {
-        const gg = GROUPS[k]; if (!gg) continue;
-        report({ type: 'setCategory', group: k, category: cat, x: gg.x | 0, y: gg.y | 0 });
-      }
-      document.getElementById('ctxMenu').classList.add('hidden');
+      const groups = [...new Set(ctxGroups)].filter(k => GROUPS[k]).map(k => ({group: k, x: GROUPS[k].x | 0, y: GROUPS[k].y | 0}));
+      if (groups.length) report({ type: 'setCategories', groups, category: cat });
+      closeCardContextMenu();
       host.style.display = 'none';
       document.getElementById('ctxRow1').style.display = '';
     };
     host.appendChild(b);
   };
   const here = (GROUPS[ctxGroups[0]] || {}).category || '';
-  for (const t of railTabs) if (t !== here) add(t, t);        // 只能移到**已打开**的页签（页签列里可见的那些）
+  // 显式打开/新建的页签直接取最新数据，不能沿用上次子菜单或页签栏的快照。
+  const targets = [...new Set([...railTabs, ...(DATA.openedTabs || []), ...(DATA.newTabs || [])])];
+  for (const t of targets) if (t !== here) add(t, t);
   if (host.children.length === 0) host.textContent = '（没有别的已打开页签可移）';
   document.getElementById('ctxRow1').style.display = 'none';
   host.style.display = '';
+  document.getElementById('ctxRow3').style.display = '';
 };
 
 /* ───────────── 已有升级面板（右键兵牌 → 查看已有升级）───────────── */
@@ -2176,7 +2219,7 @@ function buildUpgPanel() {
 }
 document.getElementById('ctxUpg').onclick = () => {
   upgGroups = ctxGroups.slice();
-  document.getElementById('ctxMenu').classList.add('hidden');
+  closeCardContextMenu();
   hidePop('cardPop');
   buildUpgPanel();
 };
@@ -2184,6 +2227,59 @@ document.getElementById('upClose').onclick = () => hidePop('upgPop');
 
 /* ───────────── 页签右键菜单 ───────────── */
 let tmCategory = '';
+let tfCategory = '', tfSelected = new Set();
+function tabFactionCatalog() {
+  const known = (DATA.tabVisibility || {}).factions || [];
+  const keys = new Set(known.map(f => f.key));
+  return known.concat(Array.from(tfSelected).filter(key => !keys.has(key)).map(key => ({key, name: key, race: '', legendary: false})));
+}
+function drawTabFactionList() {
+  const host = document.getElementById('tfList');
+  const scroll = host.scrollTop;
+  host.innerHTML = '';
+  const search = document.getElementById('tfSearch').value.trim().toLowerCase();
+  const race = document.getElementById('tfRace').value;
+  const list = tabFactionCatalog().filter(f => (!race || f.race === race)
+    && (!search || (f.key + ' ' + (f.name || '')).toLowerCase().includes(search)));
+  document.getElementById('tfSummary').textContent = (tfSelected.size ? ('已选 ' + tfSelected.size + ' 个派系') : '不限制派系')
+    + ' · 当前筛选 ' + list.length + ' 项' + (list.length > 120 ? '（仅显示前120项，请继续筛选）' : '');
+  for (const f of list.slice(0, 120)) {
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:7px;background:#202830;border-radius:4px;cursor:pointer';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = f.key; cb.checked = tfSelected.has(f.key);
+    cb.onchange = () => { if (cb.checked) tfSelected.add(f.key); else tfSelected.delete(f.key); drawTabFactionList(); };
+    const text = document.createElement('span');
+    text.style.cssText = 'font-size:12px;overflow-wrap:anywhere;white-space:pre-line';
+    text.textContent = (f.name || f.key) + (f.legendary ? '（传奇派系）' : '') + '\n' + f.key;
+    label.appendChild(cb); label.appendChild(text); host.appendChild(label);
+  }
+  if (!list.length) host.textContent = '没有匹配的派系。';
+  host.scrollTop = scroll;
+}
+function openTabFactionPop(category) {
+  const data = DATA.tabVisibility || {};
+  if (!data.known) { alert(data.error || '派系显示配置尚未读取，请稍后再试。'); return; }
+  tfCategory = category;
+  tfSelected = new Set((data.allowed || {})[category] || []);
+  document.getElementById('tfTitle').textContent = '页签 ' + category + ' · 允许显示的派系';
+  document.getElementById('tfSearch').value = '';
+  const select = document.getElementById('tfRace'); select.innerHTML = '';
+  for (const r of [{r: '', n: '全部种族'}, ...(DATA.allRaces || [])]) {
+    const opt = document.createElement('option'); opt.value = r.r; opt.textContent = r.n; select.appendChild(opt);
+  }
+  select.value = (DATA.allRaces || []).some(r => r.r === filterRace) ? filterRace : '';
+  document.getElementById('tabMenu').classList.add('hidden');
+  drawTabFactionList(); showPop('tabFactionPop');
+}
+document.getElementById('tmFactions').onclick = () => openTabFactionPop(tmCategory);
+document.getElementById('tfRace').onchange = drawTabFactionList;
+document.getElementById('tfSearch').oninput = drawTabFactionList;
+document.getElementById('tfClear').onclick = () => { tfSelected.clear(); drawTabFactionList(); };
+document.getElementById('tfCancel').onclick = () => hidePop('tabFactionPop');
+document.getElementById('tfSave').onclick = () => {
+  report({type: 'setTabAllowedFactions', category: tfCategory, factions: Array.from(tfSelected).sort()});
+  hidePop('tabFactionPop');
+};
 document.getElementById('tmRename').onclick = () => {
   const nk = prompt('重命名页签（' + tmCategory + ' → 新 key；会同时改 categories 行、组的 category、twui 与两张图）', tmCategory);
   document.getElementById('tabMenu').classList.add('hidden');
@@ -2378,7 +2474,7 @@ addEventListener('mouseup', e => {
       for (const L of LINKELS) L.el.classList.remove('sel');
       linkSel = null; hideKnob();                   // 反选：连线的高亮和转点手柄一起收
       hidePop('cardPop'); hidePop('multiPop'); hidePop('routePop');
-      document.getElementById('ctxMenu').classList.add('hidden');
+      closeCardContextMenu();
       drag = null; band = null;                     // 反选要把拖动/框选状态一起清掉（不然防误触/拖动状态会残留到下一次）
       paintMulti();
       report({ type: 'deselect' });
@@ -2441,6 +2537,10 @@ addEventListener('mousedown', e => {
 });
 addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
 addEventListener('keydown', e => {
+  if (!document.getElementById('tabFactionPop').classList.contains('hidden')) {
+    if (e.key === 'Escape') hidePop('tabFactionPop');
+    return; // 设置名单时不让 Delete/Ctrl+A 等按键操作背后的画布。
+  }
   // **焦点在输入框里就别抢键**：多选面板的 X/Y、成本/搜索等输入框里按 Backspace、方向键是在编辑文字，
   // 不能被当成"删除选中的组 / 微调坐标"（用户实测：多选编辑共同坐标时按退格，兵牌直接被删）
   const t = e.target;
@@ -2518,10 +2618,11 @@ addEventListener('keydown', e => {
   }
   if (e.key === '0' && !e.ctrlKey && !e.altKey) resetPan();
   if (e.key === 'Escape') {
+    hidePop('tabFactionPop');
     hidePop('cardPop'); hidePop('routePop'); hidePop('multiPop'); hidePop('newPop'); hidePop('openPop'); hidePop('upgPop');
     hidePop('linePop'); lineCur = null;
     hidePop('permissionPop'); permissionRemoval = null;
-    const cm = document.getElementById('ctxMenu'); if (cm) cm.classList.add('hidden');
+    closeCardContextMenu();
     const sm = document.getElementById('snapMenu'); if (sm) sm.style.display = 'none';
     multiGroups = []; selected = null; connectFrom = null; linkSel = null;
     for (const el of document.querySelectorAll('#tree .card')) el.classList.remove('sel','msel','dimmed','upnext','conn');

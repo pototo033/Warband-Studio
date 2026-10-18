@@ -13,11 +13,50 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm = new();
     private System.Windows.Point? _dragFrom;   // 兵种库拖拽起点（判断是不是"拖"而不是"点"）
+    private Task _tableCommit = Task.CompletedTask;
+    private System.Windows.Controls.DataGrid? _editingTable;
+    private void OnTableBeginningEdit(object sender, System.Windows.Controls.DataGridBeginningEditEventArgs e)
+    {
+        if (_vm.IsBusy) { e.Cancel = true; return; }
+        _editingTable = (System.Windows.Controls.DataGrid)sender;
+    }
+    private void OnTableCellEditEnding(object sender, System.Windows.Controls.DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction != System.Windows.Controls.DataGridEditAction.Commit || sender is not System.Windows.Controls.DataGrid grid ||
+            grid.DataContext is not TableTab tab || e.Row.Item is not System.Data.DataRowView row || e.EditingElement is not System.Windows.Controls.TextBox input) return;
+        e.Cancel = true; // 数据源只由成功的后端事务刷新；Esc 或失败不能留下未保存的 UI 值。
+        var expected = row.Row.ItemArray.Select(v => v?.ToString() ?? "").ToArray();
+        var index = row.Row.Table.Rows.IndexOf(row.Row);
+        var column = e.Column.SortMemberPath;
+        var value = input.Text;
+        _tableCommit = Dispatcher.InvokeAsync(async () =>
+        {
+            grid.CancelEdit(System.Windows.Controls.DataGridEditingUnit.Cell);
+            grid.CancelEdit(System.Windows.Controls.DataGridEditingUnit.Row);
+            await _vm.CommitTableCellAsync(tab, index, column, expected, value);
+        }).Task.Unwrap();
+    }
+    private async void OnTableKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0 || sender is not System.Windows.Controls.DataGrid grid) return;
+        if (e.Key is not (System.Windows.Input.Key.Z or System.Windows.Input.Key.Y or System.Windows.Input.Key.S)) return;
+        e.Handled = true;
+        grid.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Cell, true);
+        await _tableCommit;
+        var message = e.Key == System.Windows.Input.Key.S ? "{\"type\":\"hotkey\",\"key\":\"save\"}" : e.Key == System.Windows.Input.Key.Z ? "{\"type\":\"undo\"}" : "{\"type\":\"redo\"}";
+        _vm.ApplyCanvasEdit(message);
+    }
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _vm;
+        _vm.FlushTableEdits = async () =>
+        {
+            // 工具栏保存/关闭同样等待最后一个单元格事务，不能只依靠焦点变化。
+            _editingTable?.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Cell, true);
+            await _tableCommit;
+        };
         _vm.GameDirRequested += AskGameDirAsync;
         _vm.PackOpened += PushCanvasData;
         _vm.UnitPicked += (unit, url) => CanvasHost.SendAddUnit(unit, url);
@@ -123,11 +162,21 @@ public partial class MainWindow : Window
     private void OnExit(object sender, RoutedEventArgs e) => Close();
 
     private bool _forceClosing;   // "保存后关闭"流程里，保存完再真的关（别让 OnClosing 再拦一次）
+    private bool _tableFlushedForClose;
+    private async Task FlushTableThenCloseAsync()
+    {
+        if (_vm.FlushTableEdits is not null) await _vm.FlushTableEdits();
+        _tableFlushedForClose = true;
+        Close();
+    }
 
     /// <summary>关窗口前：有未导出编辑就提醒（是=保存后关 / 否=放弃编辑关 / 取消=不关）。防丢失的最后一道。</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         if (_forceClosing) { base.OnClosing(e); return; }
+        if (!_tableFlushedForClose && _editingTable is not null)
+        { e.Cancel = true; Dispatcher.InvokeAsync(FlushTableThenCloseAsync); return; }
+        _tableFlushedForClose = false;
         var (packs, edits) = _vm.UnsavedEdits();
         if (packs == 0) { base.OnClosing(e); return; }
         var r = MessageBox.Show(this,
@@ -605,6 +654,23 @@ public partial class MainWindow : Window
             {
                 FileLog.Write("启动参数：打开表 " + next);
                 await _vm.OpenTableAsync(next);
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    UpdateLayout();
+                    System.Windows.Controls.DataGrid? FindGrid(DependencyObject parent)
+                    {
+                        for (var child = 0; child < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); child++)
+                        {
+                            var node = System.Windows.Media.VisualTreeHelper.GetChild(parent, child);
+                            if (node is System.Windows.Controls.DataGrid grid && grid.IsVisible) return grid;
+                            if (FindGrid(node) is { } found) return found;
+                        }
+                        return null;
+                    }
+                    var tableGrid = FindGrid(this);
+                    var ok = _vm.ActiveCenterTab is TableTab && WelcomeHost.Visibility == Visibility.Collapsed && tableGrid is not null;
+                    FileLog.Write($"表视图自检：ok={ok}；welcome={WelcomeHost.Visibility}；gridVisible={tableGrid?.IsVisible}；rows={tableGrid?.Items.Count}");
+                }, System.Windows.Threading.DispatcherPriority.Loaded);
             }
             if (args[i] == "--export-to" && next is not null)
             {
@@ -810,6 +876,6 @@ public partial class MainWindow : Window
     private async void OnTreeDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (TreeFiles.SelectedItem is TreeItem item && !item.IsFolder)
-            await _vm.OpenTableAsync(item.Path);
+            await _vm.OpenTableAsync(item.Path, item.PackPath);
     }
 }

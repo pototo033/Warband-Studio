@@ -27,7 +27,7 @@ public sealed class ProjectPackRow(string full, string rel, string name, string 
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
-    private readonly AppSettings _settings = AppSettings.Load();
+    private readonly AppSettings _settings;
     private readonly Backend _backend;
 
     private string _gameDir = "";
@@ -38,8 +38,10 @@ public sealed partial class MainViewModel : ObservableObject
     private string _status = "就绪";
     private bool _isBusy;
 
-    public MainViewModel()
+    public MainViewModel() : this(AppSettings.Load()) { }
+    public MainViewModel(AppSettings initialSettings)
     {
+        _settings = initialSettings;
         _backend = new Backend(_settings);
         _gameDir = _settings.GameDir;
         _backupDir = string.IsNullOrWhiteSpace(_settings.BackupDir)
@@ -133,16 +135,20 @@ public sealed partial class MainViewModel : ObservableObject
         set
         {
             if (_project is null || _projectDir.Length == 0) return;
+            var previous = _project.ProjectKey;
             _project.ProjectKey = value ?? "";
-            ProjectStore.Save(_projectDir, _project);
+            try { ProjectStore.Save(_projectDir, _project); }
+            catch (Exception ex) { _project.ProjectKey = previous; Status = "项目 key 保存失败：" + ex.Message; Raise(nameof(ProjectKey)); return; }
             _backend.ProjectKey = _project.ProjectKey;
+            foreach (var session in _backend.Packs.Where(s => s.ProjectDirectory == _projectDir))
+                _backend.BindProject(session, _projectDir, _project.ProjectKey);
             _backend.InvalidateCanvas();                 // 画布「新建分组」的默认名跟着变
             Raise(nameof(ProjectKey));
         }
     }
 
-    /// <summary>欢迎面板（空状态）是否显示：没有画布页签 = 还没开工程/包。</summary>
-    public bool IsWelcomeVisible => !IsCanvasActive;
+    /// <summary>只有没有活动文档才显示空状态；表视图和画布都是文档。</summary>
+    public bool IsWelcomeVisible => _activeCenterTab is null;
 
     /// <summary>最近工程（欢迎面板/菜单用；打开时会把"目录已不存在"的剔掉）。</summary>
     public ObservableCollection<string> RecentProjects { get; } = [];
@@ -166,7 +172,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>本程序版本（build.ps1 编进来的）+ 检查更新入口（启动时后台查一次；菜单/全局选项里可手动查）。</summary>
     public string AppVersion => "v" + Services.Updater.CurrentVersion;
 
-    public async Task CheckUpdatesAsync() => await Services.Updater.CheckAsync(_settings, s => Status = s);
+    public async Task CheckUpdatesAsync() => await Services.Updater.CheckAsync(_settings, s => UpdateStatus = s);
 
     /// <summary>当前打开包的路径（文件树右键"打开所在文件夹"用；没打开就是空）。</summary>
     public string CurrentPackPath => _backend.Pack?.PackPath ?? "";
@@ -250,6 +256,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>切到某个包的画布（没有就建一个）。左侧文件树右键「在新画布中打开」也走这里。</summary>
     public async Task OpenCanvasForPackAsync(string packPath)
     {
+        if (FlushTableEdits is not null) await FlushTableEdits();
         var session = _backend.Packs.FirstOrDefault(x =>
             string.Equals(x.PackPath, Path.GetFullPath(packPath), StringComparison.OrdinalIgnoreCase));
         if (session is null)
@@ -284,9 +291,19 @@ public sealed partial class MainViewModel : ObservableObject
     public bool IsCanvasActive => _activeCenterTab is CanvasTab;
 
     /// <summary>当前画布对应的包（切页签后重推数据用）。</summary>
-    public void OnCenterTabChanged()
+    public async void OnCenterTabChanged()
     {
-        if (_activeCenterTab is TableTab tt) { _ = ReloadTableTabAsync(tt); return; }   // 表视图不再是快照：切过去就重读
+        var requested = _activeCenterTab;
+        if (FlushTableEdits is not null) await FlushTableEdits();
+        if (!ReferenceEquals(requested, _activeCenterTab)) return;
+        if (_activeCenterTab is TableTab tt)
+        {
+            var owner = _backend.Packs.FirstOrDefault(s => string.Equals(s.PackPath, tt.PackPath, StringComparison.OrdinalIgnoreCase));
+            if (owner is null) { Status = "此表所属包已关闭"; return; }
+            _backend.SwitchTo(owner);
+            _ = ReloadTableTabAsync(tt);
+            return;
+        }
         if (_activeCenterTab is not CanvasTab ct) return;
         var session = _backend.Packs.FirstOrDefault(x =>
             string.Equals(x.PackPath, ct.PackPath, StringComparison.OrdinalIgnoreCase));
@@ -298,12 +315,12 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>画布数据（JSON）；窗口在打开包之后取一次。</summary>
-    public string BuildCanvasJson() => _backend.BuildWarbandJson();      // 看的是"当前包"（切页签时切过来）
+    public string BuildCanvasJson() { lock (_backend.StateSync) return _backend.BuildWarbandJson(); }
 
     /// <summary>画布上拖动了一张牌：记下所属组的新坐标（导出时生效）。</summary>
     public void ApplyCanvasMove(string group, int x, int y)
     {
-        _backend.SetGroupPos(group, x, y);
+        _backend.Edit(() => { _backend.SetGroupPos(group, x, y); return true; });
         Status = $"已移动「{group}」到 ({x}, {y})　待导出；（点「另存为…」写出到 pack）";
     }
 
@@ -422,6 +439,7 @@ public sealed partial class MainViewModel : ObservableObject
             // 用户口径：不要一进来就停在"全部"，自动切到具体的表里
             SelectedMod = pack.Children.Count > 0 ? pack.Children[0] : pack;
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { Status = "mod 清单读取失败：" + ex.Message; }
     }
 
@@ -432,7 +450,7 @@ public sealed partial class MainViewModel : ObservableObject
         var gen = ++_modGen;
         try
         {
-            var json = await Task.Run(() => _backend.BuildModUnitLibraryJson(mod.Key, mod.TablePath));
+            var json = await ReadCurrentAsync(() => _backend.BuildModUnitLibraryJson(mod.Key, mod.TablePath));
             if (gen != _modGen) return;
             _modLibAll = [];
             using var doc = JsonDocument.Parse(json);
@@ -455,6 +473,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
             ApplyModLibFilter();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { Status = "mod 兵种读不出来：" + ex.Message; _modLibAll = []; ApplyModLibFilter(); }
     }
 
@@ -476,6 +495,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     public async Task CloseTabAsync(CenterTab tab)
     {
+        if (FlushTableEdits is not null) await FlushTableEdits();
         if (tab is CanvasTab ct)
         {
             // 未导出编辑按**这个页签那个包**算（不是"当前包"）：右键关别的包时，当前包有编辑不该误弹
@@ -566,6 +586,7 @@ public sealed partial class MainViewModel : ObservableObject
             Status = $"UI 素材库：{_uiAssetsAll.Count} 张（背景 {_uiAssetsAll.Count(x => x.Kind == "bg")} / " +
                      $"按钮 {_uiAssetsAll.Count(x => x.Kind == "btn")} / 其他 {_uiAssetsAll.Count(x => x.Kind == "other")}）";
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             FileLog.Write("UI 素材库失败", ex);
@@ -633,10 +654,9 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (item is null) return false;
         if (_backend.Pack?.IsOpen != true) { Status = "先打开一个包"; return false; }
-        _backend.PushUndo();
         // 目标名由后端自动定：素材 key + _1/_2…（防重名；不给用户弹框了）
-        var target = _backend.AddUiAssetToPack(new WarbandStudio.Ui.Services.Backend.UiAsset(
-            item.Kind, item.Name, item.File, item.Url, item.PackPath, item.Size));
+        var target = _backend.Edit(() => _backend.AddUiAssetToPack(new WarbandStudio.Ui.Services.Backend.UiAsset(
+            item.Kind, item.Name, item.File, item.Url, item.PackPath, item.Size)));
         if (target.Length == 0) { Status = "这张图没能加进包（名字 _1…_999 都被占了？）"; return false; }
         RebuildTree();                 // 树里立刻出现「<文件名>（待导出）」——不然会以为"添加到包没生效"
         PackOpened?.Invoke();          // **立刻重推画布**：换图/新建页签的选择器要马上能看到这张图
@@ -667,7 +687,9 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>画布回执：某个兵被放进新组（记待导出，junction 写回在下一步）。</summary>
     public void OnCanvasUnitAdded(string group, string unit, int x, int y)
     {
-        _backend.AddUnitToGroup(group, unit, x, y, isNewGroup: true);
+        _backend.Edit(() => { _backend.AddUnitToGroup(group, unit, x, y, isNewGroup: true); return true; });
+        RebuildTree();
+        AutoSaveSoon();
         Status = $"画布新组「{group}」← {unit}（{x},{y}）；{_backend.EditSummary}";
     }
 
@@ -676,6 +698,17 @@ public sealed partial class MainViewModel : ObservableObject
     /// 处理完把画布数据重推一遍，页面立刻能看到新连线/新组。
     /// </summary>
     public void ApplyCanvasEdit(string json)
+    {
+        try
+        {
+            using var message = JsonDocument.Parse(json);
+            var type = message.RootElement.GetProperty("type").GetString();
+            if (type is "undo" or "redo" or "renameGroup") { lock (_backend.StateSync) ApplyCanvasEditCore(json); }
+            else _backend.Edit(() => { ApplyCanvasEditCore(json); return true; });
+        }
+        catch (Exception ex) { Status = "画布编辑失败：" + ex.Message; FileLog.Write("画布编辑事务失败", ex); }
+    }
+    private void ApplyCanvasEditCore(string json)
     {
         try
         {
@@ -691,7 +724,7 @@ public sealed partial class MainViewModel : ObservableObject
                 ? v.GetDouble() : 0;                     // mid_link_offset 这类：浮点、带符号
             var type = S("type");
             // 除了 undo/redo，其它编辑消息在应用前先压一份快照（Ctrl+Z 能退回上一步）
-            if (type != "undo" && type != "redo") _backend.PushUndo();
+
             switch (type)
             {
                 case "addUnit":
@@ -723,6 +756,18 @@ public sealed partial class MainViewModel : ObservableObject
                 case "setCategory":
                     _backend.SetGroupCategory(S("group"), S("category"), I("x"), I("y"));
                     break;
+                case "setCategories":
+                {
+                    var moves = new List<(string Group, int X, int Y)>();
+                    if (m.TryGetProperty("groups", out var items) && items.ValueKind == JsonValueKind.Array)
+                        foreach (var item in items.EnumerateArray())
+                        {
+                            var group = item.GetProperty("group").GetString() ?? "";
+                            moves.Add((group, (int)Math.Round(item.GetProperty("x").GetDouble()), (int)Math.Round(item.GetProperty("y").GetDouble())));
+                        }
+                    _backend.SetGroupsCategory(moves, S("category"));
+                    break;
+                }
                 case "moveUnits":
                 {
                     // 多选建组：选中的兵从原组摘掉、并进新组（写 junction 删+加，再建组与坐标）
@@ -810,6 +855,19 @@ public sealed partial class MainViewModel : ObservableObject
                 case "renameTab":
                     _backend.RenameTab(S("old"), S("new"));
                     break;
+                case "renameGroup":
+                    _backend.RenameGroup(S("old"), S("new"));
+                    break;
+                case "setTabAllowedFactions":
+                {
+                    if (!m.TryGetProperty("factions", out var allowed) || allowed.ValueKind != JsonValueKind.Array)
+                        throw new InvalidOperationException("页签显示派系名单格式错误。");
+                    var factions = allowed.EnumerateArray().Select(x => x.GetString()
+                        ?? throw new InvalidOperationException("派系 key 不能为空。")).ToArray();
+                    _backend.SetTabAllowedFactions(S("category"), factions);
+                    Status = "已设置页签显示派系（待保存）；不修改兵种授权。";
+                    break;
+                }
                 case "closeTab":
                     _backend.CloseOpenedTab(S("category"));
                     break;
@@ -910,11 +968,11 @@ public sealed partial class MainViewModel : ObservableObject
                     break;
                 case "undo":
                     if (!_backend.Undo()) Status = "没有可撤销的步骤";
-                    else { PackOpened?.Invoke(); RebuildTree(); RefreshLibrarySoon(); Status = "已撤销一步：" + _backend.EditSummary; }
+                    else { PackOpened?.Invoke(); RebuildTree(); RefreshLibrarySoon(); RefreshOpenTables(); Status = "已撤销一步：" + _backend.EditSummary; }
                     return;
                 case "redo":
                     if (!_backend.Redo()) Status = "没有可重做的步骤";
-                    else { PackOpened?.Invoke(); RebuildTree(); RefreshLibrarySoon(); Status = "已重做一步：" + _backend.EditSummary; }
+                    else { PackOpened?.Invoke(); RebuildTree(); RefreshLibrarySoon(); RefreshOpenTables(); Status = "已重做一步：" + _backend.EditSummary; }
                     return;
                 case "hotkey":
                     switch (S("key"))
@@ -980,12 +1038,15 @@ public sealed partial class MainViewModel : ObservableObject
             // 以前只在"换图/新建页签"后重建，红标要等到下一次保存/重开才出现（用户实测到的问题）
             RebuildTree();
             PackOpened?.Invoke();          // 重推画布数据，页面上立刻生效
+            RefreshOpenTables();
             AutoSaveSoon();                // 开了自动保存 → 停下来就写回原包
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             FileLog.Write("画布编辑失败：" + json, ex);
             Status = "画布编辑失败：" + ex.Message;
+            throw;
         }
     }
 
@@ -995,7 +1056,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (_backend.Pack?.IsOpen != true) return;
         try
         {
-            var json = await Task.Run(() => _backend.BuildFactionJson());
+            var json = await ReadCurrentAsync(() => _backend.BuildFactionJson());
             // **就地更新**（不 Clear 重建）：清空重建会把 TreeView 的选中项/展开状态弄丢，
             // 用户的"选了某个种族/派系"就被重置了。这里按 Key 对齐，只更新计数与子表。
             var fresh = new List<FactionNode>();
@@ -1038,6 +1099,7 @@ public sealed partial class MainViewModel : ObservableObject
             Status = $"种族/派系：{Factions.Count} 个种族（选一个看它的兵）";
             Raise(nameof(LibraryTitle));
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Status = "派系列表读不出来：" + ex.Message;
@@ -1090,10 +1152,11 @@ public sealed partial class MainViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var json = await Task.Run(() => _backend.BuildUnitLibraryJson(faction));
+            var json = await ReadCurrentAsync(() => _backend.BuildUnitLibraryJson(faction));
             ApplyLibraryJson(json);
             Status = $"兵种库：{Library.Count} 个兵";
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Status = "兵种库读不出来：" + ex.Message;
@@ -1113,6 +1176,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (gen != _facRefreshGen) return;
             await LoadFactionsAsync();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { FileLog.Write("种族/派系自动刷新失败", ex); }
     }
 
@@ -1153,17 +1217,25 @@ public sealed partial class MainViewModel : ObservableObject
         var key = _selectedFaction.Key;
         try
         {
-            var json = await Task.Run(() => _backend.BuildUnitLibraryJson(key));
+            var json = await ReadCurrentAsync(() => _backend.BuildUnitLibraryJson(key));
             // 期间又刷新过 / 换了种族派系 → 这次结果作废
             if (gen != _libRefreshGen || !string.Equals(key, _selectedFaction?.Key, StringComparison.OrdinalIgnoreCase)) return;
             ApplyLibraryJson(json);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { FileLog.Write("兵种库自动刷新失败", ex); }
     }
 
     /// <summary>点文件树里的表 → 原生解码 → 中间栏开一个表页签。</summary>
-    public async Task OpenTableAsync(string innerPath)
+    public async Task OpenTableAsync(string innerPath, string? ownerPath = null)
     {
+        if (FlushTableEdits is not null) await FlushTableEdits();
+        if (ownerPath is not null)
+        {
+            var owner = _backend.Packs.FirstOrDefault(s => string.Equals(s.PackPath, ownerPath, StringComparison.OrdinalIgnoreCase));
+            if (owner is null) { Status = "此表所属包已关闭"; return; }
+            _backend.SwitchTo(owner);
+        }
         if (!PackSession.IsDbTable(innerPath))
         {
             Status = "这个文件不是 DB 表（目前表视图只支持 db/ 下的表）";
@@ -1173,7 +1245,8 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             Status = "正在解表：" + innerPath;
-            var table = await Task.Run(() => _backend.ReadTable(innerPath));   // 原生解码（内存）
+            var packPath = _backend.Pack?.PackPath ?? throw new InvalidOperationException("先打开一个包。");
+            var table = await ReadCurrentAsync(() => _backend.ReadTable(innerPath));   // 原生解码（内存）
 
             var dt = new DataTable(table.TableName);
             foreach (var c in table.Columns) dt.Columns.Add(c.Name, typeof(string));
@@ -1185,10 +1258,11 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             FileLog.Write($"表数据就绪：{table.TableName} {table.Rows.Count} 行 × {table.Columns.Count} 列，开始建 UI 页签");
-            var existing = CenterTabs.OfType<TableTab>().FirstOrDefault(t => t.InnerPath == innerPath);
+            var existing = CenterTabs.OfType<TableTab>().FirstOrDefault(t => t.InnerPath == innerPath && string.Equals(t.PackPath, packPath, StringComparison.OrdinalIgnoreCase));
             var tab = existing ?? new TableTab
             {
                 Header = table.TableName,
+                PackPath = packPath,
                 View = dt.DefaultView,
                 TableName = table.TableName,
                 InnerPath = innerPath,
@@ -1201,6 +1275,7 @@ public sealed partial class MainViewModel : ObservableObject
             Status = $"已打开表：{tab.Info}";
             FileLog.Write("表页签已激活：" + tab.Header);
         }
+        catch (OperationCanceledException) { }
         catch (Exception e)
         {
             FileLog.Write("打开表失败", e);
@@ -1214,7 +1289,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
-            var table = await Task.Run(() => _backend.ReadTable(tab.InnerPath));
+            if (!string.Equals(_backend.Pack?.PackPath, tab.PackPath, StringComparison.OrdinalIgnoreCase)) return;
+            var table = await ReadCurrentAsync(() => _backend.ReadTable(tab.InnerPath));
             var dt = tab.View?.Table;
             if (dt is null) return;
             dt.BeginLoadData();
@@ -1229,6 +1305,7 @@ public sealed partial class MainViewModel : ObservableObject
             tab.RowCount = table.Rows.Count;
             Status = $"表已刷新：{tab.TableName}（{table.Rows.Count} 行）";
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { FileLog.Write("表刷新失败：" + tab.InnerPath, ex); }
     }
 
@@ -1236,7 +1313,7 @@ public sealed partial class MainViewModel : ObservableObject
     public void CloseTableTab(TableTab tab)
     {
         CenterTabs.Remove(tab);
-        if (ReferenceEquals(ActiveCenterTab, tab)) ActiveCenterTab = CenterTabs[0];
+        if (ReferenceEquals(ActiveCenterTab, tab)) ActiveCenterTab = CenterTabs.FirstOrDefault()!;
     }
 
     // ── 启动流程 ────────────────────────────────────────────────
@@ -1285,6 +1362,7 @@ public sealed partial class MainViewModel : ObservableObject
             Raise(nameof(IsCanvasActive));
             Raise(nameof(IsWelcomeVisible));
         }
+        catch (OperationCanceledException) { }
         catch (Exception e)
         {
             FileLog.Write("启动流程失败", e);
@@ -1333,6 +1411,7 @@ public sealed partial class MainViewModel : ObservableObject
             SchemaText = _backend.SchemaText;
             Status = msg;
         }
+        catch (OperationCanceledException) { }
         catch (Exception e)
         {
             FileLog.Write("应用游戏目录失败", e);
@@ -1370,13 +1449,18 @@ public sealed partial class MainViewModel : ObservableObject
     public Task OpenPackFromArgsAsync(string packPath) => OpenPackPathAsync(packPath);
 
     /// <summary>打开指定路径的 pack（「打开 Pack」和"启动时接着开上次的"都走这里）。</summary>
-    private async Task OpenPackPathAsync(string packPath, bool open = true, bool asUnitPack = false)
+    private async Task<bool> OpenPackPathAsync(string packPath, bool open = true, bool asUnitPack = false)
     {
         IsBusy = true;
         try
         {
             Status = (asUnitPack ? "正在加载兵种包 " : "正在打开 ") + Path.GetFileName(packPath) + "…";
-            if (open) await _backend.OpenPackAsync(packPath, default, displayName: null, asUnitPack: asUnitPack);
+            if (open)
+            {
+                var opened = await _backend.OpenPackAsync(packPath, default, displayName: null, asUnitPack: asUnitPack);
+                if (_project is not null && _projectDir.Length > 0)
+                    _backend.BindProject(opened, _projectDir, _project.ProjectKey);
+            }
             if (!asUnitPack)
             {
                 _settings.LastPack = packPath;
@@ -1390,7 +1474,7 @@ public sealed partial class MainViewModel : ObservableObject
                 var up = _backend.Packs.FirstOrDefault(p => (p.PackPath ?? "").Equals(packPath, StringComparison.OrdinalIgnoreCase));
                 Status = $"已加载兵种包 {Path.GetFileName(packPath)}（{up?.Files.Count ?? 0} 个文件）：" +
                          "图标/中文名/兵种库都能读到它；画布和战帮树不动";
-                return;
+                return true;
             }
             RebuildTree();
             PackOpened?.Invoke();      // 画布要跟着换成这个包的数据
@@ -1406,11 +1490,14 @@ public sealed partial class MainViewModel : ObservableObject
             var war = pack.Files.Count(f => PackSession.IsWarbandRelated(f.Path));
             PackText = $"Pack：{pack.Info?.FileName ?? Path.GetFileName(packPath)}";
             Status = $"已打开：{pack.Files.Count} 个文件，其中战帮相关 {war} 个";
+            return true;
         }
+        catch (OperationCanceledException) { return false; }
         catch (Exception e)
         {
             FileLog.Write("打开 pack 失败", e);
             Status = "打开失败：" + e.Message;
+            return false;
         }
         finally { IsBusy = false; }
     }
@@ -1509,18 +1596,22 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (!AutoSave || _backend.Pack?.IsOpen != true || _backend.EditCount == 0) return;
         var gen = ++_autoSaveGen;
+        var autoSaveSession = _backend.Pack;
         try
         {
             await Task.Delay(2000);                      // 编辑密集时合并成一次
             if (gen != _autoSaveGen || !AutoSave || _backend.EditCount == 0) return;
+            if (!ReferenceEquals(autoSaveSession, _backend.Pack)) return;
             await SaveAsync(null);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { FileLog.Write("自动保存失败", ex); }
     }
 
     /// <summary>保存：把当前编辑**写回打开的那个包**（原地写，原文件留 .bak 备份）。</summary>
     private async Task SaveAsync(string? path)
     {
+        if (FlushTableEdits is not null) await FlushTableEdits();
         if (_backend.Pack?.IsOpen != true) { Status = "先打开一个包"; return; }
         // **保存 = 当前打开的战帮画布那个包**（多画布同时开着时不串台）：先按激活的画布页签把当前包切过去，
         // 这样"用哪份编辑集导出、写回哪个文件"都跟着这个画布走（用户口径）。
@@ -1549,7 +1640,7 @@ public sealed partial class MainViewModel : ObservableObject
             Status = "正在写回原包…";
             var msg = await _backend.SaveInPlaceAsync();
             // 句柄已经换到新文件：把包重新打开，树/画布/派系/素材库全部刷新
-            await _backend.OpenPackAsync(packPath);
+            // 保存事务已原位重开同一会话，无需再次切换当前包。
             RebuildTree();
             PackOpened?.Invoke();
             LoadUiAssets();
@@ -1559,6 +1650,7 @@ public sealed partial class MainViewModel : ObservableObject
             Status = msg;
             FileLog.Write("保存（写回原包）：" + msg);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             FileLog.Write("保存失败", ex);
@@ -1577,7 +1669,7 @@ public sealed partial class MainViewModel : ObservableObject
     public void RemovePackFile(TreeItem? item)
     {
         if (item is null || item.IsFolder) return;
-        Status = _backend.RemovePackFile(item.Path);
+        Status = _backend.Edit(() => _backend.RemovePackFile(item.Path));
         RebuildTree();
         PackOpened?.Invoke();          // **立刻重推画布**：换图/新建页签的素材列表跟着变
         LoadUiAssets();
@@ -1587,7 +1679,7 @@ public sealed partial class MainViewModel : ObservableObject
     public void RenamePackFile(TreeItem? item, string newName)
     {
         if (item is null || item.IsFolder) return;
-        Status = _backend.RenamePackFile(item.Path, newName);
+        Status = _backend.Edit(() => _backend.RenamePackFile(item.Path, newName));
         RebuildTree();
         PackOpened?.Invoke();
         LoadUiAssets();
@@ -1599,6 +1691,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task SaveAsAsync()
     {
+        if (FlushTableEdits is not null) await FlushTableEdits();
         var dlg = new SaveFileDialog
         {
             Title = "导出为新的 .pack（原包不动）",
@@ -1616,11 +1709,12 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             Status = "正在导出…";
-            var rep = await Task.Run(() => _backend.Export(destPath));
+            var rep = await ReadCurrentAsync(() => _backend.Export(destPath));
             Status = $"已导出：{Path.GetFileName(destPath)}（树里 {rep.UnitsInTree} 个兵，解锁 {rep.Unlocked}，" +
                      $"本来就解锁 {rep.AlreadyUnlocked}）";
             FileLog.Write("导出完成：" + Status);
         }
+        catch (OperationCanceledException) { }
         catch (Exception e)
         {
             FileLog.Write("导出失败", e);
@@ -1683,6 +1777,7 @@ public sealed partial class MainViewModel : ObservableObject
             foreach (var t in _backend.TabKeys())
                 arts.Add($"{t} → {Path.GetFileName(_backend.TabArtPathOf(t, true))} / {Path.GetFileName(_backend.TabArtPathOf(t, false))}");
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { arts.Add("(读取失败：" + ex.Message + ")"); }
         var swap = "(没做)";
         try
@@ -1700,6 +1795,7 @@ public sealed partial class MainViewModel : ObservableObject
                        (hit.Target.Equals(want, StringComparison.OrdinalIgnoreCase) ? "（= 实际用的那张 ✓）" : $"（✗ 实际用的是 {Path.GetFileName(want)}）");
             }
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { swap = "(换图失败：" + ex.Message + ")"; }
         return (arts, swap);
     }
@@ -1714,6 +1810,7 @@ public sealed partial class MainViewModel : ObservableObject
                 lines.Add($"{k}：改名为 {k}X → {Path.GetFileName(_backend.PlannedArtPathOf(k + "X", true))}；" +
                           $"名字被占用时（拿 {k} 自己当例子）→ {Path.GetFileName(_backend.PlannedArtPathOf(k, true))}");
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { lines.Add("(读取失败：" + ex.Message + ")"); }
         return lines;
     }
@@ -1763,6 +1860,7 @@ public sealed partial class MainViewModel : ObservableObject
             await CloseProjectAsync();
             return $"识别 2 个 → 打开工程开 {n2} 个；清单留 1 个 → 重开只开 {n1} 个 " + (ok ? "✓" : "✗");
         }
+        catch (OperationCanceledException) { return "读取已取消"; }
         catch (Exception ex) { return "(工程多包自检失败：" + ex.Message + ")"; }
         finally
         {
@@ -1788,6 +1886,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
             FileLog.Write($"[selftest] 测试包：{pack ?? "(生成失败)"}");
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { FileLog.Write("[selftest] 测试包准备失败：" + ex.Message); }
     }
 
@@ -1810,6 +1909,7 @@ public sealed partial class MainViewModel : ObservableObject
             var ok = back.ProjectKey == "StudioTest" && hist.Count == 2;
             return $"临时工程：key 回读「{back.ProjectKey}」，历史版本 keep=2 → 实剩 {hist.Count} 份 " + (ok ? "✓" : "✗");
         }
+        catch (OperationCanceledException) { return "读取已取消"; }
         catch (Exception ex) { return "(工程自检失败：" + ex.Message + ")"; }
         finally { try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { } }
     }
@@ -1838,6 +1938,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (flat.Count == 0) DiagnosticsLines.Add("（没有输出 —— 诊断需要先设游戏目录并生成依赖缓存）");
             Status = "诊断完成";
         }
+        catch (OperationCanceledException) { }
         catch (Exception e)
         {
             DiagnosticsLines.Add("诊断失败：" + e.Message);

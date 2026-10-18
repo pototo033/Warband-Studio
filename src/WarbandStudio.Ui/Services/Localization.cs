@@ -12,6 +12,49 @@ namespace WarbandStudio.Ui.Services;
 public sealed class Localization(AppSettings settings, Action<string>? log)
 {
     private Dictionary<string, string>? _map;
+    private Dictionary<string, string>? _baseMap;
+    private readonly Dictionary<string, Dictionary<string, string>> _layers = new(StringComparer.OrdinalIgnoreCase);
+    private string _sourceSignature = "";
+    private string? _baseGameDirectory;
+
+    public void SetSources(IEnumerable<PackSession> sessions)
+    {
+        if (!string.Equals(_baseGameDirectory, settings.GameDir, StringComparison.OrdinalIgnoreCase))
+        {
+            _baseGameDirectory = settings.GameDir;
+            _map = null; _baseMap = null; _layers.Clear(); _sourceSignature = "";
+        }
+        var sources = sessions.Where(s => s.IsOpen && s.PackPath is not null).ToArray();
+        var signature = settings.GameDir + "|" + string.Join("|", sources.Select(s =>
+        {
+            var file = new FileInfo(s.PackPath!);
+            return file.FullName + ":" + file.Length + ":" + file.LastWriteTimeUtc.Ticks;
+        }));
+        if (signature == _sourceSignature) return;
+        _baseMap ??= new Dictionary<string, string>(Map(), StringComparer.OrdinalIgnoreCase);
+        var combined = new Dictionary<string, string>(_baseMap, StringComparer.OrdinalIgnoreCase);
+        foreach (var source in sources)
+        {
+            var file = new FileInfo(source.PackPath!);
+            var key = file.FullName + ":" + file.Length + ":" + file.LastWriteTimeUtc.Ticks;
+            if (!_layers.TryGetValue(key, out var layer))
+            {
+                layer = new(StringComparer.OrdinalIgnoreCase);
+                LoadFromPack(source.PackPath!, layer);
+                _layers[key] = layer;
+            }
+            foreach (var pair in layer) combined[pair.Key] = pair.Value;
+        }
+        _map = combined;
+        _sourceSignature = signature;
+        // 只保留有限数量的已解析图层；当前活跃来源不能被淘汰。
+        if (_layers.Count > 32)
+        {
+            var activePaths = sources.Select(s => s.PackPath + ":").ToArray();
+            foreach (var key in _layers.Keys.Where(key => !activePaths.Any(path => key.StartsWith(path, StringComparison.OrdinalIgnoreCase))).Take(_layers.Count - 32).ToArray())
+                _layers.Remove(key);
+        }
+    }
 
     /// <summary>键 → 显示名；查不到返回 null（调用方自己退回显示 Key）。</summary>
     public string? Text(string key)

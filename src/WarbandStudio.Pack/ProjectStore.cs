@@ -56,11 +56,11 @@ public static class ProjectStore
             var dir = Path.GetDirectoryName(full);
             if (dir is null) return null;
             if (IsProject(dir)) return dir;                         // 旧布局：包就在工程根
-            var parent = Path.GetDirectoryName(dir);                // 新布局：包在「生成 Pack 目录」（默认 工程\packs）
-            if (parent is not null && IsProject(parent)
-                && Path.GetFullPath(PackDirOf(parent)).TrimEnd(Path.DirectorySeparatorChar)
-                       .Equals(Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-                return parent;
+            for (var parent = Path.GetDirectoryName(dir); parent is not null; parent = Path.GetDirectoryName(parent))
+                if (IsProject(parent)
+                    && (Path.GetFullPath(PackDirOf(parent)).TrimEnd(Path.DirectorySeparatorChar).Equals(dir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
+                        || Load(parent).Packs.Any(rel => FullPath(parent, rel).Equals(full, StringComparison.OrdinalIgnoreCase))))
+                    return parent;
             return null;
         }
         catch { return null; }
@@ -77,25 +77,25 @@ public static class ProjectStore
 
     public static ProjectInfo Load(string dir)
     {
-        try
+        var f = Path.Combine(dir, ProjectFile);
+        if (File.Exists(f))
         {
-            var f = Path.Combine(dir, ProjectFile);
-            if (File.Exists(f))
-                return JsonSerializer.Deserialize<ProjectInfo>(File.ReadAllText(f)) ?? new ProjectInfo();
+            var json = File.ReadAllText(f);
+            var info = JsonSerializer.Deserialize<ProjectInfo>(json) ?? throw new InvalidDataException("工程配置为空。");
+            using var document = JsonDocument.Parse(json);
+            // 只迁移没有识别清单字段的旧格式；用户主动清空清单后不能被 LastPack 加回来。
+            if (!document.RootElement.TryGetProperty(nameof(ProjectInfo.Packs), out _) && !string.IsNullOrWhiteSpace(info.LastPack))
+                AddPack(info, RelPath(dir, FullPath(dir, info.LastPack)));
+            return info;
         }
-        catch { /* 工程文件坏了 → 用目录名兜底，别拦着开工程 */ }
         return new ProjectInfo { Name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar)) };
     }
 
     public static void Save(string dir, ProjectInfo p)
     {
-        try
-        {
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, ProjectFile),
-                JsonSerializer.Serialize(p, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { /* 存不下不致命 */ }
+        Directory.CreateDirectory(dir);
+        AtomicFile.WriteText(Path.Combine(dir, ProjectFile),
+            JsonSerializer.Serialize(p, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
@@ -115,7 +115,7 @@ public static class ProjectStore
         };
         if (string.IsNullOrWhiteSpace(p.Name)) p.Name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar));
         Directory.CreateDirectory(HistoryDirOf(dir));
-        try { Directory.CreateDirectory(PackDirOf(dir, p)); } catch { /* 目录建不出来不拦（后面打开会报） */ }
+        Directory.CreateDirectory(PackDirOf(dir, p));
         Save(dir, p);
         return p;
     }
@@ -171,27 +171,23 @@ public static class ProjectStore
 
     /// <summary>把一个包备份进 `old/`（**用 .pack 后缀**，直接拷出来就能当包用），返回备份路径；
     /// 备份后按 <paramref name="keep"/> 份数清扫（保留最近 N 份）。</summary>
-    public static string? BackupPack(string projectDir, string packPath, int keep)
+    public static string BackupPack(string projectDir, string packPath, int keep, IReadOnlyCollection<string>? protectedFiles = null)
     {
-        try
-        {
             var dir = HistoryDirOf(projectDir);
             Directory.CreateDirectory(dir);
             var stem = Path.GetFileNameWithoutExtension(packPath);
-            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fffffff");
             var dest = Path.Combine(dir, $"{stem}.{stamp}.pack");
             for (var k = 2; File.Exists(dest) && k <= 99; k++)
                 dest = Path.Combine(dir, $"{stem}.{stamp}_{k}.pack");
             File.Copy(packPath, dest);
-            PruneHistory(projectDir, stem, keep);
+            PruneHistory(projectDir, stem, keep, protectedFiles);
             return dest;
-        }
-        catch { return null; }
     }
 
     /// <summary>历史版本：保留最近 <paramref name="keep"/> 份（文件名里的时间戳固定宽度 → 名字倒序=新到旧），
     /// 多出来的删掉。返回删掉的份数。</summary>
-    public static int PruneHistory(string projectDir, string packStem, int keep)
+    public static int PruneHistory(string projectDir, string packStem, int keep, IReadOnlyCollection<string>? protectedFiles = null)
     {
         try
         {
@@ -204,6 +200,7 @@ public static class ProjectStore
             var n = 0;
             foreach (var f in files.Skip(keep))
             {
+                if (protectedFiles?.Any(p => Path.GetFullPath(p).Equals(Path.GetFullPath(f), StringComparison.OrdinalIgnoreCase)) == true) continue;
                 try { File.Delete(f); n++; } catch { /* 删不掉就留着 */ }
             }
             return n;

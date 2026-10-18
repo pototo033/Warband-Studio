@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WarbandStudio.Tests/WarbandStudio.Tests.csproj" />
+    <Project Path="tests/WarbandStudio.Ui.Tests/WarbandStudio.Ui.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/WarbandStudio.Probe/WarbandStudio.Probe.csproj" />

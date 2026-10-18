@@ -64,6 +64,7 @@ public sealed class AppSettings
 
     public void Save()
     {
+        if (!PersistChanges) return;
         try
         {
             Directory.CreateDirectory(Dir);
@@ -72,4 +73,7 @@ public sealed class AppSettings
         }
         catch { /* 存不下就算了，不致命 */ }
     }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool PersistChanges { get; init; } = true;
 }

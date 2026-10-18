@@ -28,7 +28,7 @@ public sealed record CliResult(int ExitCode, string StdOut, string StdErr)
 ///   pack diagnose -g &lt;游戏目录&gt; -P &lt;依赖缓存&gt; -s &lt;schema&gt; -p &lt;pack&gt;…   诊断（JSON）
 ///   dependencies generate -P &lt;缓存&gt; -g &lt;游戏目录&gt; -s &lt;schema&gt;        生成依赖缓存
 /// </summary>
-public sealed class RpfmCli(string exePath, string schemaPath)
+public sealed partial class RpfmCli(string exePath, string schemaPath)
 {
     public const string GameKey = "warhammer_3";
     public const string CliExeName = "rpfm_cli.exe";
@@ -69,7 +69,12 @@ public sealed class RpfmCli(string exePath, string schemaPath)
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("起不来 rpfm_cli 进程。");
         var stdout = p.StandardOutput.ReadToEndAsync(ct);
         var stderr = p.StandardError.ReadToEndAsync(ct);
-        await p.WaitForExitAsync(ct);
+        try { await p.WaitForExitAsync(ct); }
+        catch (OperationCanceledException)
+        {
+            if (!p.HasExited) p.Kill(entireProcessTree: true); // 只结束本次启动的 CLI，避免取消后仍在写缓存。
+            throw;
+        }
         var result = new CliResult(p.ExitCode, await stdout, await stderr);
         if (!result.Ok) Log?.Invoke($"rpfm_cli 退出码 {result.ExitCode}：{Trim(result.All)}");
         return result;
@@ -143,7 +148,7 @@ public sealed class RpfmCli(string exePath, string schemaPath)
     // ── 诊断 / 依赖缓存 ───────────────────────────────────────────
 
     /// <summary>诊断（坏引用/非法枚举/空 key…），返回 JSON 原文。需要先有依赖缓存。</summary>
-    public Task<CliResult> DiagnoseAsync(IEnumerable<string> packPaths, CancellationToken ct = default)
+    private Task<CliResult> DiagnoseFilesAsync(IEnumerable<string> packPaths, CancellationToken ct = default)
     {
         var args = new List<string> { "pack", "diagnose" };
         if (!string.IsNullOrWhiteSpace(GamePath)) { args.Add("-g"); args.Add(GamePath!); }
@@ -158,7 +163,10 @@ public sealed class RpfmCli(string exePath, string schemaPath)
     {
         if (string.IsNullOrWhiteSpace(GamePath))
             throw new RpfmException("还没设游戏目录，生成依赖缓存需要它。");
-        return RunAsync(["dependencies", "generate", "-P", cachePath, "-g", GamePath!, "-s", SchemaPath], ct);
+        var args = new List<string> { "dependencies", "generate", "-P", cachePath, "-g", GamePath!, "-s", SchemaPath };
+        var raw = Path.Combine(GamePath!, "assembly_kit", "raw_data", "db");
+        if (Directory.Exists(raw)) { args.Add("-a"); args.Add(raw); }
+        return RunAsync(args, ct);
     }
 
     // ── 定位 ──────────────────────────────────────────────────────

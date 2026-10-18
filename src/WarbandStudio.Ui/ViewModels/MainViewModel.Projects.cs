@@ -13,10 +13,30 @@ public sealed partial class MainViewModel
 {
     // ── 工程（v1.5.0）──────────────────────────────────────────
 
+    private async Task ResetProjectSessionsAsync()
+    {
+        ++_autoSaveGen;
+        foreach (var session in _backend.Packs.ToArray()) await _backend.CloseSessionAsync(session);
+        _activeCenterTab = null!;
+        CenterTabs.Clear();
+        Raise(nameof(ActiveCenterTab));
+        Raise(nameof(IsCanvasActive));
+        _selectedFaction = null;
+        Raise(nameof(SelectedFaction));
+        Factions.Clear();
+        Library.Clear();
+        _libAll = [];
+        _modLibAll = [];
+        ModLibrary.Clear();
+        ResetCostForm();
+        AfterPackClosed();
+    }
+
     /// <summary>切工程/关工程/还原前统一处理未导出编辑：三选（是=**保存所有有编辑的包** / 否=放弃 / 取消=中止）。
     /// 返回 false = 用户取消或保存失败（调用方应中止操作）。</summary>
     private async Task<bool> ConfirmUnsavedBeforeAsync(string what)
     {
+        if (FlushTableEdits is not null) await FlushTableEdits();
         var (packs, edits) = UnsavedEdits();
         if (packs == 0) return true;
         var choice = AskSave?.Invoke(what, $"{edits} 处未导出（{packs} 个包）") ?? 1;
@@ -38,14 +58,15 @@ public sealed partial class MainViewModel
             if (!string.IsNullOrWhiteSpace(projectKey)) info.ProjectKey = projectKey!.Trim();
             if (!string.IsNullOrWhiteSpace(packDir)) info.PackDir = packDir!.Trim();
             ProjectStore.Save(dir, info);
+            await ResetProjectSessionsAsync();
             _projectDir = dir;
             Project = info;
             _backend.ProjectKey = info.ProjectKey;
             ProjectStore.TouchRecent(_settings.RecentProjects, dir);
             _settings.Save();
             PruneRecentProjects();
-            var packs = ProjectStore.PacksIn(dir);
-            if (packs.Count > 0) await OpenPackPathAsync(packs[0], open: true, asUnitPack: false);
+            var packs = info.Packs.Select(rel => ProjectStore.FullPath(dir, rel)).Where(File.Exists).ToList();
+            if (packs.Count > 0 && !await OpenPackPathAsync(packs[0], open: true, asUnitPack: false)) return false;
             Status = packs.Count > 0
                 ? $"工程「{info.Name}」已打开：{Path.GetFileName(packs[0])}"
                 : $"工程「{info.Name}」已建好（Pack 目录 {info.PackDir}）—— 用「导入 WUU 模板」或「导入 Pack」放一个包进来";
@@ -81,14 +102,14 @@ public sealed partial class MainViewModel
                 Status = "这个文件夹还不是工程（没有 project.json）——用「新建工程」，或菜单「从 Pack 打开工程」";
                 return false;
             }
-            if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
             var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
-            // **识别清单迁移**（旧工程只有 LastPack 单包字段）：并进 Packs，之后就按清单多开
-            if (info.Packs.Count == 0 && !string.IsNullOrWhiteSpace(info.LastPack) && File.Exists(info.LastPack))
+            foreach (var relative in info.Packs)
             {
-                ProjectStore.AddPack(info, ProjectStore.RelPath(dir, info.LastPack));
-                ProjectStore.Save(dir, info);
+                var candidate = ProjectStore.FullPath(dir, relative);
+                if (File.Exists(candidate)) { using var validation = WarbandStudio.Packfile.PackArchive.Open(candidate); }
             }
+            if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
+            await ResetProjectSessionsAsync();
             _projectDir = dir;
             Project = info;
             _backend.ProjectKey = info.ProjectKey;
@@ -102,12 +123,18 @@ public sealed partial class MainViewModel
                 .Where(f => f.Length > 0 && File.Exists(f))
                 .ToList();
             var missing = info.Packs.Count - toOpen.Count;
-            if (info.LastPack is { Length: > 0 } lp && File.Exists(lp))
+            var last = ProjectStore.FullPath(dir, info.LastPack);
+            if (toOpen.Any(f => f.Equals(last, StringComparison.OrdinalIgnoreCase)))
             {
-                toOpen.RemoveAll(f => f.Equals(lp, StringComparison.OrdinalIgnoreCase));
-                toOpen.Add(lp);
+                toOpen.RemoveAll(f => f.Equals(last, StringComparison.OrdinalIgnoreCase));
+                toOpen.Add(last);
             }
-            foreach (var f in toOpen) await OpenPackPathAsync(f, open: true, asUnitPack: false);
+            var opened = 0;
+            foreach (var f in toOpen)
+            {
+                if (!await OpenPackPathAsync(f, open: true, asUnitPack: false)) return false;
+                opened++;
+            }
             Status = toOpen.Count switch
             {
                 0 => $"工程「{info.Name}」已打开 —— 用「导入 WUU 模板」或「导入 Pack」放一个包进来" +
@@ -131,6 +158,7 @@ public sealed partial class MainViewModel
         {
             var src = Path.GetFullPath(sourcePack);
             if (!File.Exists(src)) { Status = "找不到源 pack：" + src; return false; }
+            using (WarbandStudio.Packfile.PackArchive.Open(src)) { }
             projectDir = Path.GetFullPath(projectDir);
             if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
             var info = ProjectStore.Ensure(projectDir, prefillKey: projectKey ?? _settings.GroupKeyPrefix, packDir: packDir);
@@ -143,18 +171,21 @@ public sealed partial class MainViewModel
             {
                 if (File.Exists(dest))
                     FileLog.Write($"工程：目标已有 {Path.GetFileName(dest)} → 直接打开现有那份（**不覆盖**；源文件也不动）");
-                else File.Copy(src, dest);
+                else AtomicFile.Copy(src, dest);
             }
+            using (WarbandStudio.Packfile.PackArchive.Open(dest)) { }
             info.LastPack = dest;
             ProjectStore.AddPack(info, ProjectStore.RelPath(projectDir, dest));   // 识别
             ProjectStore.Save(projectDir, info);
+            using (WarbandStudio.Packfile.PackArchive.Open(dest)) { }
+            await ResetProjectSessionsAsync();
             _projectDir = projectDir;
             Project = info;
             _backend.ProjectKey = info.ProjectKey;
             ProjectStore.TouchRecent(_settings.RecentProjects, projectDir);
             _settings.Save();
             PruneRecentProjects();
-            await OpenPackPathAsync(dest, open: true, asUnitPack: false);
+            if (!await OpenPackPathAsync(dest, open: true, asUnitPack: false)) return false;
             Status = $"已复制进工程并打开：{Path.GetFileName(dest)}（源文件不动，编辑都在工程里）";
             FileLog.Write($"工程：从 Pack 建立 {projectDir}（复制 {src} → {dest}，项目 key「{info.ProjectKey}」）");
             return true;
@@ -179,8 +210,7 @@ public sealed partial class MainViewModel
     {
         if (_project is null) return;
         if (!await ConfirmUnsavedBeforeAsync("关闭工程")) return;
-        foreach (var s in _backend.Packs.ToList()) await _backend.CloseSessionAsync(s);
-        AfterPackClosed();
+        await ResetProjectSessionsAsync();
         Project = null;
         _projectDir = "";
         _backend.ProjectKey = "";
@@ -219,7 +249,7 @@ public sealed partial class MainViewModel
         try
         {
             var msg = await _backend.RestoreFromBackupAsync(pack, backupFile);
-            await OpenPackPathAsync(pack, open: true, asUnitPack: false);   // 重开 + 画布/树/清单全刷
+            if (!await OpenPackPathAsync(pack, open: true, asUnitPack: false)) return false;   // 重开 + 画布/树/清单全刷
             Status = msg;
             return true;
         }
@@ -241,8 +271,7 @@ public sealed partial class MainViewModel
         if (session is null) return false;
         try
         {
-            _backend.SwitchTo(session);
-            await _backend.SaveInPlaceAsync();
+            await _backend.SaveInPlaceAsync(session);
             return true;
         }
         catch (Exception ex) { Status = "保存失败：" + ex.Message; FileLog.Write("保存失败", ex); return false; }
@@ -265,6 +294,7 @@ public sealed partial class MainViewModel
         try
         {
             var srcFull = Path.GetFullPath(externalPack);
+            using (WarbandStudio.Packfile.PackArchive.Open(srcFull)) { }
             var targetDir = ProjectStore.PackDirOf(_projectDir, _project);
             Directory.CreateDirectory(targetDir);
             var dest = Path.Combine(targetDir, Path.GetFileName(srcFull));
@@ -275,11 +305,11 @@ public sealed partial class MainViewModel
             else
             {
                 if (File.Exists(dest)) { Status = $"工程里已经有 {Path.GetFileName(dest)}（要么给导入的包改个名，要么先删旧的那份）"; return false; }
-                File.Copy(srcFull, dest);
+                AtomicFile.Copy(srcFull, dest);
             }
             ProjectStore.AddPack(_project, ProjectStore.RelPath(_projectDir, dest));   // 识别：下次打开工程一起开
             ProjectStore.Save(_projectDir, _project);
-            await OpenPackPathAsync(dest, open: true, asUnitPack: false);
+            if (!await OpenPackPathAsync(dest, open: true, asUnitPack: false)) return false;
             FileLog.Write($"工程：导入包 {Path.GetFileName(dest)}（已识别；下次打开工程会一起开）");
             return true;
         }
@@ -294,7 +324,7 @@ public sealed partial class MainViewModel
         if (pack is null) { Status = "导入失败：内置 WUU 素材缺失（exe 旁 bundled\\wuu 里应有 .pack）"; return false; }
         ProjectStore.AddPack(_project, ProjectStore.RelPath(_projectDir, pack));   // 识别：下次打开工程一起开
         ProjectStore.Save(_projectDir, _project);
-        await OpenPackPathAsync(pack, open: true, asUnitPack: false);
+        if (!await OpenPackPathAsync(pack, open: true, asUnitPack: false)) return false;
         FileLog.Write($"工程：导入 WUU 模板 {Path.GetFileName(pack)}（已识别）");
         return true;
     }
@@ -319,9 +349,18 @@ public sealed partial class MainViewModel
     public async Task ApplyProjectPacksAsync(List<string> rels)
     {
         if (_project is null || _projectDir.Length == 0) return;
-        _project.Packs = rels.Where(r => !string.IsNullOrWhiteSpace(r))
-                             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        ProjectStore.Save(_projectDir, _project);
+        var previous = _project.Packs;
+        try
+        {
+            foreach (var rel in rels)
+            {
+                var candidate = ProjectStore.FullPath(_projectDir, rel);
+                if (File.Exists(candidate)) { using var validation = WarbandStudio.Packfile.PackArchive.Open(candidate); }
+            }
+            _project.Packs = rels.Where(r => !string.IsNullOrWhiteSpace(r)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            ProjectStore.Save(_projectDir, _project);
+        }
+        catch (Exception ex) { _project.Packs = previous; Status = "识别清单保存失败：" + ex.Message; return; }
         var opened = _backend.Packs.Select(s => s.PackPath).ToList();
         var n = 0;
         foreach (var rel in _project.Packs)
@@ -329,7 +368,7 @@ public sealed partial class MainViewModel
             var f = ProjectStore.FullPath(_projectDir, rel);
             if (f.Length == 0 || !File.Exists(f)) continue;
             if (opened.Any(p => p.Equals(f, StringComparison.OrdinalIgnoreCase))) continue;
-            await OpenPackPathAsync(f, open: true, asUnitPack: false);
+            if (!await OpenPackPathAsync(f, open: true, asUnitPack: false)) return;
             n++;
         }
         FileLog.Write($"工程：识别清单更新为 {_project.Packs.Count} 个包" + (n > 0 ? $"（顺手打开了 {n} 个新勾的）" : ""));

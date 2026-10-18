@@ -27,7 +27,11 @@ public static class WarbandAmender
     public static int Apply(PackArchive pack, PackArchive? vanilla, WarbandEdits e, Schema schema,
                             Dictionary<string, byte[]> repl, List<string> notes)
     {
+        using var editedView = e.TableReplacements.Count > 0 ? PackArchive.OpenView(pack.FilePath, e.TableReplacements, e.RemoveFiles) : null;
+        if (editedView is not null) pack = editedView;
+        foreach (var (path, bytes) in e.TableReplacements) repl.TryAdd(path, bytes);
         var changed = 0;
+        var createdTabDonors = new List<(string Key, string Donor)>();
         const string Junc = "unit_to_unit_group_junctions_tables";
 
         // ── -1) 旧名覆盖表搬家（见 MigrateLegacy 的说明）──
@@ -77,10 +81,14 @@ public static class WarbandAmender
         var addJunctions = e.AddJunction.Where(j => liveGroups.Contains(j.Group)).ToList();
         // 包内**已有**的行也扫一遍：引用了不存在组的路线/连线，导出时直接剔掉（救历史遗留的坏包）
         var droppedExisting = 0;
-        droppedExisting += RewriteDropping(pack, "unit_upgrade_to_unit_groups_tables", schema, repl, notes,
-            (t, i) => !liveGroups.Contains(Cell(t, i, "base_unit_group")) || !liveGroups.Contains(Cell(t, i, "target_unit_group")));
-        droppedExisting += RewriteDropping(pack, "unit_upgrade_group_ui_links_tables", schema, repl, notes,
-            (t, i) => !liveGroups.Contains(Cell(t, i, "child_key")) || !liveGroups.Contains(Cell(t, i, "parent_key")));
+        // 表格明确写入的引用必须由最终校验报告错误，不能靠自愈删行掩盖用户输入。
+        if (e.TableReplacements.Count == 0)
+        {
+            droppedExisting += RewriteDropping(pack, "unit_upgrade_to_unit_groups_tables", schema, repl, notes,
+                (t, i) => !liveGroups.Contains(Cell(t, i, "base_unit_group")) || !liveGroups.Contains(Cell(t, i, "target_unit_group")));
+            droppedExisting += RewriteDropping(pack, "unit_upgrade_group_ui_links_tables", schema, repl, notes,
+                (t, i) => !liveGroups.Contains(Cell(t, i, "child_key")) || !liveGroups.Contains(Cell(t, i, "parent_key")));
+        }
         if (droppedExisting > 0)
             notes.Add($"⚠ 自愈：包里原有 {droppedExisting} 个文件里的悬空路线/连线行已剔除（引用的组不存在）。");
 
@@ -339,6 +347,9 @@ public static class WarbandAmender
             var drop = KeySet(e.RemoveRoute);
             changed += RewriteDropping(pack, Routes, schema, repl, notes,
                 (t, i) => drop.Contains(Cell(t, i, "upgrade_key")));
+            foreach (var requirements in new[] { "unit_upgrade_to_tech_requirements_tables", "unit_upgrade_to_building_level_requirements_tables" })
+                changed += RewriteDropping(pack, requirements, schema, repl, notes,
+                    (t, i) => drop.Contains(Cell(t, i, "unit_upgrade")));
         }
 
         // ── 5) 界面连线（C1：游戏里真实显示的箭头）──
@@ -485,6 +496,8 @@ public static class WarbandAmender
                         if (IsOursCost(f) && settledCost.Contains(k)) { dup++; continue; }
                         var raw = (DbValue[])t.RawRows[i].Clone();
                         if (ti >= 0 && ti < raw.Length) raw[ti] = DbValue.Of((long)Math.Round(gold));
+                        var finalId = e.AddCost.Keys.First(id => id.Equals(k, StringComparison.OrdinalIgnoreCase));
+                        if (!finalId.Equals(k, StringComparison.Ordinal)) raw[kc] = DbValue.OfStr(finalId);
                         raws.Add(raw);
                         placedCost.Add(k);
                         if (!IsOursCost(f)) settledCost.Add(k);
@@ -533,7 +546,7 @@ public static class WarbandAmender
         // 删成本 / 删"成本↔资源池"关联（改资源、清空资源、删成本都走这里；改原文件才能真的删掉作者的行）
         if (e.RemoveCost.Count > 0)
         {
-            var dropIds = KeySet(e.RemoveCost);
+            var dropIds = KeySet(e.RemoveCost.Where(id => !e.AddCost.ContainsKey(id)));
             changed += RewriteDropping(pack, Costs, schema, repl, notes,
                 (t, i) => dropIds.Contains(Cell(t, i, "id")));
         }
@@ -568,26 +581,51 @@ public static class WarbandAmender
                 keyCols: ["unique_id"]);
         if (e.PoolCosts.Count > 0)
         {
-            // **同对就地覆盖**：包里已经有 (池, 成本) 这一对的（作者文件或我们的旧覆盖表）先剔掉，
-            // 免得同键出现两份（游戏按加载顺序取我们的，但 RPFM 里能看到两条 —— "只改数量"最容易踩）。
-            var pairDrop = KeySet(e.PoolCosts.Select(x => x.PoolFactor + "\u0001" + x.ResourceCost));
+            const string PoolTable = "resource_cost_pooled_resource_junctions_tables";
+            var wanted = e.PoolCosts.ToDictionary(x => x.PoolFactor + "\u0001" + x.ResourceCost, StringComparer.OrdinalIgnoreCase);
+            var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in TablePaths(pack, PoolTable, repl))
+            {
+                var bytes = CurrentBytes(pack, repl, path);
+                if (bytes is null) continue;
+                var table = DbTable.Decode(bytes, PoolTable, schema);
+                var meta = new Meta(table.Definition, table.Guid ?? "", table.MysteriousByte);
+                var raws = new List<DbValue[]>();
+                var hits = 0;
+                for (var i = 0; i < table.Rows.Count; i++)
+                {
+                    var raw = table.RawRows[i];
+                    var pair = Cell(table, i, "pooled_resource_factor") + "\u0001" + Cell(table, i, "resource_cost");
+                    if (wanted.TryGetValue(pair, out var change))
+                    {
+                        raw = (DbValue[])raw.Clone();
+                        Set(raw, meta, "amount", DbValue.Of(change.Amount));
+                        Set(raw, meta, "resource_cost", DbValue.OfStr(change.ResourceCost));
+                        Set(raw, meta, "pooled_resource_factor", DbValue.OfStr(change.PoolFactor));
+                        Set(raw, meta, "context", DbValue.OfStr(change.Context));
+                        Set(raw, meta, "ui_resource_transaction_pooled_resource", DbValue.OfStr(change.UiPooled));
+                        placed.Add(pair);
+                        hits++;
+                    }
+                    raws.Add(raw);
+                }
+                if (hits == 0) continue;
+                repl[path] = EncodeLike(table, raws);
+                notes.Add($"{path}：资源数量及标签就地改 {hits} 行。");
+                changed++;
+            }
+            changed += AddRows(pack, vanilla, PoolTable, schema, repl, notes,
+                e.PoolCosts.Where(x => !placed.Contains(x.PoolFactor + "\u0001" + x.ResourceCost)).Select(x => new Dictionary<string, object>
+                {
+                    ["pooled_resource_factor"] = x.PoolFactor, ["resource_cost"] = x.ResourceCost, ["amount"] = x.Amount,
+                    ["context"] = x.Context, ["ui_resource_transaction_pooled_resource"] = x.UiPooled,
+                }), keyCols: ["pooled_resource_factor", "resource_cost"]);
+        }
+        if (e.RemovePoolLinks.Count > 0)
+        {
+            var dropPairs = KeySet(e.RemovePoolLinks.Select(x => x.PoolFactor + "\u0001" + x.ResourceCost));
             changed += RewriteDropping(pack, "resource_cost_pooled_resource_junctions_tables", schema, repl, notes,
-                (t, i) =>
-                {
-                    var f = Cell(t, i, "pooled_resource_factor");
-                    var c = Cell(t, i, "resource_cost");
-                    return f.Length > 0 && c.Length > 0 && pairDrop.Contains(f + "\u0001" + c);
-                });
-            changed += AddRows(pack, vanilla, "resource_cost_pooled_resource_junctions_tables", schema, repl, notes,
-                e.PoolCosts.Select(x => new Dictionary<string, object>
-                {
-                    ["pooled_resource_factor"] = x.PoolFactor,
-                    ["resource_cost"] = x.ResourceCost,
-                    ["amount"] = x.Amount,
-                    ["context"] = x.Context,                           // 照抄包里已有行（只作标签）
-                    ["ui_resource_transaction_pooled_resource"] = x.UiPooled,
-                }),
-                keyCols: ["pooled_resource_factor", "resource_cost"]);  // 组合键：一个池能给多个成本条目用
+                (t, i) => dropPairs.Contains(Cell(t, i, "pooled_resource_factor") + "\u0001" + Cell(t, i, "resource_cost")));
         }
 
         // ── 6b) 兵 → 军事组 授权（加兵时按种族/派系自动填）──
@@ -1028,6 +1066,7 @@ public static class WarbandAmender
             {
                 var r = WarbandNewTab.Build(pack, key, donor, repl, notes, bgSrc, btnSrc);
                 if (!r.Ok) { notes.Add($"新建页签 {key} 失败：{r.Error}"); continue; }
+                createdTabDonors.Add((r.Key, r.Donor));
                 changed += r.Files.Count;
                 changed += AddRows(pack, vanilla, Cats, schema, repl, notes,
                     new[] { new Dictionary<string, object> { [CatColumn(pack, vanilla, schema)] = r.Key } },
@@ -1092,6 +1131,23 @@ public static class WarbandAmender
             var writing = new HashSet<string>(repl.Keys.Select(k => k.Replace((char)92, '/')), StringComparer.OrdinalIgnoreCase);
             e.RemoveFiles.RemoveAll(p => writing.Contains(p.Replace((char)92, '/')));
         }
+
+        // 必须在重命名/克隆/换图完成后处理，读取本轮缓冲，避免回写旧 TWUI 丢失前面的编辑。
+        var visibilityPath = repl.Keys.Concat(pack.VisibleEntries.Select(x => x.Path))
+            .FirstOrDefault(p => p.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
+        if (visibilityPath is not null && CurrentBytes(pack, repl, visibilityPath) is { } visibilityBytes)
+        {
+            var xml = System.Text.Encoding.UTF8.GetString(visibilityBytes);
+            if (e.TabAllowedFactions.Count > 0 || (xml.Contains("WarbandStudio.TabFactionVisibility.v1:", StringComparison.Ordinal)
+                && (e.TabRenames.Count > 0 || e.NewTabs.Count > 0)))
+            {
+                repl[visibilityPath] = System.Text.Encoding.UTF8.GetBytes(TabFactionVisibility.Apply(xml,
+                    e.TabAllowedFactions, e.TabRenames, createdTabDonors));
+                notes.Add("页签显示派系：已更新可见性、自动选页与兵牌树筛选（不修改兵种授权）。");
+                changed++;
+            }
+        }
+        else if (e.TabAllowedFactions.Count > 0) throw new InvalidDataException("包中缺少战帮 TWUI，无法保存页签显示派系。");
 
         return changed;
     }

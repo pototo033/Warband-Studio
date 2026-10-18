@@ -26,6 +26,8 @@ public sealed class WarbandEdits
     /// 空 = studio（无工程时的兜底）。Backend 在导出前设置。
     /// </summary>
     public string ProjectKey { get; set; } = "";
+    /// <summary>事务检查点：已落成的内存表/素材，供表编辑与画布继续共同编辑。</summary>
+    public Dictionary<string, byte[]> TableReplacements { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<(string Unit, string Group)> AddJunction { get; } = [];
     public List<(string Unit, string Group)> RemoveJunction { get; } = [];
@@ -51,6 +53,19 @@ public sealed class WarbandEdits
     ///（改资源 / 清空资源 / 删成本都用它；本轮要写的那条会被排除，不会被误删）。
     /// </summary>
     public List<string> RemovePoolCost { get; } = [];
+    public List<(string PoolFactor, string ResourceCost)> RemovePoolLinks { get; } = [];
+
+    public void SetPoolCost(string pool, string cost, long amount, string context, string ui)
+    {
+        PoolCosts.RemoveAll(x => Same(x.PoolFactor, pool) && Same(x.ResourceCost, cost));
+        RemovePoolLinks.RemoveAll(x => Same(x.PoolFactor, pool) && Same(x.ResourceCost, cost));
+        PoolCosts.Add((pool, cost, amount, context, ui));
+    }
+    public void RemovePoolLink(string pool, string cost)
+    {
+        PoolCosts.RemoveAll(x => Same(x.PoolFactor, pool) && Same(x.ResourceCost, cost));
+        if (!RemovePoolLinks.Any(x => Same(x.PoolFactor, pool) && Same(x.ResourceCost, cost))) RemovePoolLinks.Add((pool, cost));
+    }
 
     /// <summary>
     /// 资源池行（`pooled_resource_factor_junctions_tables`）：成本工坊里"用其他资源"时自动建一个池。
@@ -85,6 +100,9 @@ public sealed class WarbandEdits
     /// （自动归属是沿"页签→组→兵→派系→亚文化"推出来的；这里是用户加的补充。）
     /// </summary>
     public List<(string Category, string Race)> TabRaceScopes { get; } = [];
+
+    /// <summary>页签游戏内可见派系；空数组表示取消限制，与兵种授权完全独立。</summary>
+    public Dictionary<string, string[]> TabAllowedFactions { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>新建页签时记下的归属：种族级（Faction 空）= 该种族所有军事组；派系级 = 只它那一个。</summary>
     public List<(string Category, string? Race, string? Faction)> TabScopes { get; } = [];
@@ -224,9 +242,9 @@ public sealed class WarbandEdits
     }
 
     public int Count =>
-        AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
+        TableReplacements.Count + AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
         AddRoute.Count + RemoveRoute.Count + AddLink.Count + RemoveLink.Count + AddCost.Count + NewTabs.Count + AddUnitGroup.Count + FileReplacements.Count + RemoveUnitGroup.Count + TabScopes.Count + OpenedTabs.Count + TabRenames.Count + UnlockXp.Count + TabRaceScopes.Count + RemoveFiles.Count +
-        PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count;
+        PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count + RemovePoolLinks.Count + TabAllowedFactions.Count;
 
     public bool IsEmpty => Count == 0;
 
@@ -234,6 +252,7 @@ public sealed class WarbandEdits
     public string Summary()
     {
         var parts = new List<string>();
+        if (TableReplacements.Count > 0) parts.Add($"表格/引用修改 {TableReplacements.Count} 个文件");
         void P(string name, int n) { if (n > 0) parts.Add($"{name} {n}"); }
         P("加兵", AddJunction.Count);
         P("删兵", RemoveJunction.Count);
@@ -258,8 +277,10 @@ public sealed class WarbandEdits
         P("成本扣资源", PoolCosts.Count);
         P("删成本", RemoveCost.Count);
         P("清成本资源", RemovePoolCost.Count);
+        P("移除单条资源", RemovePoolLinks.Count);
         P("换图", FileReplacements.Count);
         P("页签→其他种族", TabRaceScopes.Count);
+        P("页签显示派系", TabAllowedFactions.Count);
         P("删文件", RemoveFiles.Count);
         return parts.Count == 0 ? "没有编辑" : string.Join("，", parts);
     }
@@ -269,6 +290,7 @@ public sealed class WarbandEdits
     {
         var c = new WarbandEdits();
         c.ProjectKey = ProjectKey;
+        foreach (var (path, bytes) in TableReplacements) c.TableReplacements[path] = bytes.ToArray();
         c.AddJunction.AddRange(AddJunction);
         c.RemoveJunction.AddRange(RemoveJunction);
         c.AddGroup.AddRange(AddGroup);
@@ -283,6 +305,7 @@ public sealed class WarbandEdits
         c.PoolCosts.AddRange(PoolCosts);
         c.RemoveCost.AddRange(RemoveCost);
         c.RemovePoolCost.AddRange(RemovePoolCost);
+        c.RemovePoolLinks.AddRange(RemovePoolLinks);
         c.AddUnitGroup.AddRange(AddUnitGroup);
         c.RemoveUnitGroup.AddRange(RemoveUnitGroup);
         c.AddExclusive.AddRange(AddExclusive);
@@ -295,6 +318,7 @@ public sealed class WarbandEdits
         c.TabRenames.AddRange(TabRenames);
         c.UnlockXp.AddRange(UnlockXp);
         c.TabRaceScopes.AddRange(TabRaceScopes);
+        foreach (var (key, factions) in TabAllowedFactions) c.TabAllowedFactions[key] = factions.ToArray();
         return c;
     }
 }

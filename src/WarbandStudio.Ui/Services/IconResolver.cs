@@ -12,7 +12,7 @@ namespace WarbandStudio.Ui.Services;
 /// 来源链：打开的包 → 游戏 data/*.pack 索引 → 随附素材（assets/icons）。
 /// 命中的图片抽一份到 %APPDATA%\WarbandStudio\iconcache，页面通过 icons.local 虚拟主机读。
 /// </summary>
-public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, Action<string>? log)
+public sealed partial class IconResolver(AppSettings settings, Func<Schema> getSchema, Action<string>? log)
 {
     public string CacheDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "iconcache");
@@ -55,7 +55,19 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
     /// 额外的包（"兵种 mod"这类）：它们的 main_units / land_units / unit_variants 也要并进候选链 ——
     /// 不然"战帮包引用了别的兵种包的兵"时，图标和中文名都查不到（画布上只剩 key）。
     /// </summary>
-    public void SetExtraPacks(IEnumerable<PackArchive> packs) => _extraPacks = packs.Where(p => p is not null).ToArray();
+    public void SetExtraPacks(IEnumerable<PackArchive> packs)
+    {
+        lock (_gate)
+        {
+            var next = packs.Where(p => p is not null).ToArray();
+            if (!_extraPacks.SequenceEqual(next)) _prepared = false;
+            _extraPacks = next;
+        }
+    }
+    public void InvalidateSources()
+    {
+        lock (_gate) { _prepared = false; _archive = null; _cache.Clear(); _candidateTiers.Clear(); }
+    }
 
     public void Prepare(PackArchive pack)
     {
@@ -200,11 +212,15 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
     /// 之后就算映射修好了、正确卡片找到了，`File.Exists` 也会拦住重抽 ✗ —— 用户看到的还是旧占位图。
     /// 带上候选名 = 换候选就换文件，天然失效。
     /// </summary>
-    private string CacheFile(string unit, string cand)
+    private string CacheFile(string unit, string cand, string? sourcePath = null)
     {
         var safe = new string(cand.Where(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-' or '.').ToArray());
         if (safe.Length == 0) safe = "x";
-        return Path.Combine(CacheDir, unit + "@" + safe + ".png");
+        var source = sourcePath ?? _archive?.FilePath ?? settings.GameDir ?? "";
+        var info = File.Exists(source) ? new FileInfo(source) : null;
+        var stamp = source.ToLowerInvariant() + ":" + info?.Length + ":" + info?.LastWriteTimeUtc.Ticks;
+        var token = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(stamp)))[..12];
+        return Path.Combine(CacheDir, unit + "@" + token + "_" + safe + ".png");
     }
 
     /// <summary>
@@ -295,7 +311,7 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
                             e.Path.EndsWith("/" + cand + ".png", StringComparison.OrdinalIgnoreCase)
                             && e.Path.Contains("units/icons", StringComparison.OrdinalIgnoreCase));
                         if (hit is null) continue;
-                        var f = CacheFile(unit, cand);            // 缓存名带候选 → 换候选自然失效
+                        var f = CacheFile(unit, cand, p.FilePath);            // 缓存名带候选 → 换候选自然失效
                         try
                         {
                             WriteCache(f, p.ReadDecoded(hit));
@@ -313,7 +329,7 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
         // ③ 随附素材（旧工坊的 assets/icons）——也抽一份进缓存，页面只认 icons.local 这一个站点
         if (AssetIconsDir is not null && File.Exists(Path.Combine(AssetIconsDir, unit + ".png")))
         {
-            var f = Path.Combine(CacheDir, unit + ".png");
+            var f = CacheFile(unit, "bundled", Path.Combine(AssetIconsDir, unit + ".png"));
             try { WriteCache(f, File.ReadAllBytes(Path.Combine(AssetIconsDir, unit + ".png"))); } catch { }
             if (File.Exists(f))                         // 抽不出来就当没有（别给出指向不存在文件的 url）
             {
@@ -321,7 +337,7 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
                 var cands = _candidateTiers.TryGetValue(unit, out var cl)
                     ? string.Join(" / ", cl.SelectMany(x => x)) : unit;
                 NotInGame.Add($"{unit}   ← 试过: {cands}");
-                return _cache[unit] = IconUrl(unit);
+                return _cache[unit] = IconUrlOfFile(f);
             }
         }
 
@@ -332,13 +348,12 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
         {
             url = "";
             if (!idx.TryGetValue(name, out var e)) return false;
-            var f = CacheFile(unitKey, name);
+            var f = CacheFile(unitKey, name, e.Pack);
             if (!File.Exists(f))
             {
-                using var gp = PackArchive.Open(e.Pack);
-                var ge = gp.Find(e.Inner);
-                if (ge is null) return false;
-                try { WriteCache(f, gp.ReadDecoded(ge)); }
+                var bytes = ReadGameBytes(e.Pack, e.Inner);
+                if (bytes is null) return false;
+                try { WriteCache(f, bytes); }
                 catch { return false; }     // 真写不进缓存（罕见）→ 当这个候选没命中，别拖垮整批兵种库
             }
             if (!File.Exists(f)) return false;
@@ -388,40 +403,31 @@ public sealed class IconResolver(AppSettings settings, Func<Schema> getSchema, A
     /// 先看打开的包，再按名索引扫游戏包。抽到缓存目录，返回页面用的 url。
     /// </summary>
     public string? UrlByPngName(string pngName, string cacheKey) =>
-        IconFileFor(pngName, cacheKey) is null ? null : "http://icons.local/by_" + cacheKey + ".png";
+        IconFileFor(pngName, cacheKey) is { } file ? IconUrlOfFile(file) : null;
 
-    /// <summary>同上，但要的是**本地文件**（WPF 的 Image 不能吃 http，画布的 img 要 url）。</summary>
     public string? IconFileFor(string pngName, string cacheKey)
     {
-        var name = Stem(pngName);
-        if (name.Length == 0 || string.IsNullOrWhiteSpace(cacheKey)) return null;
-        Directory.CreateDirectory(CacheDir);
-        var file = Path.Combine(CacheDir, "by_" + cacheKey + ".png");
-        var url = file;   // 下面统一 return file
-        if (File.Exists(file)) return file;
-        // ① 打开的包里（作者可能把图标也放进包了）
-        var pack = _archive;
-        if (pack is not null)
+        lock (_gate)
         {
-            var hit = pack.VisibleEntries.FirstOrDefault(e =>
-                e.Path.EndsWith("/" + name + ".png", StringComparison.OrdinalIgnoreCase));
-            if (hit is not null)
+            var name = Stem(pngName);
+            if (name.Length == 0 || string.IsNullOrWhiteSpace(cacheKey)) return null;
+            Directory.CreateDirectory(CacheDir);
+            foreach (var pack in new[] { _archive }.Concat(_extraPacks).Where(p => p is not null))
             {
-                try { WriteCache(file, pack.ReadDecoded(hit)); return file; } catch { }
+                var hit = pack!.VisibleEntries.FirstOrDefault(e => e.Path.EndsWith("/" + name + ".png", StringComparison.OrdinalIgnoreCase));
+                if (hit is null) continue;
+                var file = CacheFile("by_" + cacheKey, name, pack.FilePath);
+                WriteCache(file, pack.ReadDecoded(hit));
+                return file;
             }
-        }
-        // ② 游戏包（按名索引：所有 png 的裸文件名都收，见 GameIconNameIndex 的说明）
-        if (GameIconNameIndex().TryGetValue(name, out var e2))
-        {
-            try
+            if (GameIconNameIndex().TryGetValue(name, out var entry))
             {
-                using var gp = PackArchive.Open(e2.Pack);
-                var ge = gp.Find(e2.Inner);
-                if (ge is not null) { WriteCache(file, gp.ReadDecoded(ge)); return file; }
+                var file = CacheFile("by_" + cacheKey, name, entry.Pack);
+                if (File.Exists(file)) return file;
+                if (ReadGameBytes(entry.Pack, entry.Inner) is { } bytes) { WriteCache(file, bytes); return file; }
             }
-            catch { }
+            return null;
         }
-        return null;
     }
 
     /// <summary>

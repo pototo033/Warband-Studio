@@ -15,6 +15,7 @@ namespace WarbandStudio.Ui.Services;
 public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    internal object StateSync { get; } = new();
     private RpfmCli? _cli;
     private Schema? _schema;
     private readonly List<PackSession> _packs = [];
@@ -62,16 +63,18 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     }
 
     /// <summary>关掉一个包（画布页签的 × ）。</summary>
-    public async Task CloseSessionAsync(PackSession session)
+    public Task CloseSessionAsync(PackSession session)
     {
-        if (_packs.Remove(session)) await session.CloseAsync();
-        if (ReferenceEquals(_pack, session)) _pack = _packs.LastOrDefault();
-        _factionCache = null;
-        _milGroups = null;
-        _raceMilGroups = null;
-        _canvasCache = null;
-        _canvasCacheKey = null;
-        Log?.Invoke($"已关闭包：{session.DisplayName}");
+        lock (StateSync)
+        {
+            var path = session.PackPath;
+            if (_packs.Remove(session)) session.CloseAsync().GetAwaiter().GetResult();
+            if (ReferenceEquals(_pack, session)) _pack = _packs.LastOrDefault(s => !s.IsUnitPack);
+            if (path is not null) { _editsByPack.Remove(path); _undoByPack.Remove(path); _redoByPack.Remove(path); }
+            RefreshSourceScope();
+            Log?.Invoke($"已关闭包：{session.DisplayName}");
+            return Task.CompletedTask;
+        }
     }
     public int EditCount => Edits.Count;
     public string EditSummary => Edits.Summary();
@@ -284,16 +287,24 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// </summary>
     public void MergeGroups(string keep, IEnumerable<string> drops, int? x = null, int? y = null, string? category = null)
     {
-        var list = drops.Where(d => d.Length > 0 && !d.Equals(keep, StringComparison.OrdinalIgnoreCase)).ToList();
+        var list = drops.Where(d => d.Length > 0 && !d.Equals(keep, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (list.Count == 0) return;
+        // 先固定源组内容和位置：删组会清掉本轮新建/移动组的 InfoEdits。
+        var sources = list.Select(d => (Group: d, Units: UnitsOf(d))).ToList();
         // 画布不再自己起名（"合并成一个组"原来用 studio_group_时间戳，重载后不可读）：
         // 空 keep = 让后端按命名规则起（<前缀>_<页签>_<合并后每个兵的词…>）。
         if (string.IsNullOrWhiteSpace(keep))
-            keep = MakeGroupKey(category, list.SelectMany(UnitsOf), $"studio_group_{DateTime.Now:HHmmssff}");
-        foreach (var d in list)
+            keep = MakeGroupKey(category, sources.SelectMany(s => s.Units), $"studio_group_{DateTime.Now:HHmmssff}");
+        ClearMergedGroupConnections(list.Append(keep));
+        var pos = Edits.InfoEdits.TryGetValue(keep, out var p0) ? p0 : ((int, int, string?)?)null;
+        pos ??= PackPosOf(keep);
+        pos ??= Edits.InfoEdits.TryGetValue(list[0], out var p1) ? p1 : PackPosOf(list[0]);
+        Edits.SetGroup(keep, true);
+        foreach (var source in sources)
         {
-            Edits.SetGroup(keep, true);
-            foreach (var u in UnitsOf(d))
+            var d = source.Group;
+            foreach (var u in source.Units)
             {
                 Edits.SetJunction(u, d, false);
                 Edits.SetJunction(u, keep, true);
@@ -303,10 +314,6 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         // 合并后**必须**给 keep 留下坐标+页签：否则（尤其是 keep 是本次新建的组时）
         // studio_layout 里没有它的行 → 重新加载包后这一组（连同里面的精英兵）就"消失"了
         {
-            var pos = Edits.InfoEdits.TryGetValue(keep, out var p0) ? p0 : ((int, int, string?)?)null;
-            if (pos is null) pos = PackPosOf(keep);
-            if (pos is null && list.Count > 0)
-                pos = Edits.InfoEdits.TryGetValue(list[0], out var p1) ? p1 : PackPosOf(list[0]);
             var fx = x ?? pos?.Item1 ?? 0;
             var fy = y ?? pos?.Item2 ?? 0;
             var fc = category ?? pos?.Item3;
@@ -314,7 +321,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
             Log?.Invoke($"合并组：{keep} 坐标/页签 → ({fx},{fy},{fc ?? "—"})");
         }
         InvalidateCanvas();
-        var detail = string.Join(" + ", list.Select(d => $"{d}（{UnitsOf(d).Count} 个兵）"));
+        var detail = string.Join(" + ", sources.Select(s => $"{s.Group}（{s.Units.Count} 个兵）"));
         Log?.Invoke($"合并组：{detail} → {keep}（合并后 {UnitsOf(keep).Count} 个兵）　待导出");
     }
 
@@ -399,15 +406,17 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
             var pack = _pack?.Archive;
             if (pack is null) return list;
             var t = TableFiles.ReadConcat(pack, "unit_to_unit_group_junctions_tables", GetSchema(), null);
-            if (t is null) return list;
+            if (t is not null)
+            {
             var ju = Col(t, "unit"); var jg = Col(t, "unit_group");
-            if (ju < 0 || jg < 0) return list;
+            if (ju >= 0 && jg >= 0)
             foreach (var r in t.Rows)
                 if (r[jg].ToTsv().Equals(group, StringComparison.OrdinalIgnoreCase))
                 {
                     var u = r[ju].ToTsv();
                     if (u.Length > 0 && !list.Contains(u, StringComparer.OrdinalIgnoreCase)) list.Add(u);
                 }
+            }
         }
         catch { }
         // 关键：叠加"待导出"的编辑 —— 本次会话里新建的组（加兵/拆组/合并出来的）在包里还没有行，
@@ -460,7 +469,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>新建单位组的 key（命名规则见 <see cref="GroupNaming"/>：`<项目 key>_<页签>_<兵种词…>`；
     /// 项目 key 为空就退回 <paramref name="fallback"/> 的旧时间戳名）。</summary>
     public string MakeGroupKey(string? category, IEnumerable<string> units, string fallback) =>
-        GroupNaming.NewKey(ProjectKey, category, units, GroupKeyTaken) ?? fallback;
+        GroupNaming.NewKey(_pack?.ProjectKey ?? ProjectKey, category, units, GroupKeyTaken) ?? fallback;
 
     /// <summary>这个组名现在是不是已经被占用（包里已有的组 + 本会话新建的组；本轮删掉的可以复用）。
     /// 组名是表主键，重了会把两个组的数据混在一起 —— 起名时靠它去重。</summary>
@@ -492,6 +501,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         newKey = (newKey ?? "").Trim().ToUpperInvariant();
         if (oldKey.Length == 0 || newKey.Length == 0 || oldKey.Equals(newKey, StringComparison.OrdinalIgnoreCase)) return;
         Edits.TabRenames.Add((oldKey, newKey));
+        if (Edits.TabAllowedFactions.Remove(oldKey, out var allowedFactions)) Edits.TabAllowedFactions[newKey] = allowedFactions;
         for (var i = 0; i < Edits.TabScopes.Count; i++)
             if (Edits.TabScopes[i].Category.Equals(oldKey, StringComparison.OrdinalIgnoreCase))
                 Edits.TabScopes[i] = (newKey, Edits.TabScopes[i].Race, Edits.TabScopes[i].Faction);
@@ -1008,7 +1018,12 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
             if (Edits.AddRoute.Count > 0)
                 foreach (var r in Edits.AddRoute) set.Add(res.PathFor(Routes, r.Base));
             var dropR = KeySet(Edits.RemoveRoute);
-            if (dropR.Count > 0) DropFiles(Routes, t => Enumerable.Range(0, t.Rows.Count).Any(i => dropR.Contains(CellOf(t, "upgrade_key", i))));
+            if (dropR.Count > 0)
+            {
+                DropFiles(Routes, t => Enumerable.Range(0, t.Rows.Count).Any(i => dropR.Contains(CellOf(t, "upgrade_key", i))));
+                foreach (var requirements in new[] { "unit_upgrade_to_tech_requirements_tables", "unit_upgrade_to_building_level_requirements_tables" })
+                    DropFiles(requirements, t => Enumerable.Range(0, t.Rows.Count).Any(i => dropR.Contains(CellOf(t, "unit_upgrade", i))));
+            }
             if (Edits.AddLink.Count > 0)
                 foreach (var l in Edits.AddLink)
                     set.Add(res.PathForTab(Links, res.TabOf(l.Child) ?? res.TabOf(l.Parent)));
@@ -1016,7 +1031,33 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
             if (dropL.Count > 0)
                 DropFiles(Links, t => Enumerable.Range(0, t.Rows.Count)
                     .Any(i => dropL.Contains(CellOf(t, "child_key", i) + "" + CellOf(t, "parent_key", i))));
-            if (Edits.AddCost.Count > 0) Studio("resource_costs_tables", EditFileName);
+            void MarkRows(string table, IEnumerable<string> changedKeys, Func<DbTable, int, string> keyOf, bool additions)
+            {
+                var keys = KeySet(changedKeys);
+                if (keys.Count == 0) return;
+                var found = KeySet([]);
+                DropFiles(table, t =>
+                {
+                    var hit = false;
+                    for (var i = 0; i < t.Rows.Count; i++)
+                    {
+                        var key = keyOf(t, i);
+                        if (!keys.Contains(key)) continue;
+                        found.Add(key); hit = true;
+                    }
+                    return hit;
+                });
+                if (additions && keys.Except(found, StringComparer.OrdinalIgnoreCase).Any()) Studio(table, EditFileName);
+            }
+            const string Costs = "resource_costs_tables", Pools = "pooled_resource_factor_junctions_tables",
+                PoolLinks = "resource_cost_pooled_resource_junctions_tables";
+            string PoolLinkKey(DbTable t, int i) => CellOf(t, "pooled_resource_factor", i) + "\u0001" + CellOf(t, "resource_cost", i);
+            MarkRows(Costs, Edits.AddCost.Keys, (t, i) => CellOf(t, "id", i), true);
+            MarkRows(Costs, Edits.RemoveCost, (t, i) => CellOf(t, "id", i), false);
+            MarkRows(Pools, Edits.PoolFactors.Select(x => x.UniqueId), (t, i) => CellOf(t, "unique_id", i), true);
+            MarkRows(PoolLinks, Edits.PoolCosts.Select(x => x.PoolFactor + "\u0001" + x.ResourceCost), PoolLinkKey, true);
+            MarkRows(PoolLinks, Edits.RemovePoolLinks.Select(x => x.PoolFactor + "\u0001" + x.ResourceCost), PoolLinkKey, false);
+            MarkRows(PoolLinks, Edits.RemovePoolCost, (t, i) => CellOf(t, "resource_cost", i), false);
             if (Edits.AddUnitGroup.Count > 0) Studio("units_to_groupings_military_permissions_tables", EditFileName);
             var dropU = KeySet(Edits.RemoveUnitGroup.Select(x => x.Unit + "" + x.MilitaryGroup));
             if (dropU.Count > 0)
@@ -1034,6 +1075,11 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
                 DropFiles("units_to_exclusive_faction_permissions_tables", t => Enumerable.Range(0, t.Rows.Count)
                     .Any(i => dropExclusive.Contains(CellOf(t, "key", i) + "\u0001" + CellOf(t, "faction", i))));
             if (Edits.UnlockXp.Count > 0) Studio("main_units_tables", WarbandExporter.UnlockTableFileName);
+            if (Edits.TabAllowedFactions.Count > 0)
+            {
+                var visibilityFile = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
+                if (visibilityFile is not null) set.Add(visibilityFile.Path.Replace(Path.DirectorySeparatorChar, '/'));
+            }
             if (Edits.NewTabs.Count > 0 || Edits.TabRenames.Count > 0)
             {
                 Studio(Cats, EditFileName);
@@ -1932,6 +1978,8 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>schema 懒加载（11MB，约 170ms，只做一次）。</summary>
     public Schema GetSchema()
     {
+        lock (StateSync)
+        {
         if (_schema is not null) return _schema;
         var path = RpfmCli.LocateSchema()
                    ?? throw new FileNotFoundException("找不到 schema_wh3.ron —— 发布包里应在 schemas\\ 目录下。");
@@ -1940,6 +1988,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         sw.Stop();
         Log?.Invoke($"schema 载入：{_schema.Definitions.Count} 张表（{sw.ElapsedMilliseconds} ms）");
         return _schema;
+        }
     }
 
     /// <summary>起 rpfm_cli 引擎（只在写回/诊断/依赖缓存时需要）。</summary>
@@ -1967,6 +2016,13 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>记录游戏目录（诊断 / 依赖缓存要用）。</summary>
     public async Task<string> ApplyGameAsync(CancellationToken ct = default)
     {
+        lock (StateSync)
+        {
+            _icons = null;
+            _loc = null;
+            _skins.Clear();
+            RefreshSourceScope();
+        }
         if (string.IsNullOrWhiteSpace(settings.GameDir))
             return "没设游戏目录：打开包、看表、编辑都不受影响；只有「诊断」「依赖缓存」需要它。";
         if (_cli is not null) _cli.GamePath = settings.GameDir;
@@ -1975,9 +2031,11 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     }
 
     /// <summary>打开一个包（原生，不开进程）。</summary>
-    public async Task<PackSession> OpenPackAsync(string packPath, CancellationToken ct = default,
+    public Task<PackSession> OpenPackAsync(string packPath, CancellationToken ct = default,
                                                  string? displayName = null, bool asUnitPack = false)
     {
+        lock (StateSync)
+        {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var full = Path.GetFullPath(packPath);
         var session = _packs.FirstOrDefault(x =>
@@ -1985,22 +2043,25 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         if (session is null)
         {
             session = new PackSession(null);
-            await session.OpenAsync(full, ct);
+            session.OpenAsync(full, ct).GetAwaiter().GetResult();
             _packs.Add(session);
         }
         session.DisplayName = string.IsNullOrWhiteSpace(displayName) ? Path.GetFileName(full) : displayName!;
         if (asUnitPack) session.IsUnitPack = true;
-        Loc.MergePack(session);                          // MOD 自带的 text/db/*.loc 优先进来（兵种包的中文名也靠它）
+
         if (!asUnitPack)
         {
             _pack = session;                             // 新打开的成为"当前"（画布看它）
             PackDisplayName = session.DisplayName;
         }
+        session.ProjectKey ??= ProjectKey;
+        RefreshSourceScope();
         sw.Stop();
         Log?.Invoke(session.IsUnitPack
             ? $"已加载兵种包 {Path.GetFileName(packPath)}：{session.Files.Count} 个文件（参考用：图标/中文名/兵种库；不占画布）"
             : $"已打开 {Path.GetFileName(packPath)}：{session.Files.Count} 个文件（原生 {sw.ElapsedMilliseconds} ms）");
-        return session;
+        return Task.FromResult(session);
+        }
     }
 
     public async Task ClosePackAsync(CancellationToken ct = default)
@@ -2013,7 +2074,9 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     {
         var pack = _pack ?? throw new InvalidOperationException("还没打开 pack。");
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var table = pack.ReadTable(innerPath, GetSchema());
+        var (bytes, snapshot) = ProjectTables();
+        using var view = PackArchive.OpenView(pack.PackPath!, bytes, snapshot.RemoveFiles);
+        var table = DbTable.Decode(view.ReadDecoded(innerPath), PackSession.TableNameOf(innerPath), GetSchema());
         sw.Stop();
         Log?.Invoke($"解表 {table.TableName}：{table.Rows.Count} 行 × {table.Columns.Count} 列（{sw.ElapsedMilliseconds} ms）");
         return table;
@@ -2029,7 +2092,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// </summary>
     private void PrepareIcons(PackArchive pack)
     {
-        Icons.SetExtraPacks(_packs.Select(s => s.Archive).Where(a => a is not null && !ReferenceEquals(a, pack))!);
+        Icons.SetExtraPacks(_packs.Where(s => s.IsUnitPack).Select(s => s.Archive).Where(a => a is not null && !ReferenceEquals(a, pack))!);
         Icons.Prepare(pack);                 // 注意别写成 PrepareIcons(pack)（自我递归 = 栈溢出闪退，v0.133 踩过）
     }
 
@@ -2068,10 +2131,14 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>切换"当前包"（多画布：每个画布看自己的包）。</summary>
     public void SwitchTo(PackSession? session)
     {
-        if (session is null || !session.IsOpen) return;
-        _pack = session;
-        PackDisplayName = session.DisplayName;
-        Log?.Invoke($"切到画布：{session.DisplayName}（{session.Files.Count} 个文件）");
+        lock (StateSync)
+        {
+            if (session is null || !session.IsOpen || ReferenceEquals(_pack, session)) return;
+            _pack = session;
+            PackDisplayName = session.DisplayName;
+            RefreshSourceScope();
+            Log?.Invoke($"切到画布：{session.DisplayName}（{session.Files.Count} 个文件）");
+        }
     }
 
     /// <summary>画布数据缓存（"打开/导入时算一次，改动或换包才重算"）。</summary>
@@ -2148,68 +2215,114 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     }    /// <summary>有编辑/换包时让画布缓存失效。</summary>
     public void InvalidateCanvas()
     {
+        lock (StateSync)
+        {
+        if (_pack?.SetPendingTables(Edits.TableReplacements) == true)
+        {
+            _landUnitByUnit = null; _costIndexArchive = null; _costTables.Clear();
+            _costListCache = null; _resourceListCache = null; _milGroups = null; _raceMilGroups = null;
+            _icons?.InvalidateSources();
+            Loc.SetSources(_packs.Where(s => s.IsUnitPack && !ReferenceEquals(s, _pack)).Concat([_pack]));
+        }
         _rev++;
         _factionCache = null;
         _canvasCache = null;
         _canvasCacheKey = null;
+        }
     }
 
     /// <summary>
     /// **保存**：把当前编辑写回**打开的那个包**（原地写）。做法是先导出到临时文件、再替换原文件，
     /// 并把原文件留一份 `.bak`（保存是不可逆动作，留个后路）。
     /// </summary>
-    public async Task<string> SaveInPlaceAsync()
+    public async Task<string> SaveInPlaceAsync(PackSession? target = null)
     {
-        var session = _pack ?? throw new InvalidOperationException("先打开一个包。");
-        var pack = session.PackPath;
-        var tmp = pack + ".saving";
-        var rep = Export(tmp);                       // 复用导出（含全部落表 + 文件替换）
-        // **先把包关掉**：读包时我们自己一直占着这个文件的句柄，不关就替换不了（"used by another process"）
-        await CloseSessionAsync(session);
-        var bak = "";
+        target ??= _pack ?? throw new InvalidOperationException("先打开一个包。");
+        await _gate.WaitAsync();
         try
         {
-            // 备份：**工程的 old/ 优先**（v1.5.0 起；那份是完整 .pack，能直接在「历史版本」里还原，保留最近 N 份）；
-            // 包不在任何工程里（如 --open-pack）才退回旧备份目录（.bak）。
-            var proj = ProjectStore.ProjectDirOfPack(pack);
-            if (proj is not null)
+            lock (StateSync)
             {
-                bak = ProjectStore.BackupPack(proj, pack, settings.HistoryKeep) ?? "";
-            }
-            else
-            {
-                var bakDir = BackupDirPath();
-                Directory.CreateDirectory(bakDir);
-                bak = Path.Combine(bakDir, Path.GetFileName(pack) + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".bak");
-                File.Copy(pack, bak);
+                var path = target.PackPath ?? throw new InvalidOperationException("这个包已关闭。");
+                var temp = path + ".saving";
+                var snapshot = (_editsByPack.TryGetValue(path, out var edits) ? edits : new WarbandEdits()).Clone();
+                snapshot.ProjectKey = target.ProjectKey ?? ProjectKey;
+                var vanilla = VanillaDbPackPath ?? throw new InvalidOperationException("保存需要游戏 data/db.pack。");
+                var report = WarbandExporter.Export(path, vanilla, temp, GetSchema(), snapshot);
+                using (PackArchive.Open(temp)) { } // 写完并确认索引可读取，才进入替换。
+                AtomicFile.Flush(temp);
+                var backup = BackupOriginal(target.ProjectDirectory ?? ProjectStore.ProjectDirOfPack(path), path);
+                try
+                {
+                    target.CloseAsync().GetAwaiter().GetResult();
+                    AtomicFile.Commit(temp, path);
+                    target.OpenAsync(path).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    if (!target.IsOpen && File.Exists(path)) target.OpenAsync(path).GetAwaiter().GetResult();
+                    RefreshSourceScope();
+                    throw new IOException($"保存未完成，原包路径和编辑仍保留；临时文件：{temp}", ex);
+                }
+                _editsByPack[path] = new WarbandEdits();
+                _undoByPack.Remove(path);
+                _redoByPack.Remove(path);
+                var project = target.ProjectDirectory ?? ProjectStore.ProjectDirOfPack(path);
+                if (project is not null) ProjectStore.PruneHistory(project, Path.GetFileNameWithoutExtension(path), settings.HistoryKeep);
+                RefreshSourceScope();
+                Log?.Invoke($"保存：已原子写回 {path}（备份 {backup}）");
+                return $"已保存回原包：{Path.GetFileName(path)}（备份 {Path.GetFileName(backup)}）；树里 {report.UnitsInTree} 个兵，解锁 {report.Unlocked}";
             }
         }
-        catch (Exception ex) { Log?.Invoke("备份失败（继续保存）：" + ex.Message); bak = ""; }
-        File.Delete(pack);
-        File.Move(tmp, pack);
-        DiscardEditsOf(pack);                        // 清的是**刚保存的那个包**的编辑（关包会把当前包切走，别用 DiscardEdits）
-        Log?.Invoke($"保存：已写回 {pack}（备份 {(bak.Length > 0 ? bak : "失败")}）");
-        return $"已保存回原包：{Path.GetFileName(pack)}（备份 {(bak.Length > 0 ? Path.GetFileName(bak) : "失败，见日志")}）；" +
-               $"树里 {rep.UnitsInTree} 个兵，解锁 {rep.Unlocked}";
+        finally { _gate.Release(); }
     }
 
-    /// <summary>备份文件夹（设置里没写就用默认 %APPDATA%\WarbandStudioackups）。</summary>
-    /// <summary>
-    /// 从工程的 `old/` 历史版本**还原**一个包：先把当前包也备份一份（还原不是丢东西的借口），
-    /// 再把所选备份拷回原位、清掉内存编辑。**重开包由调用方走正常打开链路**（画布/树/清单要一起刷）。
-    /// 调用方负责先问"有未导出编辑怎么办"。
-    /// </summary>
+    private string BackupOriginal(string? projectDir, string path, IReadOnlyCollection<string>? protectedFiles = null)
+    {
+        if (projectDir is not null) return ProjectStore.BackupPack(projectDir, path, 0, protectedFiles); // 事务成功后才清理历史。
+        var directory = BackupDirPath();
+        Directory.CreateDirectory(directory);
+        var backup = Path.Combine(directory, Path.GetFileName(path) + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss_fffffff") + ".bak");
+        File.Copy(path, backup);
+        return backup;
+    }
+
     public async Task<string> RestoreFromBackupAsync(string packPath, string backupFile)
     {
-        var proj = ProjectStore.ProjectDirOfPack(packPath);
-        var session = _packs.FirstOrDefault(s => s.PackPath.Equals(packPath, StringComparison.OrdinalIgnoreCase));
-        if (session is not null) await CloseSessionAsync(session);      // 先关，释放文件句柄
-        var keepBak = proj is not null ? ProjectStore.BackupPack(proj, packPath, settings.HistoryKeep) : null;
-        File.Copy(backupFile, packPath, overwrite: true);
-        DiscardEditsOf(packPath);
-        Log?.Invoke($"还原：{Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}" +
-                    $"（还原前的包也备份了一份：{(keepBak is null ? "—" : Path.GetFileName(keepBak))}）");
-        return $"已还原 {Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}（还原前的那份也进了历史版本）";
+        await _gate.WaitAsync();
+        try
+        {
+            lock (StateSync)
+            {
+                var session = _packs.FirstOrDefault(s => string.Equals(s.PackPath, packPath, StringComparison.OrdinalIgnoreCase));
+                var project = session?.ProjectDirectory ?? ProjectStore.ProjectDirOfPack(packPath);
+                var temp = packPath + ".restoring";
+                File.Copy(backupFile, temp, overwrite: true); // 在清理任何历史之前固定还原源。
+                using (PackArchive.Open(temp)) { }
+                AtomicFile.Flush(temp);
+                var backup = BackupOriginal(project, packPath, [backupFile]);
+                try
+                {
+                    session?.CloseAsync().GetAwaiter().GetResult();
+                    AtomicFile.Commit(temp, packPath);
+                    session?.OpenAsync(packPath).GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    if (session is not null && !session.IsOpen && File.Exists(packPath)) session.OpenAsync(packPath).GetAwaiter().GetResult();
+                    RefreshSourceScope();
+                    throw;
+                }
+                _editsByPack[packPath] = new WarbandEdits();
+                _undoByPack.Remove(packPath);
+                _redoByPack.Remove(packPath);
+                if (project is not null) ProjectStore.PruneHistory(project, Path.GetFileNameWithoutExtension(packPath), settings.HistoryKeep);
+                InvalidateCanvas();
+                RefreshSourceScope();
+                return $"已还原 {Path.GetFileName(packPath)} ← {Path.GetFileName(backupFile)}（还原前备份：{Path.GetFileName(backup)}）";
+            }
+        }
+        finally { _gate.Release(); }
     }
 
     public string BackupDirPath()
@@ -2232,8 +2345,9 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
             throw new FileNotFoundException("找不到原版包：" + vanilla);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        Edits.ProjectKey = ProjectKey;      // 新行落表文件名要用：<项目key>_Upgrade_<页签>（见 TabFileNaming）
-        var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), Edits);
+        var snapshot = Edits.Clone();
+        snapshot.ProjectKey = _pack?.ProjectKey ?? ProjectKey;
+        var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), snapshot);
         sw.Stop();
         Log?.Invoke($"导出完成：{destPath}（解锁 {rep.Unlocked} 个兵，{sw.ElapsedMilliseconds} ms）");
         return rep;
@@ -2245,6 +2359,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// </summary>
     public string BuildWarbandJson()
     {
+        using var iconBatch = Icons.BeginBatch();
         var session = _pack ?? throw new InvalidOperationException("先打开一个 pack。");
         var pack = session.Archive ?? throw new InvalidOperationException("这个 pack 还没打开。");
         var cacheKey = session.PackPath + "|" + _rev;
@@ -2482,7 +2597,12 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
                     var cc = Col(t, "resource_cost");
                     var ca = Col(t, "amount");
                     if (cf >= 0 && cc >= 0 && ca >= 0)
-                        foreach (var r in t.Rows) AddPool(r[cf].ToTsv(), r[cc].ToTsv(), r[ca].Num);
+                        foreach (var r in t.Rows)
+                        {
+                            var factor = r[cf].ToTsv(); var cost = r[cc].ToTsv();
+                            if (Edits.RemovePoolLinks.Any(x => x.PoolFactor.Equals(factor, StringComparison.OrdinalIgnoreCase) && x.ResourceCost.Equals(cost, StringComparison.OrdinalIgnoreCase))) continue;
+                            AddPool(factor, cost, r[ca].Num);
+                        }
                     if (pools.Count > 0)
                         notes.Add($"成本额外资源：{pools.Count} 个成本 key 在读到的 junction 表里有别的资源消耗（如 chivalry_other）。");
                 }
@@ -2508,6 +2628,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         };
 
         var jso = new System.Text.Json.Nodes.JsonObject();
+        jso["sourcePack"] = session.PackPath;
         var groups = new System.Text.Json.Nodes.JsonArray();
         var icons = new System.Text.Json.Nodes.JsonObject();
         var pages = new System.Text.Json.Nodes.JsonArray();
@@ -2879,6 +3000,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         foreach (var g in Edits.TabRaceScopes.GroupBy(x => x.Category, StringComparer.OrdinalIgnoreCase))
             tabScopes[g.Key] = ToJsonArray(g.Select(x => x.Race).Distinct(StringComparer.OrdinalIgnoreCase));
         jso["tabRaceScopes"] = tabScopes;
+        jso["tabVisibility"] = BuildTabVisibilityData();
         // 供"应用到其他种族"的勾选列表：所有种族（key + 名字）
         try
         {
@@ -3326,7 +3448,7 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     /// <summary>当前画布上已经有的兵（兵种库里要把它们变灰，避免同一个兵重复进树）。</summary>
     public HashSet<string> CanvasUnits()
     {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var set = new HashSet<string>(Edits.TableReplacements.Keys, StringComparer.OrdinalIgnoreCase);
         try
         {
             var pack = _pack?.Archive;
@@ -3695,21 +3817,25 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
     public async Task<string> GenerateDependenciesAsync(CancellationToken ct = default)
     {
         var cli = await EnsureEngineAsync(ct);
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "cache");
-        Directory.CreateDirectory(dir);
-        var cache = Path.Combine(dir, "dependencies_wh3.pak2");
-        var r = await cli.GenerateDependenciesAsync(cache, ct);
-        if (!r.Ok) throw new RpfmException(r.All);
-        cli.DependenciesCachePath = cache;
-        return cache;
+        return await cli.EnsureDiagnosticCacheAsync(force: true, ct);
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_pack is not null) await _pack.CloseAsync();
-        _pack = null;
-        _cli = null;
+        await _gate.WaitAsync();
+        try
+        {
+            lock (StateSync)
+            {
+                foreach (var session in _packs) session.CloseAsync().GetAwaiter().GetResult();
+                _packs.Clear(); _pack = null; _cli = null; _icons = null;
+                _editsByPack.Clear(); _undoByPack.Clear(); _redoByPack.Clear(); _skins.Clear();
+                _loc?.SetSources([]);
+                _costIndexArchive = null; _costTables.Clear(); _costListCache = null; _resourceListCache = null;
+                InvalidateCanvas();
+            }
+        }
+        finally { _gate.Release(); }
     }
 
 /// <summary>派系 → 可用兵（实时从 DB 算，来自 LoadFactions）。</summary>

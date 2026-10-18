@@ -22,6 +22,7 @@ public sealed class CanvasTab : CenterTab
 /// <summary>表视图页签：一张原生解出来的 DB 表。</summary>
 public sealed class TableTab : CenterTab
 {
+    public required string PackPath { get; init; }
     /// <summary>DataGrid 的数据源（字符串列，只读）。</summary>
     public required DataView View { get; init; }
     public required string TableName { get; init; }
@@ -29,5 +30,5 @@ public sealed class TableTab : CenterTab
     public int RowCount { get; set; }      // 刷新时会被更新（set 由 ReloadTableTabAsync 用）
     public int ColumnCount { get; init; }
 
-    public string Info => $"{TableName}　{RowCount} 行 × {ColumnCount} 列　（只读预览；编辑在下一步）";
+    public string Info => $"{TableName}　{RowCount} 行 × {ColumnCount} 列　双击/F2 编辑；Enter 提交，Esc 取消；Ctrl+Z/Y 撤销/重做；可选值 <null> 表示不存在";
 }

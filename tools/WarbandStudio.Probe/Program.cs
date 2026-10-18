@@ -49,6 +49,8 @@ try
         "set-file" => WarbandStudio.Probe.SetFile.Run(args),
         "dedupe-grants" => WarbandStudio.Probe.DedupeGrants.Run(args),
         "tab-art" => WarbandStudio.Probe.TabArtCheck.Run(args),
+        "tab-factions" => WarbandStudio.Probe.TabFactions.Run(args),
+        "cli-diagnose" => await WarbandStudio.Probe.CliDiagnostics.Run(args),
         "native-write-pack" => await NativeWritePack(args),
         "tree"      => await Tree(args),
         "tsv"       => await Tsv(args),

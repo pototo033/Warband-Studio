@@ -87,7 +87,6 @@ public static class AmendTestRunner
         e.AddJunction.Add((sampleUnit, newGroup));
         e.InfoEdits[newGroup] = (500, 300, g1Cat);                // 与 g1 同页签：同页新建仍要写界面连线
         e.InfoEdits[g1] = (700, 150, null);                       // 只挪坐标，页签不动
-        e.InfoEdits[g2] = (12, 34, "STUDIOCAT");                  // 坐标 + 改页签
         e.AddRoute.Add(new WarbandEdits.RouteEdit("studio_test_route", g1, newGroup, newCost, 3, 1));
         e.AddLink.Add(new WarbandEdits.LinkEdit(newGroup, g1, 1, 3, 0, 0, 0));
         e.AddCost[newCost] = -999;      // 成本现在是**带符号**的（负 = 消耗）
@@ -119,6 +118,7 @@ public static class AmendTestRunner
         File.WriteAllBytes(localBg, png1x1);
 
         e.NewTabs.Add((newTabKey, "MOD1", "ui/skins/default/warband_upgrades/background_images_emp.png", localBtn));   // 背景从包内选、按钮从**本地素材**选
+        e.InfoEdits[g2] = (12, 34, newTabKey); // 移到本轮真实创建的页签，不能靠不存在的 STUDIOCAT 通过验收。
         // 新建页签时后台会**自动放一个空组**（游戏里"这个分类下有组"页签才显示，P4）——
         // Backend.NewTab 做的就是这两条编辑，这里照抄一份验落表
         var autoGroup = "studio_tab_" + newTabKey.ToLowerInvariant();
@@ -388,7 +388,7 @@ public static class AmendTestRunner
             ["movedGroup"] = g1,
             ["movedTo"] = new[] { 700, 150 },
             ["categoryGroup"] = g2,
-            ["category"] = "STUDIOCAT",
+            ["category"] = newTabKey,
             ["deletedRoute"] = delRoute,
             ["deletedLinkChild"] = delLinkChild,
             ["deletedLinkParent"] = delLinkParent,

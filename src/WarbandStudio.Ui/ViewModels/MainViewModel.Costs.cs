@@ -33,6 +33,7 @@ public sealed partial class MainViewModel
     private long _loadedResAmount;            // 选中已有成本时，它现在扣的数量（用来判断"数量改没改"）
     private string _loadedPoolId = "";        // 它现在用的池 id（只改数量时复用它，别把作者起的池名换掉）
     private bool _loadedExisting;
+    private bool _addingCostResource;
 
     /// <summary>成本 id（可在下拉里选已有的，也可以直接打新的）。</summary>
     public string CostId
@@ -40,6 +41,9 @@ public sealed partial class MainViewModel
         get => _costId;
         set
         {
+            if (_applyingCostLists || _costId == value) return;
+            if (!_costId.Equals(value, StringComparison.OrdinalIgnoreCase)) { _loadedPoolId = ""; _addingCostResource = false; }
+            ++_costFormRevision;
             _costId = value;
             Raise(nameof(CostId));
             FilterCostList();
@@ -48,14 +52,14 @@ public sealed partial class MainViewModel
         }
     }
     /// <summary>金币消耗：**带符号**（负 = 消耗、正 = 获得）。</summary>
-    public string CostGold { get => _costGold; set { _costGold = value; Raise(nameof(CostGold)); UpdateCostPreview(); } }
+    public string CostGold { get => _costGold; set { if (_applyingCostLists || _costGold == value) return; _costGold = value; ++_costFormRevision; Raise(nameof(CostGold)); UpdateCostPreview(); } }
     /// <summary>其他资源的量：同样带符号（负 = 消耗）。</summary>
-    public string CostResAmount { get => _costResAmount; set { _costResAmount = value; Raise(nameof(CostResAmount)); UpdateCostPreview(); } }
+    public string CostResAmount { get => _costResAmount; set { if (_applyingCostLists || _costResAmount == value) return; _costResAmount = value; ++_costFormRevision; Raise(nameof(CostResAmount)); UpdateCostPreview(); } }
     /// <summary>资源输入框的文本：**默认空 = 不用其他资源**；打字按名称/key 过滤，选中就用它。</summary>
     public string CostResText
     {
         get => _costResText;
-        set { _costResText = value; Raise(nameof(CostResText)); FilterResList(); UpdateCostPreview(); }
+        set { if (_applyingCostLists || _costResText == value) return; _costResText = value; ++_costFormRevision; Raise(nameof(CostResText)); FilterResList(); UpdateCostPreview(); }
     }
     /// <summary>创建工作坊里的一行提示（结果/错误）。</summary>
     public string CostStatus { get => _costStatus; set { _costStatus = value; Raise(nameof(CostStatus)); } }
@@ -144,20 +148,21 @@ public sealed partial class MainViewModel
         {
             _costGold = hit.Gold.ToString(System.Globalization.CultureInfo.InvariantCulture);
             Raise(nameof(CostGold));
-            var resName = hit.Resource.Length > 0
-                ? (PooledResAll.FirstOrDefault(x => x.Key.Equals(hit.Resource, StringComparison.OrdinalIgnoreCase))?.Name ?? hit.Resource)
-                : "";
-            _costResText = resName;
-            Raise(nameof(CostResText));
-            _costResAmount = hit.Resource.Length > 0
-                ? hit.ResourceAmount.ToString(System.Globalization.CultureInfo.InvariantCulture) : "";
-            Raise(nameof(CostResAmount));
-            _loadedResKey = hit.Resource;
-            _loadedResAmount = hit.ResourceAmount;     // 记下"加载时的数量"：只改数量也要能写回去
-            _loadedPoolId = hit.PoolId;                // 只改数量时复用原来那个池（作者起的池名别丢）
+            var preferredPool = _loadedPoolId;
+            CostResourceLinks.Clear();
+            foreach (var resource in hit.Resources) CostResourceLinks.Add(resource);
+            _selectedCostResourceLink = null;
+            SelectedCostResourceLink = CostResourceLinks.FirstOrDefault(r => r.PoolId.Equals(preferredPool, StringComparison.OrdinalIgnoreCase)) ?? CostResourceLinks.FirstOrDefault();
+            if (SelectedCostResourceLink is null)
+            {
+                _costResText = ""; _costResAmount = "";
+                _loadedResKey = ""; _loadedResAmount = 0; _loadedPoolId = "";
+                Raise(nameof(CostResText)); Raise(nameof(CostResAmount));
+            }
         }
         else if (wasExisting)
         {
+            CostResourceLinks.Clear(); SelectedCostResourceLink = null;
             // 从"已有"改成新名字：把预填的值清掉，别把上一个成本的金额带过去
             _costGold = ""; Raise(nameof(CostGold));
             _costResText = ""; Raise(nameof(CostResText));
@@ -177,10 +182,11 @@ public sealed partial class MainViewModel
         newId = (newId ?? "").Trim();
         if (newId.Length == 0) { CostStatus = "新 id 不能为空"; return; }
         if (oldId.Length == 0) { CostStatus = "先在「成本 id」里选/填一个要改名的成本"; return; }
-        var msg = _backend.RenameWarbandCost(oldId, newId);
+        var msg = CostEdit(() => _backend.RenameWarbandCost(oldId, newId));
         CostStatus = msg;
         if (msg.StartsWith("成本工坊", StringComparison.Ordinal))
         {
+            _addingCostResource = false;
             RebuildTree();
             RefreshPooledResources();
             PackOpened?.Invoke();
@@ -206,14 +212,16 @@ public sealed partial class MainViewModel
             if (res is not null)
             {
                 var amt = (long)ParseDouble(CostResAmount);
-                parts.Add($"pooled_resource_factor_junctions_tables：unique_id = {res.Key}_warband_upgrade（factor=other / resource={res.Key} / min=-2147483647 / max=2147483647 / sort_order=0）");
-                parts.Add($"resource_cost_pooled_resource_junctions_tables：{res.Key}_warband_upgrade ← 成本 {id}，amount = {amt}（{(amt < 0 ? "消耗" : "获得")}）");
+                var pool = _loadedPoolId.Length > 0 && _loadedResKey.Equals(res.Key, StringComparison.OrdinalIgnoreCase) ? _loadedPoolId : res.Key + "_warband_upgrade";
+                parts.Add($"资源池：{pool}（已有池保持原参数；缺失时才创建）");
+                parts.Add($"资源关联：{pool} ← 成本 {id}，amount = {amt}（{(amt < 0 ? "消耗" : "获得")}）");
             }
             else
             {
                 parts.Add("其他资源：**空的**（不建资源池、不写 resource_cost_pooled_resource_junctions_tables）");
-                if (_loadedExisting) parts.Add("（保存时会把这条成本原来的资源关联清掉）");
+                if (_loadedExisting) parts.Add(_loadedPoolId.Length > 0 ? "仅清除当前选中资源，其他资源关联保留" : "不追加资源，原有资源关联保留");
             }
+            if (_loadedExisting) parts.Add("本次" + (_addingCostResource ? "追加资源" : "仅编辑选定资源") + "，其余关联与标签保持不变");
             return string.Join("\n", parts);
         }
     }
@@ -225,24 +233,38 @@ public sealed partial class MainViewModel
     private void UpdateCostPreview() => Raise(nameof(CostPreview));
 
     /// <summary>包打开/切换后刷新：成本清单 + 资源清单（原版打底 + 本包覆盖；包里新建的资源也读得到）。</summary>
-    public void RefreshPooledResources()
+    public async void RefreshPooledResources() => await RefreshPooledResourcesAsync();
+    public async Task RefreshPooledResourcesAsync()
     {
         try
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            CostListAll.Clear();
-            foreach (var c in _backend.CostList()) CostListAll.Add(c);
-            PooledResAll.Clear();
-            foreach (var r in _backend.PooledResources()) PooledResAll.Add(r);
-            FilterCostList();
-            FilterResList();
-            SyncCostFromId();
+            if (_backend.Pack?.IsOpen != true) return;
+            if (_costFormPackPath != _backend.Pack.PackPath)
+            {
+                ResetCostForm();
+                _costFormPackPath = _backend.Pack.PackPath;
+            }
+            var formRevision = _costFormRevision;
+            var loaded = await ReadCurrentAsync(() => (_backend.CostList(), _backend.PooledResources()));
+            _applyingCostLists = true;
+            try
+            {
+                CostListAll.Clear();
+                foreach (var c in loaded.Item1) CostListAll.Add(c);
+                PooledResAll.Clear();
+                foreach (var r in loaded.Item2) PooledResAll.Add(r);
+                FilterCostList(); FilterResList();
+            }
+            finally { _applyingCostLists = false; }
+            Raise(nameof(CostId)); Raise(nameof(CostResText));
+            if (formRevision == _costFormRevision) SyncCostFromId();
             sw.Stop();
-            Status = $"成本工坊：已有成本 {CostListAll.Count} 个 / 资源 {PooledResAll.Count} 种";
             FileLog.Write($"[成本工坊] 清单已读：成本 {CostListAll.Count} 个 / 资源 {PooledResAll.Count} 种（{sw.ElapsedMilliseconds} ms）");
             Raise(nameof(CostPackLine));      // "成本写进哪个包"那行跟着当前包变
         }
-        catch (Exception ex) { Status = "成本工坊清单读取失败：" + ex.Message; }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { CostStatus = "成本工坊清单读取失败：" + ex.Message; }
     }
 
     /// <summary>主按钮：新建 或 保存修改（资源那块只有"用户真的改了"才动，没动就保留作者原来的池/关联）。</summary>
@@ -258,15 +280,17 @@ public sealed partial class MainViewModel
         {
             var resSame = _loadedResKey.Equals(resKey, StringComparison.OrdinalIgnoreCase);
             // **资源或数量变了都要重写关联**：以前只看"资源 key 改没改"，只改数量会被整块跳过（用户实测"改数量没生效"）
-            msg = _backend.UpdateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount,
-                                             !resSame || amount != _loadedResAmount,
-                                             resSame ? _loadedPoolId : null);
+            msg = CostEdit(() => _backend.UpdateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount,
+                                             !resSame || amount != _loadedResAmount || _addingCostResource,
+                                             resSame && _loadedPoolId.Length > 0 ? _loadedPoolId : null,
+                                             _loadedPoolId.Length > 0 ? _loadedPoolId : null, _addingCostResource));
         }
         else
-            msg = _backend.CreateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount);
+            msg = CostEdit(() => _backend.CreateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount));
         CostStatus = msg;
         if (msg.StartsWith("成本工坊", StringComparison.Ordinal))
         {
+            _addingCostResource = false;
             RebuildTree();
             RefreshPooledResources();      // 清单里立刻出现/更新
             PackOpened?.Invoke();          // 升级对话框的成本下拉跟着刷新
@@ -279,7 +303,8 @@ public sealed partial class MainViewModel
     {
         var id = (CostId ?? "").Trim();
         if (!_loadedExisting) { CostStatus = "这个 id 不在包里（下拉里选一个已有成本再删）"; return false; }
-        CostStatus = _backend.DeleteWarbandCost(id);
+        CostStatus = CostEdit(() => _backend.DeleteWarbandCost(id));
+        if (!CostStatus.StartsWith("成本工坊", StringComparison.Ordinal)) return false;
         RebuildTree();
         RefreshPooledResources();
         PackOpened?.Invoke();

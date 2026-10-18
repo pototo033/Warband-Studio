@@ -6,7 +6,7 @@ public sealed record RefIssue(string Table, string Column, string Value, string 
 /// <summary>引用体检的结果。</summary>
 public sealed record RefReport(int Checked, IReadOnlyList<RefIssue> Issues, IReadOnlyList<string> MissingTargets)
 {
-    public bool Ok => Issues.Count == 0;
+    public bool Ok => Issues.Count == 0 && MissingTargets.Count == 0;
 }
 
 /// <summary>
@@ -27,18 +27,19 @@ public static class ReferenceChecker
 
         HashSet<string>? KeysOf(string targetTable, string targetColumn)
         {
-            if (keyCache.TryGetValue(targetTable, out var cached)) return cached;
+            var identity = targetTable + "\u0001" + targetColumn;
+            if (keyCache.TryGetValue(identity, out var cached)) return cached;
             var t = resolveTable(targetTable);
             HashSet<string>? keys = null;
             if (t is not null)
             {
                 var col = t.Columns.FindIndex(c => c.Name.Equals(targetColumn, StringComparison.OrdinalIgnoreCase));
-                if (col < 0) col = TableFiles.FindKeyColumn(t);
+                if (col < 0) { missingTargets.Add(targetTable + "." + targetColumn); keyCache[identity] = null; return null; }
                 keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var row in t.Rows) keys.Add(row[col].ToTsv());
             }
             else missingTargets.Add(targetTable);
-            keyCache[targetTable] = keys;
+            keyCache[identity] = keys;
             return keys;
         }
 
@@ -58,6 +59,7 @@ public static class ReferenceChecker
                 var col = table.Columns.FindIndex(c => c.Name.Equals(field.Name, StringComparison.OrdinalIgnoreCase));
                 if (col < 0) continue;
 
+                if (!table.Rows.Any(row => row[col].ToTsv().Length > 0)) continue;
                 var keys = KeysOf(target.Table, target.Column);
                 if (keys is null) continue;   // 目标表缺来源，已在 MissingTargets 里报过
 

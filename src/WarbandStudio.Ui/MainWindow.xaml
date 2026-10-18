@@ -396,7 +396,8 @@
                         <DockPanel>
                             <TextBlock DockPanel.Dock="Top" Text="{Binding Info}" Margin="8,5,8,4"
                                        Style="{StaticResource AeText.Caption}" />
-                            <DataGrid ItemsSource="{Binding View}" AutoGenerateColumns="True" IsReadOnly="True"
+                            <DataGrid ItemsSource="{Binding View}" AutoGenerateColumns="True" IsReadOnly="False"
+                                      BeginningEdit="OnTableBeginningEdit" CellEditEnding="OnTableCellEditEnding" PreviewKeyDown="OnTableKeyDown"
                                       CanUserAddRows="False" CanUserDeleteRows="False"
                                       Background="{DynamicResource AeBrush.Canvas}"
                                       Foreground="{DynamicResource AeBrush.TextPrimary}"
@@ -652,43 +653,11 @@
                                       PreviewMouseLeftButtonDown="OnComboArrowDown"
                                       SelectionChanged="OnCostPickChanged">
                                 <ComboBox.ItemTemplate>
-                                    <!-- 形式：成本id　金币（金额）　[资源图标]（金额）；没有额外资源就只显示前两段 -->
                                     <DataTemplate>
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Foreground="{DynamicResource Text.Primary}">
-                                                <Run Text="{Binding Id, Mode=OneWay}" />
-                                                <Run Text="　金币（" Foreground="{DynamicResource Text.Secondary}" />
-                                                <Run Text="{Binding Gold, Mode=OneWay}" />
-                                                <Run Text="）" Foreground="{DynamicResource Text.Secondary}" />
-                                            </TextBlock>
-                                            <StackPanel Orientation="Horizontal">
-                                                <StackPanel.Style>
-                                                    <Style TargetType="StackPanel">
-                                                        <Style.Triggers>
-                                                            <!-- PoolId 空 = 这条成本没有额外资源 → 整块收起 -->
-                                                            <DataTrigger Binding="{Binding PoolId}" Value="">
-                                                                <Setter Property="Visibility" Value="Collapsed" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </StackPanel.Style>
-                                                <Image Source="{Binding ResourceIcon}" Width="16" Height="16" Margin="8,0,2,0"
-                                                       RenderOptions.BitmapScalingMode="HighQuality">
-                                                    <Image.Style>
-                                                        <Style TargetType="Image">
-                                                            <Style.Triggers>
-                                                                <!-- 图标没解析出来（少见）：收起图片，数量文字照旧显示 -->
-                                                                <DataTrigger Binding="{Binding ResourceIcon}" Value="">
-                                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Image.Style>
-                                                </Image>
-                                                <TextBlock Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center">
-                                                    <Run Text="（" /><Run Text="{Binding ResourceAmount, Mode=OneWay}" /><Run Text="）" />
-                                                </TextBlock>
-                                            </StackPanel>
+                                        <StackPanel ToolTip="{Binding ResourceSummary}">
+                                            <TextBlock Text="{Binding Id}" Foreground="{DynamicResource Text.Primary}" />
+                                            <TextBlock Text="{Binding Gold}" Foreground="{DynamicResource Text.Secondary}" FontSize="10" />
+                                            <TextBlock Text="{Binding ResourceSummary}" Foreground="{DynamicResource Text.Secondary}" FontSize="10" TextWrapping="Wrap" MaxWidth="250" />
                                         </StackPanel>
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
@@ -727,6 +696,12 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <TextBlock Text="已有资源关联（选择一条编辑；其余关联保留）" Margin="0,8,0,2" Foreground="{DynamicResource Text.Secondary}" />
+                            <ComboBox ItemsSource="{Binding CostResourceLinks}" SelectedItem="{Binding SelectedCostResourceLink}" DisplayMemberPath="Label" />
+                            <WrapPanel Margin="0,6,0,0">
+                                <Button Content="追加资源" Command="{Binding AddCostResourceCommand}" Padding="8,2" />
+                                <Button Content="移除选中资源" Command="{Binding RemoveCostResourceCommand}" Padding="8,2" Margin="6,0,0,0" />
+                            </WrapPanel>
                             <TextBlock Text="数额（负 = 消耗 / 正 = 获得）" Margin="0,6,0,2" Foreground="{DynamicResource Text.Primary}" />
                             <TextBox Text="{Binding CostResAmount, UpdateSourceTrigger=PropertyChanged}" />
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Text.Secondary}"
@@ -761,6 +736,7 @@
                              IsIndeterminate="True" Visibility="{Binding IsBusy,
                              Converter={StaticResource BoolToVisibility}}" />
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="16,0,0,0" ToolTip="运行环境、当前 Pack 与数据库结构">
+                    <TextBlock Text="{Binding UpdateStatus}" Foreground="{DynamicResource Text.Secondary}" FontSize="11" Margin="0,0,12,0" TextTrimming="CharacterEllipsis" MaxWidth="220" ToolTip="{Binding UpdateStatus}" />
                     <TextBlock Text="{Binding ServerText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                     <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Secondary}" FontSize="12" />
                     <TextBlock Text="{Binding PackText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12" />

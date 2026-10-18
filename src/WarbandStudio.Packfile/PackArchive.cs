@@ -24,6 +24,27 @@ public sealed class PackArchive : IDisposable
 {
     private readonly FileStream _stream;
     private readonly Dictionary<string, PackEntry> _byPath;
+    private IReadOnlyDictionary<string, byte[]> _overlay = new Dictionary<string, byte[]>();
+
+    /// <summary>独立只读视图；修改只存在内存中，不改源包，拥有自己的文件句柄。</summary>
+    public static PackArchive OpenView(string path, IReadOnlyDictionary<string, byte[]> replacements,
+                                      IEnumerable<string>? removed = null)
+    {
+        var archive = Open(path);
+        var drops = new HashSet<string>(removed ?? [], StringComparer.OrdinalIgnoreCase);
+        var data = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in replacements) data[key.Replace('\\', '/')] = value;
+        archive._overlay = data;
+        var entries = (List<PackEntry>)archive.Entries;
+        entries.RemoveAll(e => drops.Contains(e.Path) || data.ContainsKey(e.Path));
+        entries.AddRange(data.Where(kv => !drops.Contains(kv.Key)).Select(kv => new PackEntry
+        {
+            Path = kv.Key, StoredSize = checked((uint)kv.Value.Length), IsCompressed = false, Offset = 0,
+        }));
+        archive._byPath.Clear();
+        foreach (var entry in entries) archive._byPath[entry.Path] = entry;
+        return archive;
+    }
 
     private PackArchive(FileStream stream, string filePath, PfhVersion version, PfhFileType type,
                         PfhFlags flags, uint timestamp, List<string> dependencies, List<PackEntry> entries)
@@ -146,6 +167,7 @@ public sealed class PackArchive : IDisposable
     /// <summary>读一条的**原始**字节（压缩的就是压缩态）。</summary>
     public byte[] ReadRaw(PackEntry entry)
     {
+        if (_overlay.TryGetValue(entry.Path, out var bytes)) return bytes.ToArray();
         var buf = new byte[entry.StoredSize];
         var read = 0;
         while (read < buf.Length)

@@ -39,7 +39,7 @@ public static class WarbandExporter
         var added = new List<string>();
         var replacements = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
 
-        using var pack = PackArchive.Open(packPath);
+        using var pack = PackArchive.OpenView(packPath, edits?.TableReplacements ?? new Dictionary<string, byte[]>(), edits?.RemoveFiles);
         using var vanilla = PackArchive.Open(vanillaDbPack);
 
         // 1) 树里的兵：兵组↔兵 关联表的 unit 列
@@ -262,44 +262,33 @@ public static class WarbandExporter
                 var n = WarbandAmender.Apply(pack, vanilla, edits, schema, replacements, notes);
                 added.Add($"画布编辑 → {n} 个文件（{edits.Summary()}）");
             }
-            catch (Exception ex) { notes.Add("画布编辑落表失败：" + ex.Message); }
+            catch (Exception ex) { throw new InvalidDataException("画布编辑落表失败，已停止导出以保留原包：" + ex.Message, ex); }
         }
 
         // 4c) 引用体检（导出前把关：解析不了的引用会让游戏报 Bad Mod）
         try
         {
-            string[] checkTables = ["unit_upgrade_groups_tables", "unit_to_unit_group_junctions_tables",
-                "unit_upgrade_group_ui_infos_tables", "unit_upgrade_group_ui_categories_tables",
-                "unit_upgrade_group_ui_links_tables", "unit_upgrade_to_unit_groups_tables",
-                "unit_upgrade_to_tech_requirements_tables", "resource_costs_tables",
-                "resource_cost_pooled_resource_junctions_tables", "campaign_features_tables",
-                "ui_features_to_cultures_tables", "units_to_groupings_military_permissions_tables",
-                "main_units_tables", "land_units_tables"];
-            DbTable? Resolve(string name)
-            {
-                var n2 = name.EndsWith("_tables", StringComparison.OrdinalIgnoreCase) ? name : name + "_tables";
-                try
-                {
-                    var t = TableFiles.ReadMerged(vanilla, n2, schema, null);
-                    t = TableFiles.Merge(t, TableFiles.ReadMerged(pack, n2, schema, null));
-                    return t;
-                }
-                catch { return null; }   // 没有定义的目标表按"缺来源"处理，不让它打断整轮体检
-            }
-            var rep = ReferenceChecker.Check(checkTables, schema, Resolve, notes);
+            var rep = ExportReferenceValidator.Validate(pack, vanilla, schema, replacements, edits?.RemoveFiles);
             if (rep.Ok) notes.Add($"引用体检：{rep.Checked} 处引用全部解析得了。");
             else
             {
-                notes.Add($"引用体检：{rep.Checked} 处里有 {rep.Issues.Count} 处解析不了（游戏可能报 Bad Mod）——" +
-                          string.Join("；", rep.Issues.Take(3).Select(i => $"{i.Table}.{i.Column}={i.Value}→{i.TargetTable}")));
-                foreach (var extra in rep.Issues.Skip(3).Take(5))
-                    notes.Add("   还有：" + $"{extra.Table}.{extra.Column}={extra.Value}→{extra.TargetTable}");
+                throw new InvalidDataException("引用校验未通过，未写入目标包。" +
+                    string.Join("；", rep.Issues.Take(8).Select(i => $"{i.Table}.{i.Column}={i.Value} → {i.TargetTable}.{i.TargetColumn}")) +
+                    (rep.MissingTargets.Count > 0 ? "；缺少引用来源（请补齐依赖包或 Assembly Kit 码表）：" + string.Join("、", rep.MissingTargets.Take(8)) : ""));
             }
         }
-        catch (Exception e) { notes.Add("引用体检跳过：" + e.Message); }
+        catch (Exception e) { throw new InvalidDataException("导出已停止，原包和未保存编辑保持不变：" + e.Message, e); }
 
         // 5) 写包（其余条目原样搬运）
-        PackWriter.WriteFrom(pack, replacements, destPath, dropPaths: edits?.RemoveFiles);   // 文件树里删掉的条目跳过去
+        var staged = destPath + ".exporting." + Guid.NewGuid().ToString("N");
+        try
+        {
+            PackWriter.WriteFrom(pack, replacements, staged, dropPaths: edits?.RemoveFiles);
+            using (PackArchive.Open(staged)) { }
+            AtomicFile.Flush(staged);
+            AtomicFile.Commit(staged, destPath);
+        }
+        finally { if (File.Exists(staged)) File.Delete(staged); }
 
         return new ExportReport(destPath, units.Count, unlocked, already, missing.Count, added, notes.Concat(missing.Take(5).Select(m => "原版表里没有：" + m)).ToList());
     }

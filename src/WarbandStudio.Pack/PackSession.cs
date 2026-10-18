@@ -15,6 +15,8 @@ public sealed class PackSession(RpfmCli? cli)
     private List<RFileInfo> _files = [];
 
     public string? PackPath { get; private set; }
+    public string? ProjectDirectory { get; set; }
+    public string? ProjectKey { get; set; }
 
     /// <summary>文件树里这棵树的根名（默认文件名；原版那棵叫「原版战帮升级」）。</summary>
     public string DisplayName { get; set; } = "";
@@ -92,6 +94,20 @@ public sealed class PackSession(RpfmCli? cli)
 
     /// <summary>原生打开的包（读表用）。</summary>
     public PackArchive? Archive => _archive;
+    private object? _pendingTables;
+    public bool SetPendingTables(IReadOnlyDictionary<string, byte[]> tables)
+    {
+        if (ReferenceEquals(_pendingTables, tables) || PackPath is null) return false;
+        var view = PackArchive.OpenView(PackPath, tables);
+        _archive?.Dispose();
+        _archive = view;
+        _pendingTables = tables;
+        _files = view.VisibleEntries.Where(e => IsWarbandFile(e.Path)).Select(e => new RFileInfo
+        {
+            Path = e.Path, ContainerName = Info!.FileName, FileType = GuessFileType(e.Path),
+        }).ToList();
+        return true;
+    }
 
     /// <summary>打开一个 .pack：原生读一遍索引（加密包/老格式会抛出不支持）。</summary>
     public Task OpenAsync(string packPath, CancellationToken ct = default)
@@ -123,6 +139,7 @@ public sealed class PackSession(RpfmCli? cli)
 
     private void Close()
     {
+        _pendingTables = null;
         _archive?.Dispose();
         _archive = null;
         PackPath = null;
