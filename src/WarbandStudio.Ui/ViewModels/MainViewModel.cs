@@ -176,7 +176,7 @@ public sealed partial class MainViewModel : ObservableObject
     public Task CheckUpdatesAsync() => CheckUpdatesCoreAsync(manual: true);
     public Task CheckUpdatesOnStartupAsync() => CheckUpdatesCoreAsync(manual: false);
     private Task CheckUpdatesCoreAsync(bool manual) => Services.Updater.CheckAsync(_settings, s => UpdateStatus = s, manual,
-        () => ConfirmUnsavedBeforeAsync("安装更新并重启"), () => UpdateRestartRequested?.Invoke());
+        PrepareUpdateRecoveryAsync, () => UpdateRestartRequested?.Invoke(), CancelUpdateRecovery);
     public void ReportUpdateInstallation() => Services.Updater.ReportInstallation(s => UpdateStatus = s);
 
     /// <summary>当前打开包的路径（文件树右键"打开所在文件夹"用；没打开就是空）。</summary>
@@ -692,6 +692,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>画布回执：某个兵被放进新组（记待导出，junction 写回在下一步）。</summary>
     public void OnCanvasUnitAdded(string group, string unit, int x, int y)
     {
+        if (_updatePreparing) return;
         _backend.Edit(() => { _backend.AddUnitToGroup(group, unit, x, y, isNewGroup: true); return true; });
         RebuildTree();
         AutoSaveSoon();
@@ -704,6 +705,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     public void ApplyCanvasEdit(string json)
     {
+        if (_updatePreparing) return;
         try
         {
             using var message = JsonDocument.Parse(json);

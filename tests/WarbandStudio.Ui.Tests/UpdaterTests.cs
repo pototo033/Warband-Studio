@@ -118,9 +118,12 @@ public sealed class UpdaterTests
         File.WriteAllText(Path.Combine(plan.InstallDirectory, "WarbandStudio.exe"), "old-exe");
         Directory.CreateDirectory(Path.Combine(plan.InstallDirectory, "packs"));
         var userPack = Path.Combine(plan.InstallDirectory, "packs", "user.pack"); File.WriteAllText(userPack, "user-data");
+        var recovery = Path.Combine(_root,"recovery","pending-session.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(recovery)!); File.WriteAllText(recovery,"unsaved edits");
         Assert.Equal(0, await RunInstaller(plan));
         Assert.Equal("new:WarbandStudio.exe", File.ReadAllText(Path.Combine(plan.InstallDirectory, "WarbandStudio.exe")));
         Assert.Equal("user-data", File.ReadAllText(userPack));
+        Assert.Equal("unsaved edits",File.ReadAllText(recovery));
         Assert.False(Directory.Exists(plan.PayloadDirectory)); Assert.False(Directory.Exists(plan.BackupDirectory));
         Assert.True(JsonDocument.Parse(File.ReadAllText(plan.ResultPath)).RootElement.GetProperty("Success").GetBoolean());
     }

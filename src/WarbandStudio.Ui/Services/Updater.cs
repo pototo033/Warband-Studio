@@ -36,7 +36,7 @@ public static class Updater
     }
 
     public static async Task CheckAsync(AppSettings settings, Action<string>? status = null, bool manual = false,
-        Func<Task<bool>>? prepareRestart = null, Action? shutdown = null)
+        Func<Task<bool>>? prepareRestart = null, Action? shutdown = null, Action? cancelRestart = null)
     {
         if (!await Job.WaitAsync(0))
         {
@@ -67,7 +67,7 @@ public static class Updater
             { status?.Invoke($"有新版本 v{release.Version}（自动提醒已跳过，可手动检查）"); return; }
             status?.Invoke($"发现新版本 v{release.Version}（当前 v{CurrentVersion}）");
             var r = MessageBox.Show(
-                $"发现新版本 v{release.Version}（当前 v{CurrentVersion}）。\n\n「是」：下载安装，完成后重启应用。\n「否」：跳过此版本的自动提醒，仍可手动检查。\n「取消」：稍后再说。\n\n未保存编辑会在安装前询问处理。",
+                $"发现新版本 v{release.Version}（当前 v{CurrentVersion}）。\n\n「是」：下载安装，完成后重启应用。\n「否」：跳过此版本的自动提醒，仍可手动检查。\n「取消」：稍后再说。\n\n安装前自动保护已打开的 Pack 和未保存编辑，重启后恢复继续编辑。",
                 "WarbandStudio 更新", MessageBoxButton.YesNoCancel, MessageBoxImage.Information);
             if (r == MessageBoxResult.No) { settings.SkipUpdate = release.Version; settings.Save(); status?.Invoke("已跳过此版本的自动提醒，手动检查仍会提示"); return; }
             if (r != MessageBoxResult.Yes) { status?.Invoke("已暂缓更新"); return; }
@@ -109,6 +109,7 @@ public static class Updater
         }
         finally
         {
+            if (!handedOff) cancelRestart?.Invoke();
             progressWindow?.Finish();
             if (!handedOff && cache is not null && Directory.Exists(cache))
                 try { _ = UpdatePackage.Under(Path.GetDirectoryName(cache)!, Path.GetFileName(cache)); Directory.Delete(cache, true); }

@@ -52,6 +52,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _vm;
         _vm.UpdateRestartRequested += () => { _forceClosing = true; Close(); };
+        _vm.UpdateSessionLockChanged += locked => IsEnabled = !locked;
         _vm.FlushTableEdits = async () =>
         {
             // 工具栏保存/关闭同样等待最后一个单元格事务，不能只依靠焦点变化。
@@ -96,6 +97,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             await _vm.InitializeAsync();      // 里面会打开原版战帮升级 → 触发 PackOpened → 推画布数据
+            await _vm.RestoreUpdateRecoveryAsync();
             await RunStartupArgsAsync();
             // 第一次打开：自动放一遍教程（放过就记上；工具栏/全局选项里能再看）
             if (!_vm.TourDone) { await Task.Delay(700); StartTour(); }
