@@ -110,9 +110,20 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
                 ("db/building_levels_tables/data__", Table("building_levels_tables", new Dictionary<string, object> { ["level_name"]="test_building" })),
             }));
         _settings = new AppSettings { GameDir = game, BackupDir = Path.Combine(_root, "backup"), PersistChanges = false, AutoSave = false };
-        _backend = new Backend(_settings);
+        _backend = new Backend(_settings, ValidateFixturePack);
         _pack = MakePack("a.pack");
         await _backend.OpenPackAsync(_pack);
+    }
+
+    // Fixture packs use a deliberately tiny fake game, so validate their final rows in memory.
+    // Production constructors always use the real RPFM gate; dedicated integration probes exercise it.
+    private RpfmDiagnosticReport ValidateFixturePack(string path)
+    {
+        using var pack = PackArchive.Open(path);
+        using var vanilla = PackArchive.Open(Path.Combine(_settings.GameDir, "data", "db.pack"));
+        var report = ExportReferenceValidator.Validate(pack, vanilla, _schema, new Dictionary<string, byte[]>());
+        if (!report.Ok) throw new InvalidDataException(string.Join(";", report.Issues.Select(i => i.Value).Concat(report.MissingTargets)));
+        return new RpfmDiagnosticReport([]);
     }
 
     [Fact]
@@ -241,7 +252,7 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
     [Fact]
     public async Task SwitchingToEmptyProjectClearsSessionsAndCanReopenOriginal()
     {
-        var vm = new MainViewModel(_settings);
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
         var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
         var a = Path.Combine(_root, "A"); var b = Path.Combine(_root, "B");
         Assert.True(await vm.NewProjectAsync(a, "output/packs", "AKEY"));
@@ -325,7 +336,7 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
     [Fact]
     public async Task UnrecognizedLastPackDoesNotReopenAndBadProjectPreservesCurrent()
     {
-        var vm = new MainViewModel(_settings);
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
         var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
         var project = Path.Combine(_root, "recognized"); Assert.True(await vm.NewProjectAsync(project));
         Assert.True(await vm.ImportPackToProjectAsync(_pack));
@@ -378,7 +389,7 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
     [Fact]
     public async Task CostFormListsAllLinksPreservesStatusAndResetsOnPackChange()
     {
-        var vm = new MainViewModel(_settings);
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
         var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
         await using var lifetime = backend;
         await backend.OpenPackAsync(_pack);
@@ -471,7 +482,7 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
     [Fact]
     public async Task BatchMoveUsesOneRefreshAndUndoForFiftyGroups()
     {
-        var vm = new MainViewModel(_settings);
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
         await using var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
         await backend.OpenPackAsync(_pack);
         backend.Edit(() => { for (var i = 0; i < 50; i++) backend.AddUnitToGroup("g" + i, "u" + i, i * 10, 300, true, "EMP"); return true; });

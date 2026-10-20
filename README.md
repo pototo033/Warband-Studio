@@ -78,9 +78,10 @@ dotnet run --project tools/WarbandStudio.Probe -- roundtrip <pack> <表路径> <
 引擎（`rpfm/rpfm_cli.exe`，RPFM 4.7.4，MIT，22MB）和 schema（`schemas/schema_wh3.ron`，MIT，11MB）
 都随发布包走，命令行直接指路径 —— 所以：
 
-- **不需要**用户装 RPFM，**不需要**联网下 schema；
-- 启动后只在「全局选项」里选一次**游戏目录**（用来做诊断 / 生成依赖缓存；纯编辑和导出不需要它）；
-- 依赖缓存（`%APPDATA%\WarbandStudio\cache\dependencies_wh3.pak2`）只在跑「诊断」时才要生成一次。
+- **不需要**用户装 RPFM 或 Assembly Kit，**不需要**联网下 schema；
+- 启动后在「全局选项」里选一次**游戏目录**，用于保存、导出和诊断；
+- 保存和导出会先用内置 RPFM 诊断最终临时包：Error 阻止提交，Warning 允许保存，数量显示在状态栏、明细保留在日志；诊断未完成也不会覆盖原包；
+- 首次保存或诊断会自动生成游戏依赖缓存（`%LOCALAPPDATA%\WarbandStudio\cache\rpfm`），后续按 CLI、schema 和游戏数据指纹复用，无需 Assembly Kit。
 
 **怎么开始改（v1.5.0 起 = 工程化）**：启动是**空状态**（不再自动打开参考包）——
 

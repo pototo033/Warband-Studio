@@ -10,6 +10,7 @@ public sealed class ExportReferenceSafetyTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "studio_refs_" + Guid.NewGuid().ToString("N"));
     private readonly Schema _schema = Schema.Parse("""
         (version: 5, definitions: {
+          "main_units_tables": [(version: 0, fields: [(name: "unit", field_type: StringU8, is_key: true), (name: "restrict_xp_gain_in_campaign", field_type: Boolean, is_key: false)])],
           "targets_tables": [(version: 0, fields: [(name: "key", field_type: StringU8, is_key: true), (name: "alternate", field_type: StringU8, is_key: false)])],
           "sources_tables": [(version: 0, fields: [(name: "key", field_type: StringU8, is_key: true),
             (name: "target", field_type: StringU8, is_key: false, is_reference: Some(("targets", "key"))),
@@ -28,7 +29,9 @@ public sealed class ExportReferenceSafetyTests : IDisposable
     {
         var p = Path.Combine(_dir, "source.pack"); var v = Path.Combine(_dir, "db.pack");
         PackWriter.WriteNew(p, [("db/sources_tables/author", Table("sources_tables", ["S", "A", "alias"]))]);
-        PackWriter.WriteNew(v, target ? [("db/targets_tables/data__", Table("targets_tables", ["A", "alias"]))] : []);
+        var vanillaFiles = new List<(string,byte[])> { ("db/main_units_tables/data__", Table("main_units_tables")) };
+        if (target) vanillaFiles.Add(("db/targets_tables/data__", Table("targets_tables", ["A", "alias"])));
+        PackWriter.WriteNew(v, vanillaFiles);
         return (PackArchive.Open(p), PackArchive.Open(v));
     }
 
@@ -76,11 +79,47 @@ public sealed class ExportReferenceSafetyTests : IDisposable
         var bad=Path.Combine(_dir,"bad.bin"); File.WriteAllBytes(bad, Table("sources_tables", ["S", "missing", "alias"]));
         var edits=new WarbandEdits(); edits.FileReplacements.Add(("db/sources_tables/author",bad));
         var target=Path.Combine(_dir,"existing.pack"); File.WriteAllText(target,"original target");
-        Assert.Throws<InvalidDataException>(()=>WarbandExporter.Export(source,vanilla,target,_schema,edits));
+        RpfmDiagnosticReport Reject(string path)
+        {
+            using var staged = PackArchive.Open(path);
+            Assert.NotNull(staged.Find("db/sources_tables/author"));
+            return new([new(DiagnosticSeverity.Error, "db/sources_tables/author", "InvalidReference", "missing")]);
+        }
+        Assert.Throws<InvalidDataException>(()=>WarbandExporter.Export(source,vanilla,target,_schema,edits,Reject));
         Assert.Equal("original target",File.ReadAllText(target));
         var absent=Path.Combine(_dir,"absent.pack");
-        Assert.Throws<InvalidDataException>(()=>WarbandExporter.Export(source,vanilla,absent,_schema,edits));
+        Assert.Throws<InvalidDataException>(()=>WarbandExporter.Export(source,vanilla,absent,_schema,edits,Reject));
         Assert.False(File.Exists(absent)); Assert.Single(edits.FileReplacements);
+        Assert.Empty(Directory.GetFiles(_dir, "*.exporting.*"));
+    }
+
+    [Fact]
+    public void WarningAllowsAtomicExportAndKeepsWarningInReport()
+    {
+        var (p,v)=Packs(); var source=p.FilePath; var vanilla=v.FilePath; p.Dispose(); v.Dispose();
+        var target=Path.Combine(_dir,"warnings.pack");
+        File.WriteAllText(target,"previous target");
+        var report=WarbandExporter.Export(source,vanilla,target,_schema,validateStaged: path =>
+        {
+            using var staged=PackArchive.Open(path);
+            Assert.NotNull(staged.Find("db/sources_tables/author"));
+            return new([new(DiagnosticSeverity.Warning,"db/sources_tables/author","NoReferenceTableNorColumnFoundNoPak","target")]);
+        });
+        using var saved=PackArchive.Open(target);
+        Assert.NotNull(saved.Find("db/sources_tables/author"));
+        Assert.Contains(report.Notes,n=>n.Contains("0 Error，1 Warning"));
+        Assert.Contains(report.Notes,n=>n.Contains("NoReferenceTableNorColumnFoundNoPak"));
+    }
+
+    [Fact]
+    public void FailedDiagnosisCannotCommitOrLeaveStagedPack()
+    {
+        var (p,v)=Packs(); var source=p.FilePath; var vanilla=v.FilePath; p.Dispose(); v.Dispose();
+        var target=Path.Combine(_dir,"failed.pack"); File.WriteAllText(target,"original");
+        Assert.Throws<RpfmException>(()=>WarbandExporter.Export(source,vanilla,target,_schema,
+            validateStaged: _=>throw new RpfmException("CLI failed")));
+        Assert.Equal("original",File.ReadAllText(target));
+        Assert.Empty(Directory.GetFiles(_dir,"*.exporting.*"));
     }
 
     [Fact]

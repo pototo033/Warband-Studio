@@ -12,7 +12,7 @@ namespace WarbandStudio.Ui.Services;
 ///   · **写 / 诊断 / 生成依赖缓存** → 随包的 rpfm_cli（RPFM 4.7.4）：按需拉起，用到才要。
 /// schema（schema_wh3.ron）随包，首次读表时载入一次（约 170ms）。
 /// </summary>
-public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
+public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagnosticReport>? validateStaged = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     internal object StateSync { get; } = new();
@@ -2248,7 +2248,8 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
                 var snapshot = (_editsByPack.TryGetValue(path, out var edits) ? edits : new WarbandEdits()).Clone();
                 snapshot.ProjectKey = target.ProjectKey ?? ProjectKey;
                 var vanilla = VanillaDbPackPath ?? throw new InvalidOperationException("保存需要游戏 data/db.pack。");
-                var report = WarbandExporter.Export(path, vanilla, temp, GetSchema(), snapshot);
+                var report = WarbandExporter.Export(path, vanilla, temp, GetSchema(), snapshot,
+                    validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line))));
                 using (PackArchive.Open(temp)) { } // 写完并确认索引可读取，才进入替换。
                 AtomicFile.Flush(temp);
                 var backup = BackupOriginal(target.ProjectDirectory ?? ProjectStore.ProjectDirOfPack(path), path);
@@ -2271,7 +2272,8 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
                 if (project is not null) ProjectStore.PruneHistory(project, Path.GetFileNameWithoutExtension(path), settings.HistoryKeep);
                 RefreshSourceScope();
                 Log?.Invoke($"保存：已原子写回 {path}（备份 {backup}）");
-                return $"已保存回原包：{Path.GetFileName(path)}（备份 {Path.GetFileName(backup)}）；树里 {report.UnitsInTree} 个兵，解锁 {report.Unlocked}";
+                return $"已保存回原包：{Path.GetFileName(path)}（备份 {Path.GetFileName(backup)}）；树里 {report.UnitsInTree} 个兵，解锁 {report.Unlocked}；" +
+                    report.Notes.FirstOrDefault(n => n.StartsWith("RPFM："));
             }
         }
         finally { _gate.Release(); }
@@ -2347,7 +2349,8 @@ public sealed partial class Backend(AppSettings settings) : IAsyncDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var snapshot = Edits.Clone();
         snapshot.ProjectKey = _pack?.ProjectKey ?? ProjectKey;
-        var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), snapshot);
+        var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), snapshot,
+            validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line))));
         sw.Stop();
         Log?.Invoke($"导出完成：{destPath}（解锁 {rep.Unlocked} 个兵，{sw.ElapsedMilliseconds} ms）");
         return rep;

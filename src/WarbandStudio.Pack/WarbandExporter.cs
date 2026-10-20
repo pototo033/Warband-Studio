@@ -1,4 +1,5 @@
 using WarbandStudio.Packfile;
+using WarbandStudio.Rpfm;
 
 namespace WarbandStudio.Pack;
 
@@ -33,7 +34,7 @@ public static class WarbandExporter
     /// <paramref name="vanillaDbPack"/> 是原版 `data/db.pack`（要它提供兵的完整行）。
     /// </summary>
     public static ExportReport Export(string packPath, string vanillaDbPack, string destPath, Schema schema,
-                                      WarbandEdits? edits = null)
+                                      WarbandEdits? edits = null, Func<string, RpfmDiagnosticReport>? validateStaged = null)
     {
         var notes = new List<string>();
         var added = new List<string>();
@@ -265,26 +266,16 @@ public static class WarbandExporter
             catch (Exception ex) { throw new InvalidDataException("画布编辑落表失败，已停止导出以保留原包：" + ex.Message, ex); }
         }
 
-        // 4c) 引用体检（导出前把关：解析不了的引用会让游戏报 Bad Mod）
-        try
-        {
-            var rep = ExportReferenceValidator.Validate(pack, vanilla, schema, replacements, edits?.RemoveFiles);
-            if (rep.Ok) notes.Add($"引用体检：{rep.Checked} 处引用全部解析得了。");
-            else
-            {
-                throw new InvalidDataException("引用校验未通过，未写入目标包。" +
-                    string.Join("；", rep.Issues.Take(8).Select(i => $"{i.Table}.{i.Column}={i.Value} → {i.TargetTable}.{i.TargetColumn}")) +
-                    (rep.MissingTargets.Count > 0 ? "；缺少引用来源（请补齐依赖包或 Assembly Kit 码表）：" + string.Join("、", rep.MissingTargets.Take(8)) : ""));
-            }
-        }
-        catch (Exception e) { throw new InvalidDataException("导出已停止，原包和未保存编辑保持不变：" + e.Message, e); }
-
         // 5) 写包（其余条目原样搬运）
         var staged = destPath + ".exporting." + Guid.NewGuid().ToString("N");
         try
         {
             PackWriter.WriteFrom(pack, replacements, staged, dropPaths: edits?.RemoveFiles);
             using (PackArchive.Open(staged)) { }
+            var diagnostics = (validateStaged ?? (p => RpfmExportValidation.Validate(p, vanillaDbPack)))(staged);
+            diagnostics.RequireSaveAllowed();
+            notes.Add(diagnostics.Summary);
+            notes.AddRange(diagnostics.Items.Select(x => x.ToString()));
             AtomicFile.Flush(staged);
             AtomicFile.Commit(staged, destPath);
         }

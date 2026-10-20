@@ -28,7 +28,7 @@ public sealed partial class RpfmCli
     {
         if (string.IsNullOrWhiteSpace(GamePath) || !Directory.Exists(Path.Combine(GamePath, "data")))
             throw new RpfmException("诊断未完成：请先设置有效的游戏目录。");
-        var stamp = new StringBuilder("rpfm-managed-cache-v1\n");
+        var stamp = new StringBuilder("rpfm-managed-cache-v2-game-only\n");
         void FileStamp(string path)
         {
             var file = new FileInfo(Path.GetFullPath(path));
@@ -52,9 +52,6 @@ public sealed partial class RpfmCli
             }
         }
         else foreach (var file in Directory.EnumerateFiles(data, "*.pack").OrderBy(p => p, StringComparer.OrdinalIgnoreCase)) FileStamp(file);
-        var raw = Path.Combine(GamePath!, "assembly_kit", "raw_data", "db");
-        stamp.Append(raw).Append(Directory.Exists(raw));
-        if (Directory.Exists(raw)) foreach (var file in Directory.EnumerateFiles(raw, "*.xml").OrderBy(p => p, StringComparer.OrdinalIgnoreCase)) FileStamp(file);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stamp.ToString()))).ToLowerInvariant();
     }
 
@@ -73,7 +70,7 @@ public sealed partial class RpfmCli
                 if (File.Exists(Path.Combine(generation, "ready")) && CompleteCache(cache))
                 {
                     DependenciesCachePath = cache;
-                    Log?.Invoke("RPFM 诊断缓存命中（CLI/schema/游戏/AK 来源一致）。");
+                    Log?.Invoke("RPFM 诊断缓存命中（CLI/schema/游戏来源一致，无需 Assembly Kit）。");
                     return cache;
                 }
             }

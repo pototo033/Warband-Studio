@@ -271,7 +271,7 @@ public sealed partial class MainViewModel
         if (session is null) return false;
         try
         {
-            await _backend.SaveInPlaceAsync(session);
+            Status = await Task.Run(() => _backend.SaveInPlaceAsync(session));
             return true;
         }
         catch (Exception ex) { Status = "保存失败：" + ex.Message; FileLog.Write("保存失败", ex); return false; }

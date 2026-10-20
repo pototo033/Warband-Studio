@@ -164,8 +164,6 @@ public sealed partial class RpfmCli(string exePath, string schemaPath)
         if (string.IsNullOrWhiteSpace(GamePath))
             throw new RpfmException("还没设游戏目录，生成依赖缓存需要它。");
         var args = new List<string> { "dependencies", "generate", "-P", cachePath, "-g", GamePath!, "-s", SchemaPath };
-        var raw = Path.Combine(GamePath!, "assembly_kit", "raw_data", "db");
-        if (Directory.Exists(raw)) { args.Add("-a"); args.Add(raw); }
         return RunAsync(args, ct);
     }
 

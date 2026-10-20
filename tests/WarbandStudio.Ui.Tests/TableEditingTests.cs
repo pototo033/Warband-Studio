@@ -12,7 +12,7 @@ public sealed partial class BackendSafetyTests
     [Fact]
     public async Task OpeningTableActivatesDocumentAndNeverShowsWelcomeOverlay()
     {
-        var vm = new MainViewModel(_settings);
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
         var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(vm)!;
         await using var lifetime = backend;
         Assert.True(vm.IsWelcomeVisible);
@@ -40,7 +40,7 @@ public sealed partial class BackendSafetyTests
     [Fact]
     public async Task SameTableInDifferentPacksHasSeparateVisibleDocuments()
     {
-        var vm = new MainViewModel(_settings);
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
         var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(vm)!;
         await using var lifetime = backend;
         var second = MakePack("other_document.pack");

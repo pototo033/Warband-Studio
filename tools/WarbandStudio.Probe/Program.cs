@@ -51,6 +51,7 @@ try
         "tab-art" => WarbandStudio.Probe.TabArtCheck.Run(args),
         "tab-factions" => WarbandStudio.Probe.TabFactions.Run(args),
         "cli-diagnose" => await WarbandStudio.Probe.CliDiagnostics.Run(args),
+        "save-gate-test" => WarbandStudio.Probe.SaveGateTest.Run(args),
         "native-write-pack" => await NativeWritePack(args),
         "tree"      => await Tree(args),
         "tsv"       => await Tsv(args),

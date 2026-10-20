@@ -39,10 +39,10 @@ public sealed partial class MainViewModel : ObservableObject
     private bool _isBusy;
 
     public MainViewModel() : this(AppSettings.Load()) { }
-    public MainViewModel(AppSettings initialSettings)
+    public MainViewModel(AppSettings initialSettings, Func<string, WarbandStudio.Rpfm.RpfmDiagnosticReport>? validateStaged = null)
     {
         _settings = initialSettings;
-        _backend = new Backend(_settings);
+        _backend = new Backend(_settings, validateStaged);
         _gameDir = _settings.GameDir;
         _backupDir = string.IsNullOrWhiteSpace(_settings.BackupDir)
             ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "backups")
@@ -1643,7 +1643,8 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             Status = "正在写回原包…";
-            var msg = await _backend.SaveInPlaceAsync();
+            var saveTarget = _backend.Pack;
+            var msg = await Task.Run(() => _backend.SaveInPlaceAsync(saveTarget));
             // 句柄已经换到新文件：把包重新打开，树/画布/派系/素材库全部刷新
             // 保存事务已原位重开同一会话，无需再次切换当前包。
             RebuildTree();
@@ -1716,7 +1717,7 @@ public sealed partial class MainViewModel : ObservableObject
             Status = "正在导出…";
             var rep = await ReadCurrentAsync(() => _backend.Export(destPath));
             Status = $"已导出：{Path.GetFileName(destPath)}（树里 {rep.UnitsInTree} 个兵，解锁 {rep.Unlocked}，" +
-                     $"本来就解锁 {rep.AlreadyUnlocked}）";
+                     $"本来就解锁 {rep.AlreadyUnlocked}）；" + rep.Notes.FirstOrDefault(n => n.StartsWith("RPFM："));
             FileLog.Write("导出完成：" + Status);
         }
         catch (OperationCanceledException) { }
