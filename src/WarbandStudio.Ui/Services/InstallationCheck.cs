@@ -4,7 +4,8 @@ using System.Text.Json;
 
 namespace WarbandStudio.Ui.Services;
 
-public sealed record InstallationManifest(int Format, string Version, Dictionary<string,string> Files);
+public sealed record InstallationManifest(int Format, string Version, Dictionary<string,string> Files,
+    Dictionary<string,string>? Components = null);
 
 /// <summary>发行文件一致性检查；清单只管理程序文件，不触碰用户数据。</summary>
 public static class InstallationCheck
@@ -62,7 +63,7 @@ public static class InstallationCheck
         || name.StartsWith("Web/",StringComparison.OrdinalIgnoreCase) && !name[4..].Contains('/') &&
             new[]{".html",".js",".css"}.Contains(Path.GetExtension(name),StringComparer.OrdinalIgnoreCase);
 
-    private static string SafePath(string root, string relative)
+    internal static string SafePath(string root, string relative)
     {
         var boundary = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
         var path = Path.GetFullPath(Path.Combine(boundary,relative));

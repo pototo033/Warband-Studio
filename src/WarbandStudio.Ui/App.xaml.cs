@@ -20,6 +20,11 @@ public partial class App : Application
 #endif
             );
             FileLog.Write("启动文件校验：通过");
+            var settings=AppSettings.Load();
+            InstallationAudit.Run(AppContext.BaseDirectory,$"{version.Major}.{version.Minor}.{version.Build}",
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"WarbandStudio","installation-audit"),
+                new Dictionary<string,string>{["RPFM"]=WarbandStudio.Rpfm.RpfmCli.LocateCli()??"",["schema"]=WarbandStudio.Rpfm.RpfmCli.LocateSchema()??"",
+                    ["旧版全局命名前缀（仅记录）"]=settings.GroupKeyPrefix,["最近 Pack（仅记录）"]=settings.LastPack,["最近工程（仅记录）"]=string.Join(";",settings.RecentProjects)});
         }
         catch (Exception ex)
         {

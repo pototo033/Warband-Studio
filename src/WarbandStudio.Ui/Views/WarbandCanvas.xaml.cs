@@ -50,7 +50,9 @@ public partial class WarbandCanvas : UserControl
         if (_ready) return;
         try
         {
-            await View.EnsureCoreWebView2Async();
+            var environment=await CoreWebView2Environment.CreateAsync(userDataFolder:Services.DerivedCache.Root("webview"));
+            Services.FileLog.Write("画布缓存环境："+environment.UserDataFolder);
+            await View.EnsureCoreWebView2Async(environment);
             // 卡图站点 != 素材目录：解析出来的图（包内 / 游戏 / 随附素材）都会抽到缓存目录，
             // 页面统一用 http://icons.local/<兵>.png 取（以前映射到素材目录，游戏里抽出来的图全是 404）
             var iconsDir = IconCacheDir();
@@ -58,8 +60,7 @@ public partial class WarbandCanvas : UserControl
                 "icons.local", iconsDir, CoreWebView2HostResourceAccessKind.Allow);
             Services.FileLog.Write("画布：卡图站点 icons.local → " + iconsDir);
             // 皮肤素材（页签背景图 / UI 区的图）——旧工坊那套背景 UI 用
-            var skinDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "skincache");
+            var skinDir = Services.DerivedCache.Root("skincache");
             Directory.CreateDirectory(skinDir);
             View.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "skins.local", skinDir, CoreWebView2HostResourceAccessKind.Allow);
@@ -119,8 +120,7 @@ public partial class WarbandCanvas : UserControl
     /// <summary>卡图缓存目录（解析出来的兵牌都抽到这里；页面用 icons.local 取）。</summary>
     private static string IconCacheDir()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "iconcache");
+        var dir = Services.DerivedCache.Root("iconcache");
         Directory.CreateDirectory(dir);
         return dir;
     }

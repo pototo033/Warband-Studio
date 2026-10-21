@@ -17,7 +17,7 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
     /// packTag 传包文件名（不含扩展名），为空则用公共目录。
     /// </summary>
     public string CacheDir { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "skincache",
+        DerivedCache.Root("skincache"),
         string.IsNullOrWhiteSpace(packTag) ? "common" : packTag!);
 
     /// <summary>站点里的子目录名（skins.local 映射到 skincache 根，各包在子目录里 —— url 必须带上它）。</summary>

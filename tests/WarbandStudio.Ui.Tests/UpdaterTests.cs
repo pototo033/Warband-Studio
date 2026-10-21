@@ -43,7 +43,7 @@ public sealed class UpdaterTests
         Assert.Throws<InvalidDataException>(() => UpdatePackage.ParseRelease(metadata.Replace("_app.zip", "_full.zip"), "owner/repo"));
     }
 
-    private static byte[] Zip(string? extra = null, bool omitSchema = false)
+    private static byte[] Zip(string? extra = null, bool omitSchema = false, Dictionary<string,string>? components = null)
     {
         using var buffer = new MemoryStream();
         using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, true))
@@ -52,7 +52,7 @@ public sealed class UpdaterTests
             { using var writer = new StreamWriter(zip.CreateEntry(name).Open()); writer.Write("new:" + name); }
             var hashes=Required.Where(n=>!omitSchema || n!="schemas/schema_wh3.ron").ToDictionary(n=>n,n=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("new:"+n))));
             using var manifestWriter=new StreamWriter(zip.CreateEntry(InstallationCheck.ManifestName).Open());
-            manifestWriter.Write(System.Text.Json.JsonSerializer.Serialize(new InstallationManifest(1,"1.8",hashes)));
+            manifestWriter.Write(System.Text.Json.JsonSerializer.Serialize(new InstallationManifest(1,"1.8",hashes,components)));
         }
         return buffer.ToArray();
     }
@@ -60,6 +60,19 @@ public sealed class UpdaterTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) });
+    }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetainedComponentsAreCheckedBeforeExitingAndNeverOverwrittenByAppPackage(bool correct)
+    {
+        var exe=Path.Combine(_root,"install","WarbandStudio.exe");File.WriteAllText(exe,"old");
+        var directory=Path.Combine(_root,"install","rpfm");Directory.CreateDirectory(directory);
+        var cli=Path.Combine(directory,"rpfm_cli.exe");File.WriteAllText(cli,correct ? "expected":"old");
+        var zip=Zip(components:new(){["rpfm/rpfm_cli.exe"]=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("expected")))});
+        if(correct) Assert.NotNull(await Prepare(zip));
+        else Assert.Contains("完整包",(await Assert.ThrowsAsync<InvalidDataException>(()=>Prepare(zip))).Message);
+        Assert.Equal("old",File.ReadAllText(exe));Assert.Equal(correct ? "expected":"old",File.ReadAllText(cli));
     }
     private async Task<UpdatePlan> Prepare(byte[] zip, string? digest = null, long? size = null, CancellationToken ct = default)
     {

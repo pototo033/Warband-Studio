@@ -14,8 +14,7 @@ namespace WarbandStudio.Ui.Services;
 /// </summary>
 public sealed partial class IconResolver(AppSettings settings, Func<Schema> getSchema, Action<string>? log)
 {
-    public string CacheDir { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "iconcache");
+    public string CacheDir { get; } = DerivedCache.Root("iconcache");
 
     public string? AssetIconsDir { get; } = new[]
     {

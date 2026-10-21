@@ -787,7 +787,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             if (!Directory.Exists(s)) continue;
             var d = Path.Combine(UiLibraryDir, kind);
             Directory.CreateDirectory(d);
-            foreach (var f in Directory.GetFiles(s, "*.png"))
+            foreach (var f in InstallationAudit.PublishedBundledFiles(s, "*.png"))
             {
                 var name = Path.GetFileName(f);
                 if (removed.Contains(name)) continue;              // 用户删过的 → 不铺回来
@@ -1815,7 +1815,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         var ws = steam is null ? null : Path.Combine(steam, "workshop", "content", "1142710", "2853239091");
         // ① 内置的 WUU 内容优先（随工具发布，最稳）
         var bundled = Path.Combine(AppContext.BaseDirectory, "bundled", "wuu");
-        if (Directory.Exists(bundled)) packs.AddRange(Directory.GetFiles(bundled, "*.pack"));
+        if (Directory.Exists(bundled)) packs.AddRange(InstallationAudit.PublishedBundledFiles(bundled, "*.pack"));
         // ② 其次 workshop 里的 WUU
         if (ws is not null && Directory.Exists(ws)) packs.AddRange(Directory.GetFiles(ws, "*.pack"));
         if (packs.Count == 0) { Log?.Invoke("WUU 模板：找不到素材（bundled/wuu 里没有 .pack）"); return null; }
@@ -1825,7 +1825,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         // **WUF 的那份 twui** 上 —— 否则改动落在游戏里根本不会生效的那份文件上。
         var uiSources = new List<string>();
         if (Directory.Exists(bundled))
-            uiSources.AddRange(Directory.GetFiles(bundled, "*warband_twui*.pack"));
+            uiSources.AddRange(InstallationAudit.PublishedBundledFiles(bundled, "*warband_twui*.pack"));
         var wsRoot = steam is null ? null : Path.Combine(steam, "workshop", "content", "1142710");
         if (wsRoot is not null && Directory.Exists(wsRoot))
             foreach (var d in Directory.GetDirectories(wsRoot))
@@ -1987,6 +1987,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             var schema = RpfmCli.LocateSchema()
                          ?? throw new FileNotFoundException("找不到 schema_wh3.ron。");
             _cli = new RpfmCli(exe, schema);
+            _cli.DiagnosticCacheDirectory = DerivedCache.Root("diagnostics");
             _cli.Log += line => Log?.Invoke(line);
             if (!string.IsNullOrWhiteSpace(settings.GameDir)) _cli.GamePath = settings.GameDir;
             Log?.Invoke("rpfm_cli 就绪：" + exe);

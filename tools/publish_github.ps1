@@ -67,7 +67,9 @@ if ([version]$Release -ge [version]'1.7.5') {
     if (!(Test-Path -LiteralPath $manifestPath)) { throw '发行文件校验清单缺失，请重新构建。' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.Format -ne 1 -or $manifest.Version -ne $Release) { throw '发行文件清单版本不匹配。' }
-    foreach ($file in $manifest.Files.PSObject.Properties) {
+    $manifestFiles = @($manifest.Files.PSObject.Properties)
+    if ($manifest.Components) { $manifestFiles += @($manifest.Components.PSObject.Properties) }
+    foreach ($file in $manifestFiles) {
         $targetFile = [IO.Path]::GetFullPath((Join-Path $Src $file.Name))
         if (!$targetFile.StartsWith([IO.Path]::GetFullPath($Src).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw '发行文件路径越界。' }
         if ((Get-FileHash -LiteralPath $targetFile -Algorithm SHA256).Hash -ne $file.Value) { throw "发行文件与清单不一致：$($file.Name)" }

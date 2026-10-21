@@ -107,7 +107,12 @@ public static class UpdatePackage
             }
         if (RequiredFiles.Any(f => !seen.Contains(f))) throw new InvalidDataException("程序更新包缺少必要文件，不能安装。");
         if (System.Version.Parse(release.Version) >= new System.Version(1,7,5))
+        {
             InstallationCheck.Verify(payload,release.Version);
+            var manifest=JsonSerializer.Deserialize<InstallationManifest>(await File.ReadAllTextAsync(Under(payload,InstallationCheck.ManifestName),ct))!;
+            var problems=InstallationAudit.ComponentProblems(install,manifest);
+            if(problems.Length>0) throw new InvalidDataException("更新前全检发现程序包不会覆盖的组件需要修复，请使用本版本完整包覆盖安装：\n"+string.Join("\n",problems.Take(12)));
+        }
         // 权限问题在退出前发现，不能关掉程序才发现目录无法写入。
         var probe = Under(install, ".studio-update-" + Guid.NewGuid().ToString("N"));
         using (File.Create(probe)) { } File.Delete(probe);
