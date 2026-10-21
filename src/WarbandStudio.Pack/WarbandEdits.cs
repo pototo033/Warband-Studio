@@ -212,6 +212,7 @@ public sealed class WarbandEdits
             AddGroup.RemoveAll(g => Same(g, group));
             if (!RemoveGroup.Any(g => Same(g, group))) RemoveGroup.Add(group);
             InfoEdits.Remove(group);
+            AddJunction.RemoveAll(j => Same(j.Group, group));
         }
     }
 

@@ -453,13 +453,13 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     public string MakeGroupKey(string? category, IEnumerable<string> units, string fallback) =>
         GroupNaming.NewKey(_pack?.ProjectKey ?? ProjectKey, category, units, GroupKeyTaken) ?? fallback;
 
-    /// <summary>这个组名现在是不是已经被占用（包里已有的组 + 本会话新建的组；本轮删掉的可以复用）。
-    /// 组名是表主键，重了会把两个组的数据混在一起 —— 起名时靠它去重。</summary>
+    /// <summary>这个组名是否占用（包含包内、本会话新建及待删除的组）。
+    /// 待删除的 key 也保留到保存完成，避免新建时取消删除标记而恢复旧成员。</summary>
     private bool GroupKeyTaken(string key)
     {
         if (string.IsNullOrWhiteSpace(key)) return false;
         if (Edits.AddGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return true;
-        if (Edits.RemoveGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return false;
+        if (Edits.RemoveGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return true;
         var pack = _pack?.Archive;
         if (pack is null) return false;
         try

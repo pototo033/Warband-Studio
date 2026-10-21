@@ -106,6 +106,8 @@ public static class UpdatePackage
                 files.Add(new(name, Convert.ToHexString(await SHA256.HashDataAsync(verify, ct))));
             }
         if (RequiredFiles.Any(f => !seen.Contains(f))) throw new InvalidDataException("程序更新包缺少必要文件，不能安装。");
+        if (System.Version.Parse(release.Version) >= new System.Version(1,7,5))
+            InstallationCheck.Verify(payload,release.Version);
         // 权限问题在退出前发现，不能关掉程序才发现目录无法写入。
         var probe = Under(install, ".studio-update-" + Guid.NewGuid().ToString("N"));
         using (File.Create(probe)) { } File.Delete(probe);

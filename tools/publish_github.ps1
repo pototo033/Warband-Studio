@@ -62,6 +62,18 @@ Write-Host "    完整包：$fullZip"
 Write-Host "    程序包：$appZip（exe + WarbandStudio.*.dll + Web/ + schemas/ + update_repo.txt）"
 if ($DryRun) { Write-Host "    [dry] 不打包、不上传" ; return }
 
+if ([version]$Release -ge [version]'1.7.5') {
+    $manifestPath = Join-Path $Src 'schemas/installation-manifest.json'
+    if (!(Test-Path -LiteralPath $manifestPath)) { throw '发行文件校验清单缺失，请重新构建。' }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($manifest.Format -ne 1 -or $manifest.Version -ne $Release) { throw '发行文件清单版本不匹配。' }
+    foreach ($file in $manifest.Files.PSObject.Properties) {
+        $targetFile = [IO.Path]::GetFullPath((Join-Path $Src $file.Name))
+        if (!$targetFile.StartsWith([IO.Path]::GetFullPath($Src).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw '发行文件路径越界。' }
+        if ((Get-FileHash -LiteralPath $targetFile -Algorithm SHA256).Hash -ne $file.Value) { throw "发行文件与清单不一致：$($file.Name)" }
+    }
+}
+
 # ② 完整包
 if (Test-Path $fullZip) { Remove-Item $fullZip -Force }
 # 首次启动生成的 packs/ 不是发布物（程序首次运行时自己会重建）——先挪走再打包，

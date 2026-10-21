@@ -50,6 +50,9 @@ public sealed class UpdaterTests
         {
             foreach (var name in Required.Where(n => !omitSchema || n != "schemas/schema_wh3.ron").Concat(extra is null ? [] : [extra]))
             { using var writer = new StreamWriter(zip.CreateEntry(name).Open()); writer.Write("new:" + name); }
+            var hashes=Required.Where(n=>!omitSchema || n!="schemas/schema_wh3.ron").ToDictionary(n=>n,n=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("new:"+n))));
+            using var manifestWriter=new StreamWriter(zip.CreateEntry(InstallationCheck.ManifestName).Open());
+            manifestWriter.Write(System.Text.Json.JsonSerializer.Serialize(new InstallationManifest(1,"1.8",hashes)));
         }
         return buffer.ToArray();
     }
@@ -71,7 +74,7 @@ public sealed class UpdaterTests
         var packs = Path.Combine(_root, "install", "packs"); Directory.CreateDirectory(packs); File.WriteAllText(Path.Combine(packs, "user.pack"), "user-data");
         var plan = await Prepare(Zip());
         Assert.Equal("old", File.ReadAllText(exe)); Assert.Equal("user-data", File.ReadAllText(Path.Combine(packs, "user.pack")));
-        Assert.Equal(Required.Length, plan.Files.Length);
+        Assert.Equal(Required.Length + 1, plan.Files.Length);
         Assert.All(plan.Files, f => Assert.Equal(f.Sha256, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(UpdatePackage.Under(plan.PayloadDirectory, f.Path))))));
     }
     [Theory]

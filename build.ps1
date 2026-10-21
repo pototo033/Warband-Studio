@@ -78,6 +78,7 @@ try {
         $repo = ((Get-Content $repoFile -Raw) -split "`n" | Where-Object { $_ -and -not $_.StartsWith("#") } | Select-Object -First 1)
         if ($repo) { Set-Content -Path (Join-Path $Target "update_repo.txt") -Value $repo.Trim() -Encoding ascii }
     }
+    & (Join-Path $Root 'tools/write_installation_manifest.ps1') -Directory $Target -Version $Version
     Write-Host "[✓] 发布完成：$Target" -ForegroundColor Green
     }
 
