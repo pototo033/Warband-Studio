@@ -42,6 +42,7 @@ public static class PackWriter
         }
         foreach (var kv in replacements)
         {
+            if (dropped is not null && dropped.Contains(kv.Key)) continue;
             if (source.Find(kv.Key) is null)
                 items.Add(new Item(kv.Key, kv.Value, compressed ?? false, 0));
         }

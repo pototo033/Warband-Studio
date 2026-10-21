@@ -255,30 +255,14 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     }
 
     /// <summary>
-    /// 加兵时按当前选中的**种族/派系**自动填军事组授权
+    /// 显式“添加归属”：按当前种族/派系补缺失授权；自动加兵应调用 EnsureUnitPermissions 保留已有范围。
     /// （`units_to_groupings_military_permissions_tables`）：
     ///   传 faction → 写派系专属表 allowed=true；只传 race → 填该种族的**所有**军事组。
     /// </summary>
     public int GrantUnit(string unit, string? race, string? faction)
     {
-        if (faction?.StartsWith("generic:", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            race = faction[8..];
-            faction = null;
-        }
-        if (!string.IsNullOrWhiteSpace(faction))
-        {
-            Edits.SetExclusive(unit, faction, true);
-            InvalidateCanvas();
-            Log?.Invoke($"派系专属授权：{unit} → {faction}（allowed=true）");
-            return 1;
-        }
-        var groups = SelectedMilitaryGroups(race, null);
-        foreach (var g in groups.Distinct(StringComparer.OrdinalIgnoreCase))
-            Edits.SetUnitGroup(unit, g, true);
-        if (groups.Count > 0) InvalidateCanvas();
-        Log?.Invoke($"种族军事组授权：{unit} → {(groups.Count == 0 ? "（没选种族，未填）" : string.Join(" + ", groups))}");
-        return groups.Count;
+        NormalizeGrantScope(ref race,ref faction);
+        return GrantMissingPermissions(unit,race,faction,GrantSources());
     }
 
     /// <summary>
@@ -340,7 +324,6 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             Edits.SetGroup(key, true);
             Edits.SetJunction(units[i], group, false);
             Edits.SetJunction(units[i], key, true);
-            GrantUnit(units[i], race, faction);
             Edits.InfoEdits[key] = (x + 46 * i, y + 105, category);
             made++;
         }
@@ -430,7 +413,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     }
 
     /// <summary>
-    /// 多选建组：把选中的兵**移到**一个新组（junction 里删旧行、加新行；新组建组 + 写坐标 + 军事组授权）。
+    /// 多选建组：把选中的兵移到新组并写坐标，保留原有军事组/派系许可，不扩展授权。
     /// </summary>
     public void MoveUnitsToNewGroup(string group, List<(string Group, string Unit)> units,
                                     int x, int y, string? category, string? race, string? faction)
@@ -440,7 +423,6 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         {
             Edits.SetJunction(unit, oldGroup, false);
             Edits.SetJunction(unit, group, true);
-            GrantUnit(unit, race, faction);
         }
         Edits.InfoEdits[group] = (x, y, category);
         InvalidateCanvas();

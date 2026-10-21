@@ -29,7 +29,8 @@ public static class WarbandAmender
     {
         using var editedView = e.TableReplacements.Count > 0 ? PackArchive.OpenView(pack.FilePath, e.TableReplacements, e.RemoveFiles) : null;
         if (editedView is not null) pack = editedView;
-        foreach (var (path, bytes) in e.TableReplacements) repl.TryAdd(path, bytes);
+        foreach (var (path, bytes) in e.TableReplacements)
+            if (!e.RemoveFiles.Contains(path,StringComparer.OrdinalIgnoreCase)) repl.TryAdd(path, bytes);
         var changed = 0;
         var createdTabDonors = new List<(string Key, string Donor)>();
         const string Junc = "unit_to_unit_group_junctions_tables";
@@ -630,12 +631,30 @@ public static class WarbandAmender
 
         // ── 6b) 兵 → 军事组 授权（加兵时按种族/派系自动填）──
         if (e.AddUnitGroup.Count > 0)
+        {
+            const string table="units_to_groupings_military_permissions_tables";
+            var existingPairs=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Remember(DbTable? t)
+            {
+                if (t is null) return;
+                for (var i=0;i<t.Rows.Count;i++) existingPairs.Add(Cell(t,i,"unit")+"\u0001"+Cell(t,i,"military_group"));
+            }
+            Remember(vanilla is null ? null : TableFiles.ReadComposite(vanilla,table,["unit","military_group"],schema));
+            foreach (var path in TablePaths(pack,table,repl))
+            {
+                if (e.RemoveFiles.Contains(path,StringComparer.OrdinalIgnoreCase)) continue;
+                var bytes=CurrentBytes(pack,repl,path);
+                if (bytes is not null) Remember(DbTable.Decode(bytes,table,schema));
+            }
+            var missing=e.AddUnitGroup.Where(x=>existingPairs.Add(x.Unit+"\u0001"+x.MilitaryGroup)).ToArray();
+            if (missing.Length>0)
             changed += AddRows(pack, vanilla, "units_to_groupings_military_permissions_tables", schema, repl, notes,
-                e.AddUnitGroup.Select(x => new Dictionary<string, object>
+                missing.Select(x => new Dictionary<string, object>
                 {
                     ["unit"] = x.Unit,
                     ["military_group"] = x.MilitaryGroup,
                 }), keyCols: ["unit", "military_group"]);
+        }
 
         // ── 6b-2) 移出军事组（删 units_to_groupings_military_permissions 的行）──
         if (e.RemoveUnitGroup.Count > 0)

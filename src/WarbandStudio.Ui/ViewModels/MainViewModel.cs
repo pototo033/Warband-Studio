@@ -748,7 +748,7 @@ public sealed partial class MainViewModel : ObservableObject
                     // 保留单位在其他组中的关系，只新增目标组关系。
                     _backend.AddUnitToGroup(g, S("unit"), I("x"), I("y"), isNew, cat.Length > 0 ? cat : null);
                     // 军事组授权：选了派系只填它那一个组；只选种族就填该种族所有组
-                    _backend.GrantUnit(S("unit"), _selectedFaction?.Race, _selectedFaction is { IsFaction: true } ? _selectedFaction.Key : null);
+                    _backend.EnsureUnitPermissions(S("unit"), _selectedFaction?.Race, _selectedFaction is { IsFaction: true } ? _selectedFaction.Key : null);
                     RefreshLibrarySoon();          // 授权变化后同步刷新兵种库
                     break;
                 }
