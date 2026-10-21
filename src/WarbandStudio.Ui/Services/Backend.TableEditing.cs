@@ -13,6 +13,8 @@ public sealed partial class Backend
         var snapshot = Edits.Clone();
         snapshot.ProjectKey = session.ProjectKey ?? ProjectKey;
         var bytes = new Dictionary<string, byte[]>(snapshot.TableReplacements, StringComparer.OrdinalIgnoreCase);
+        // 浏览原包不运行迁移、自愈或落表；只有已有待保存修改才需要投影。
+        if (snapshot.IsEmpty) return (bytes, snapshot);
         using var vanilla = VanillaDbPackPath is { } path && File.Exists(path) ? PackArchive.Open(path) : null;
         WarbandAmender.Apply(session.Archive!, vanilla, snapshot, GetSchema(), bytes, []);
         return (bytes, snapshot);
@@ -25,6 +27,7 @@ public sealed partial class Backend
         next.OpenedTabs.AddRange(previous.OpenedTabs);
         next.TabRaceScopes.AddRange(previous.TabRaceScopes);
         next.TabScopes.AddRange(previous.TabScopes);
+        foreach(var (tab,name) in previous.TabFileNames) next.TabFileNames[tab]=name;
         _editsByPack[Key] = next;
         InvalidateCanvas();
         RestagePendingArt();

@@ -91,6 +91,7 @@ public sealed class WarbandEdits
 
     /// <summary>页签重命名：(旧 key, 新 key)。改齐 categories 行 / infos.category / twui / 两张图。</summary>
     public List<(string Old, string New)> TabRenames { get; } = [];
+    public Dictionary<string,string> TabFileNames { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>「打开页签」：把别的种族的页签也加进当前画布（这些页签里的兵**不自动写军事组授权**）。</summary>
     public List<string> OpenedTabs { get; } = [];
@@ -243,7 +244,7 @@ public sealed class WarbandEdits
     }
 
     public int Count =>
-        TableReplacements.Count + AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
+        TabFileNames.Count + TableReplacements.Count + AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
         AddRoute.Count + RemoveRoute.Count + AddLink.Count + RemoveLink.Count + AddCost.Count + NewTabs.Count + AddUnitGroup.Count + FileReplacements.Count + RemoveUnitGroup.Count + TabScopes.Count + OpenedTabs.Count + TabRenames.Count + UnlockXp.Count + TabRaceScopes.Count + RemoveFiles.Count +
         PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count + RemovePoolLinks.Count + TabAllowedFactions.Count;
 
@@ -273,6 +274,7 @@ public sealed class WarbandEdits
         P("打开页签", OpenedTabs.Count);
         P("页签归属", TabScopes.Count);
         P("重命名页签", TabRenames.Count);
+        P("落表文件名",TabFileNames.Count);
         P("解锁经验", UnlockXp.Count);
         P("资源池", PoolFactors.Count);
         P("成本扣资源", PoolCosts.Count);
@@ -317,6 +319,7 @@ public sealed class WarbandEdits
         c.TabScopes.AddRange(TabScopes);
         c.OpenedTabs.AddRange(OpenedTabs);
         c.TabRenames.AddRange(TabRenames);
+        foreach(var (tab,name) in TabFileNames) c.TabFileNames[tab]=name;
         c.UnlockXp.AddRange(UnlockXp);
         c.TabRaceScopes.AddRange(TabRaceScopes);
         foreach (var (key, factions) in TabAllowedFactions) c.TabAllowedFactions[key] = factions.ToArray();

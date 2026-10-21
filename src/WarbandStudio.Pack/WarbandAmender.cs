@@ -27,13 +27,20 @@ public static class WarbandAmender
     public static int Apply(PackArchive pack, PackArchive? vanilla, WarbandEdits e, Schema schema,
                             Dictionary<string, byte[]> repl, List<string> notes)
     {
+        var previousBuffers=e.TableReplacements.Keys.ToArray();
+        TabFileBindingOperations.NormalizeRecovered(pack,e,schema,notes);
+        foreach(var path in previousBuffers)
+            if(!e.TableReplacements.ContainsKey(path)) repl.Remove(path);
         using var editedView = e.TableReplacements.Count > 0 ? PackArchive.OpenView(pack.FilePath, e.TableReplacements, e.RemoveFiles) : null;
         if (editedView is not null) pack = editedView;
         foreach (var (path, bytes) in e.TableReplacements)
-            if (!e.RemoveFiles.Contains(path,StringComparer.OrdinalIgnoreCase)) repl.TryAdd(path, bytes);
+            if (!e.RemoveFiles.Contains(path,StringComparer.OrdinalIgnoreCase)) repl[path] = bytes;
         var changed = 0;
         var createdTabDonors = new List<(string Key, string Donor)>();
         const string Junc = "unit_to_unit_group_junctions_tables";
+        TabFileBindingOperations.ApplyNames(pack,e,schema,repl,notes);
+        using var renamedView=e.TabFileNames.Count>0 ? PackArchive.OpenView(pack.FilePath,repl,e.RemoveFiles):null;
+        if(renamedView is not null) pack=renamedView;
 
         // ── -1) 旧名覆盖表搬家（见 MigrateLegacy 的说明）──
         MigrateLegacy(pack, repl, e, notes);
@@ -1168,6 +1175,11 @@ public static class WarbandAmender
         }
         else if (e.TabAllowedFactions.Count > 0) throw new InvalidDataException("包中缺少战帮 TWUI，无法保存页签显示派系。");
 
+        if(e.TabFileNames.Count>0 || e.TabRenames.Count>0 && pack.Find(TabFileBindings.MetadataPath) is not null)
+        {
+            repl[TabFileBindings.MetadataPath]=TabFileBindings.Encode(TabFileBindings.Effective(pack,e));
+            changed++;
+        }
         return changed;
     }
 

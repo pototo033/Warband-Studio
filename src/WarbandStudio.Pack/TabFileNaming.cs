@@ -87,7 +87,7 @@ public static class TabFileNaming
 ///      比如 `Yukino_VMP1_death`；VMP1 这种还没写坐标行的组靠这条认出来）。
 /// 都认不出来 → null（调用方落"其他"文件）。
 /// </summary>
-public sealed class TabResolver
+public sealed partial class TabResolver
 {
     private readonly PackArchive _pack;
     private readonly WarbandEdits _e;
@@ -123,11 +123,11 @@ public sealed class TabResolver
 
     /// <summary>组这一行的目标文件（含"忽略大小写同名即沿用原件拼写"的归并）。</summary>
     public string PathFor(string table, string? group) =>
-        Canonical(table, TabFileNaming.PathOf(table, _e.ProjectKey, TabOf(group)));
+        PathForTab(table, TabOf(group));
 
     /// <summary>按页签取目标文件（不知道组、只认页签时用，比如坐标行分组）。</summary>
     public string PathForTab(string table, string? tab) =>
-        Canonical(table, TabFileNaming.PathOf(table, _e.ProjectKey, tab));
+        ResolvePath(table, tab);
 
     /// <summary>表内已存在的同名（忽略大小写）条目 → 用它的原始拼写；没有就用候选名。</summary>
     public string Canonical(string table, string want)
@@ -139,12 +139,13 @@ public sealed class TabResolver
 
     private IEnumerable<string> PathsOf(string table)
     {
-        foreach (var f in TableFiles.EntriesFor(_pack, table)) yield return f.Path;
+        foreach (var f in TableFiles.EntriesFor(_pack, table))
+            if(!_e.RemoveFiles.Contains(f.Path,StringComparer.OrdinalIgnoreCase)) yield return f.Path;
         if (_repl is not null)
         {
             var prefix = $"db/{table}/";
             foreach (var p in _repl.Keys)
-                if (p.Replace('\\', '/').StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) yield return p;
+                if (p.Replace('\\', '/').StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !_e.RemoveFiles.Contains(p,StringComparer.OrdinalIgnoreCase)) yield return p;
         }
     }
 

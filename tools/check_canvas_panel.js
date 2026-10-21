@@ -1290,6 +1290,28 @@ vm.runInContext("ctxGroups = ['a']; prompt = () => null;", ctx);
 byId.ctxRename.onclick();
 chk('取消重命名不产生编辑', msgs().length === 0);
 
+console.log('页签落表文件名：创建、识别、手动修改与取消');
+clear();
+vm.runInContext("openNewPop('tab');",ctx);
+chk('创建默认建议 EMP_n',byId.npFileName.value === 'EMP_n');
+byId.npTabKey.value='SKV'; byId.npTabKey.oninput();
+chk('填写页签同步生成建议',byId.npFileName.value === 'SKV_n');
+byId.npFileName.value='author_skv';byId.npFileName.oninput();
+byId.npTabKey.value='SKV_II';byId.npTabKey.oninput();
+chk('手动文件名不被自动建议覆盖',byId.npFileName.value === 'author_skv');
+byId.npOk.onclick();
+chk('创建发送用户文件名',last().type === 'newTab' && last().fileName === 'author_skv');
+clear();
+vm.runInContext("DATA.tabFileNames={EMP2:'Yukino_Upgrade_Emp_II'}; DATA.tabFileCandidates={EMP2:['Yukino_Upgrade_Emp_II']}; npRenameOld='EMP2'; openNewPop('rename');",ctx);
+chk('重命名预填识别的作者文件',byId.npFileName.value === 'Yukino_Upgrade_Emp_II');
+byId.npClose.onclick();chk('取消不产生编辑',msgs().length === 0);
+vm.runInContext("openNewPop('rename');",ctx);
+byId.npTabKey.value='EMP_III';byId.npFileName.value='EMP_custom';byId.npOk.onclick();
+chk('重命名发送旧新页签和文件名',last().type==='renameTab'&&last().old==='EMP2'&&last().new==='EMP_III'&&last().fileName==='EMP_custom');
+clear();
+vm.runInContext("DATA.tabFileNames={}; DATA.tabFileCandidates={EMP2:['author_a','author_b']}; openNewPop('rename');",ctx);
+chk('歧义文件要求手动选择',byId.npFileName.value==='');
+byId.npOk.onclick();chk('未选文件不能提交',msgs().length===0);
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }
 console.log('【结果】✓ 全部 ' + good + ' 项通过');

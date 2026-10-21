@@ -30,9 +30,22 @@ public sealed partial class Backend
             var pack = OpenPackAsync(path, displayName: saved.DisplayName + (recoveredCopy ? "（更新恢复副本）" : ""), asUnitPack: saved.IsUnitPack).GetAwaiter().GetResult();
             pack.ProjectDirectory = recoveredCopy ? null : saved.ProjectDirectory;
             pack.ProjectKey = saved.ProjectKey;
-            _editsByPack[path] = saved.Edits.Clone();
-            _undoByPack[path] = saved.Undo.Select(e=>e.Clone()).ToList();
-            _redoByPack[path] = saved.Redo.Select(e=>e.Clone()).ToList();
+            // 先在副本中迁移缓存，成功后整体恢复；绝不因启动恢复写回原包。
+            WarbandEdits Normalize(WarbandEdits source)
+            {
+                var edits = source.Clone();
+                var notes = new List<string>();
+                TabFileBindingOperations.NormalizeRecovered(pack.Archive!, edits, GetSchema(), notes);
+                foreach (var note in notes) FileLog.Write(note);
+                return edits;
+            }
+            var restored = Normalize(saved.Edits);
+            var undo = saved.Undo.Select(Normalize).ToList();
+            var redo = saved.Redo.Select(Normalize).ToList();
+            _editsByPack[path] = restored;
+            _undoByPack[path] = undo;
+            _redoByPack[path] = redo;
+            FileLog.Write($"更新恢复：仅加载未保存修改，未写入原包；表缓存={restored.TableReplacements.Count}，撤销={undo.Count}，重做={redo.Count}");
             pack.SetPendingTables(_editsByPack[path].TableReplacements);
             RefreshSourceScope();
             if (!pack.IsUnitPack) RestagePendingArt();

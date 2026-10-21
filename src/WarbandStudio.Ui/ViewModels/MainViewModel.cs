@@ -860,7 +860,7 @@ public sealed partial class MainViewModel : ObservableObject
                     break;
                 }
                 case "renameTab":
-                    _backend.RenameTab(S("old"), S("new"));
+                    _backend.RenameTab(S("old"), S("new"), S("fileName").Length>0 ? S("fileName"):null);
                     break;
                 case "renameGroup":
                     _backend.RenameGroup(S("old"), S("new"));
@@ -928,7 +928,7 @@ public sealed partial class MainViewModel : ObservableObject
                     var tabKey = S("key");
                     var race0 = _selectedFaction?.Race;
                     var fac0 = _selectedFaction is { IsFaction: true } ? _selectedFaction.Key : null;
-                    _backend.NewTab(tabKey, S("donor"), S("bg").Length > 0 ? S("bg") : null, S("btn").Length > 0 ? S("btn") : null);
+                    _backend.NewTab(tabKey, S("donor"), S("bg").Length > 0 ? S("bg") : null, S("btn").Length > 0 ? S("btn") : null, S("fileName").Length>0 ? S("fileName"):null);
                     _backend.RememberTabScope(tabKey, race0, fac0);      // 记下归属：种族级/派系级
                     LoadUiAssets();                                      // 选中的素材已改名为 <前缀><页签key>.png
                     break;

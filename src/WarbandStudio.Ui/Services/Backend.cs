@@ -478,10 +478,14 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     }
 
     /// <summary>页签重命名（一次改齐 categories / infos / twui / 两张图）。</summary>
-    public void RenameTab(string oldKey, string newKey)
+    public void RenameTab(string oldKey, string newKey, string? fileName = null)
     {
         newKey = (newKey ?? "").Trim().ToUpperInvariant();
-        if (oldKey.Length == 0 || newKey.Length == 0 || oldKey.Equals(newKey, StringComparison.OrdinalIgnoreCase)) return;
+        if (string.IsNullOrWhiteSpace(oldKey) || newKey.Length == 0) throw new ArgumentException("页签 key 不能为空。");
+        if(fileName is not null) fileName=TabFileBindings.Validate(fileName);
+        if(Edits.TabFileNames.Remove(oldKey,out var previousFileName)) Edits.TabFileNames[newKey]=previousFileName;
+        if(fileName is not null) Edits.TabFileNames[newKey]=fileName;
+        if (oldKey.Length == 0 || newKey.Length == 0 || oldKey.Equals(newKey, StringComparison.OrdinalIgnoreCase)) { InvalidateCanvas(); return; }
         Edits.TabRenames.Add((oldKey, newKey));
         if (Edits.TabAllowedFactions.Remove(oldKey, out var allowedFactions)) Edits.TabAllowedFactions[newKey] = allowedFactions;
         for (var i = 0; i < Edits.TabScopes.Count; i++)
@@ -633,8 +637,9 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     }
 
     /// <summary>新建页签（整套克隆：hierarchy 节点 + holder_tab + button_toggle_tab + 背景面板/条目，见 WarbandNewTab）。</summary>
-    public void NewTab(string key, string donor, string? bgSource = null, string? btnSource = null)
+    public void NewTab(string key, string donor, string? bgSource = null, string? btnSource = null, string? fileName = null)
     {
+        if(fileName is not null) Edits.TabFileNames[key]=TabFileBindings.Validate(fileName);
         // 目标名按页签 key（twui 按这个名字找图）；素材库里的**文件名保持不动**（库是共享的，改名会互相覆盖）
         var bg = bgSource;
         var btn = btnSource;
@@ -924,6 +929,17 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             // v1.5.9：页签内容表（组/兵↔组/坐标/连线/路线）的新行按页签分文件 <项目key>_Upgrade_<页签>；
             // 红标和落表共用同一个解析器（TabResolver），两边口径不会飘
             var res = new WarbandStudio.Pack.TabResolver(pack, Edits, GetSchema());
+            if (Edits.TabFileNames.Count > 0)
+            {
+                set.Add(TabFileBindings.MetadataPath);
+                foreach (var tab in Edits.TabFileNames.Keys)
+                    foreach (var table in new[] { TabFileNaming.Groups, TabFileNaming.Junc, TabFileNaming.Infos, TabFileNaming.Links, TabFileNaming.Routes })
+                    {
+                        set.Add(res.PathForTab(table, tab));
+                        foreach (var entry in TableFiles.EntriesFor(pack, table))
+                            if (res.Owners(table, entry.Path).SetEquals([tab])) set.Add(entry.Path);
+                    }
+            }
             void Studio(string table, string file) => set.Add($"db/{table}/{file}");
             // **只标真的会被改到的那个文件**：删行是"改原文件"，所以逐个文件解码、看它里面有没有被删的行
             // （以前整张表全标红，"我只改了一部分却全红"就是这么来的）
@@ -2979,6 +2995,19 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         foreach (var (tabKey, _, _, _) in Edits.NewTabs) newTabs.Add(tabKey);
         jso["newTabs"] = newTabs;
         jso["projectKey"] = ProjectKey ?? "";   // 画布「新建分组」默认名要用（<项目 key>_<页签>）
+        var fileNames=new System.Text.Json.Nodes.JsonObject();
+        var fileChoices=new System.Text.Json.Nodes.JsonObject();
+        var fileResolver=new TabResolver(pack,Edits,schema);
+        var bindings=TabFileBindings.Effective(pack,Edits);
+        foreach(var tab in TabKeys().Concat(seenPages).Concat(Edits.NewTabs.Select(t=>t.Key)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var candidates=new[]{TabFileNaming.Infos,TabFileNaming.Groups,TabFileNaming.Junc,TabFileNaming.Links,TabFileNaming.Routes}
+                .SelectMany(t=>fileResolver.Candidates(t,tab)).Select(p=>p.Split('/')[^1]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            fileChoices[tab]=ToJsonArray(candidates);
+            var infoNames=fileResolver.Candidates(TabFileNaming.Infos,tab);
+            fileNames[tab]=bindings.GetValueOrDefault(tab)??(infoNames.Length==1 ? infoNames[0].Split('/')[^1] : candidates.Length==1 ? candidates[0] : "");
+        }
+        jso["tabFileNames"]=fileNames;jso["tabFileCandidates"]=fileChoices;
         foreach (var t in Edits.OpenedTabs) if (seenPages.Add(t)) pages.Add(t);   // 「打开页签」加进来的
         jso["openedTabs"] = ToJsonArray(Edits.OpenedTabs);
         // 页签右键「应用到其他种族」：手工归属（并进 pageRaces 一起给页面判断"这个页签归谁"）

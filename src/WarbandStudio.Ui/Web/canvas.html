@@ -256,6 +256,11 @@
   <div class="row" id="npTabRow">
     <label>页签 key</label><input id="npTabKey" style="width:120px" placeholder="例如 MOD2">
   </div>
+  <div class="row" id="npFileRow" style="flex-wrap:wrap">
+    <label>落表文件名</label><input id="npFileName" list="npFileChoices" style="width:260px" placeholder="例如 EMP_n 或 Yukino_Upgrade_Emp_III">
+    <datalist id="npFileChoices"></datalist>
+    <span style="font-size:11px;color:#9CA9B5">不含目录或扩展名，不能以数字结尾；独占文件同步改名，共享文件保留。</span>
+  </div>
   <div class="row" id="npArtRow" style="align-items:flex-start">
     <div style="display:flex;flex-direction:column;gap:4px">
       <label>背景图（当前包的图；一行 3 个）</label>
@@ -1731,6 +1736,11 @@ function paintMulti() {
 
 /* ───────────── 新建分组 / 新建页签 ───────────── */
 let npMode = 'group';
+let npRenameOld = '', npFileManual = false;
+document.getElementById('npFileName').oninput = () => { npFileManual = true; };
+document.getElementById('npTabKey').oninput = () => {
+  if (!npFileManual) document.getElementById('npFileName').value = (document.getElementById('npTabKey').value.trim().toUpperCase() || 'EMP') + '_n';
+};
 let npArt = { bg: '', btn: '' };   // 选择器里的选择：'' = 保持当前，'__donor__' = 跟母版一样，其余 = 素材 file
 let npTargetCat = null;      // 「换图…」从页签右键菜单进来时，要换的那个页签
 let npArtCat = null;         // 「换图」对话框本次的目标页签；**必须是全局** —— "应用换图"按钮在 openNewPop 外面绑定
@@ -1847,7 +1857,8 @@ function openNewPop(mode) {
   window.pickArt = pickArt;                  // 离线测试要能直接调它（DOM 桩点不了缩略图）
   window.buildArtPicker = buildArtPicker;
   document.getElementById('npGroupRow').style.display = mode === 'group' ? '' : 'none';
-  document.getElementById('npTabRow').style.display = mode === 'tab' ? '' : 'none';
+  document.getElementById('npTabRow').style.display = (mode === 'tab' || mode === 'rename') ? '' : 'none';
+  document.getElementById('npFileRow').style.display = (mode === 'tab' || mode === 'rename') ? '' : 'none';
   document.getElementById('npArtRow').style.display = mode === 'group' ? 'none' : '';
   document.getElementById('npTitle').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '换图（' + (npArtCat || '') + '）');
   document.getElementById('npOk').textContent = mode === 'group' ? '新建分组' : (mode === 'tab' ? '新建页签' : '应用换图');
@@ -1855,6 +1866,22 @@ function openNewPop(mode) {
     document.getElementById('npGroupKey').value = DATA.projectKey
       ? DATA.projectKey + (activePage ? '_' + activePage : '')      // 新命名：<项目 key>_<页签>（空组没有兵种段）
       : 'studio_group_' + Date.now().toString().slice(-6);
+  npFileManual = false;
+  document.getElementById('npFileChoices').innerHTML = '';
+  if (mode === 'tab') {
+    document.getElementById('npTabKey').value = '';
+    document.getElementById('npFileName').value = 'EMP_n';
+  }
+  if (mode === 'rename') {
+    document.getElementById('npTabKey').value = npRenameOld;
+    const choices = (DATA.tabFileCandidates || {})[npRenameOld] || [];
+    document.getElementById('npFileName').value = (DATA.tabFileNames || {})[npRenameOld] || (choices.length ? '' : npRenameOld + '_n');
+    npFileManual = true;
+    for (const name of choices) { const option = document.createElement('option'); option.value = name; document.getElementById('npFileChoices').appendChild(option); }
+    document.getElementById('npArtRow').style.display = 'none';
+    document.getElementById('npTitle').textContent = '重命名页签与落表文件';
+    document.getElementById('npOk').textContent = '应用';
+  }
   showPop('newPop');
   hidePop('cardPop'); hidePop('routePop');
 }
@@ -1893,6 +1920,10 @@ document.getElementById('opOk').onclick = () => {
 document.getElementById('bNewTab').onclick = () => openNewPop('tab');
 document.getElementById('npClose').onclick = () => hidePop('newPop');
 document.getElementById('npOk').onclick = () => {
+  const fileName = (document.getElementById('npFileName').value || '').trim();
+  if ((npMode === 'tab' || npMode === 'rename') && (!/^[\p{L}\p{N}_-]+$/u.test(fileName) || /\d$/.test(fileName))) {
+    alert('请填写落表文件名，只允许字母、数字、下划线和短横线，且不能以数字结尾。多个已有候选时请从列表选择或手动填写。'); return;
+  }
   if (npMode === 'group') {
     const key = (document.getElementById('npGroupKey').value || '').trim();
     if (!key) return;
@@ -1902,13 +1933,17 @@ document.getElementById('npOk').onclick = () => {
   } else if (npMode === 'tab') {
     const key = (document.getElementById('npTabKey').value || '').trim().toUpperCase();
     if (!key) return;
-    report({ type: 'newTab', key: key, donor: '',
+    report({ type: 'newTab', key: key, donor: '', fileName: fileName,
              bg: (npArt.bg && npArt.bg !== '__donor__') ? npArt.bg : '', btn: (npArt.btn && npArt.btn !== '__donor__') ? npArt.btn : '' });
     if (pendingDrop) {                                  // 建完页签把刚才拖进来的兵放进去
       const pd = pendingDrop; pendingDrop = null;
       activePage = key;
       setTimeout(() => reportAddUnit(pd.unit, pd.x, pd.y, true, key, ''), 300);
     }
+  } else if (npMode === 'rename') {
+    const key = (document.getElementById('npTabKey').value || '').trim().toUpperCase();
+    if (!key) return;
+    report({ type: 'renameTab', old: npRenameOld, new: key, fileName: fileName });
   } else {
     // 换图：目标页签（右键菜单进来的 = 被右键那个；否则当前页签）—— 用全局 npArtCat（外层绑定，见声明处）
     if (!activePage) { alert('先选一个页签'); return; }
@@ -2281,10 +2316,9 @@ document.getElementById('tfSave').onclick = () => {
   hidePop('tabFactionPop');
 };
 document.getElementById('tmRename').onclick = () => {
-  const nk = prompt('重命名页签（' + tmCategory + ' → 新 key；会同时改 categories 行、组的 category、twui 与两张图）', tmCategory);
   document.getElementById('tabMenu').classList.add('hidden');
-  if (!nk) return;
-  report({ type: 'renameTab', old: tmCategory, new: nk.trim().toUpperCase() });
+  npRenameOld = tmCategory;
+  openNewPop('rename');
 };
 document.getElementById('tmClose').onclick = () => document.getElementById('tabMenu').classList.add('hidden');
 
