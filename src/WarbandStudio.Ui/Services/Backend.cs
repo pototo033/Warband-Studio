@@ -2250,7 +2250,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                 snapshot.ProjectKey = target.ProjectKey ?? ProjectKey;
                 var vanilla = VanillaDbPackPath ?? throw new InvalidOperationException("保存需要游戏 data/db.pack。");
                 var report = WarbandExporter.Export(path, vanilla, temp, GetSchema(), snapshot,
-                    validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line))));
+                    validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line), PermissionReferencePacks(path))));
                 using (PackArchive.Open(temp)) { } // 写完并确认索引可读取，才进入替换。
                 AtomicFile.Flush(temp);
                 var backup = BackupOriginal(target.ProjectDirectory ?? ProjectStore.ProjectDirOfPack(path), path);
@@ -2351,7 +2351,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         var snapshot = Edits.Clone();
         snapshot.ProjectKey = _pack?.ProjectKey ?? ProjectKey;
         var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), snapshot,
-            validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line))));
+            validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line), PermissionReferencePacks(pack))));
         sw.Stop();
         Log?.Invoke($"导出完成：{destPath}（解锁 {rep.Unlocked} 个兵，{sw.ElapsedMilliseconds} ms）");
         return rep;

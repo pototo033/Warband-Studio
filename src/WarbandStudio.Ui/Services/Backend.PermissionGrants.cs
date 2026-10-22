@@ -6,6 +6,34 @@ namespace WarbandStudio.Ui.Services;
 
 public sealed partial class Backend
 {
+    private IReadOnlyList<string> PermissionReferencePacks(string current) => ReferencePackSources.Resolve(
+        current, VanillaDbPackPath, _packs.Where(p => p.IsUnitPack && p.IsOpen).Select(p => p.PackPath!));
+
+    private void RequireKnownPermissionUnit(string unit)
+    {
+        var current = _pack?.PackPath ?? throw new InvalidOperationException("先打开一个包。");
+        if (string.IsNullOrWhiteSpace(unit)) throw new InvalidDataException("无法新增授权：单位 key 为空。");
+        var schema = GetSchema();
+        bool Contains(PackArchive source)
+        {
+            foreach (var entry in TableFiles.EntriesFor(source, "main_units_tables"))
+            {
+                var table = DbTable.Decode(source.ReadDecoded(entry), "main_units_tables", schema);
+                var column = table.Columns.FindIndex(c => c.Name == "unit");
+                if (column >= 0 && table.Rows.Any(r => r[column].ToTsv().Equals(unit, StringComparison.Ordinal))) return true;
+            }
+            return false;
+        }
+        using (var view = PackArchive.OpenView(current, Edits.TableReplacements, Edits.RemoveFiles))
+            if (Contains(view)) return;
+        foreach (var source in PermissionReferencePacks(current).Concat(VanillaDbPackPath is { } v ? new[] { v } : []))
+        {
+            using var pack = PackArchive.Open(source);
+            if (Contains(pack)) return;
+        }
+        throw new InvalidDataException($"无法新增授权：单位 key「{unit}」在当前包、原版、已加载兵种包及可找到的声明依赖的 main_units_tables.unit 中均不存在。若来自外部 MOD，请先“加载兵种包”再重试；未写入授权。");
+    }
+
     private (DbTable? Military, DbTable? Exclusive) GrantSources()
     {
         var session = _pack ?? throw new InvalidOperationException("先打开一个包。");
@@ -44,7 +72,7 @@ public sealed partial class Backend
 
     private int GrantMissingPermissions(string unit,string? race,string? faction,(DbTable? Military,DbTable? Exclusive) source)
     {
-        if (string.IsNullOrWhiteSpace(unit)) return 0;
+        RequireKnownPermissionUnit(unit);
         bool Queue(string target,bool exists,List<(string Unit,string Target)> additions,List<(string Unit,string Target)> removals)
         {
             bool Same((string Unit,string Target) x) => x.Unit.Equals(unit,StringComparison.OrdinalIgnoreCase) && x.Target.Equals(target,StringComparison.OrdinalIgnoreCase);

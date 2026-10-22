@@ -53,6 +53,11 @@ public partial class MainWindow : Window
         DataContext = _vm;
         _vm.UpdateRestartRequested += () => { _forceClosing = true; Close(); };
         _vm.UpdateSessionLockChanged += locked => IsEnabled = !locked;
+        _vm.SaveFailureReported += detail => Dispatcher.BeginInvoke(() =>
+        {
+            var dialog = new Views.SaveFailureDialog(detail) { Owner = this };
+            if (dialog.ShowDialog() == true) _vm.ExportDiagnosticBundleCommand.Execute(null);
+        });
         _vm.FlushTableEdits = async () =>
         {
             // 工具栏保存/关闭同样等待最后一个单元格事务，不能只依靠焦点变化。

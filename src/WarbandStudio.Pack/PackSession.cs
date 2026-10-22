@@ -28,7 +28,7 @@ public sealed class PackSession(RpfmCli? cli)
 
     /// <summary>
     /// 战帮相关的表（用户给的清单 + 教程里的 Effect 连接表）。
-    /// 文件树只显示这些表与页签相关的 ui 文件，其余（兵牌、绑定表等）不在这里占地方。
+    /// 用于战帮内容处理；文件树显示全部 DB，不受此清单限制。
     /// </summary>
     public static readonly string[] WarbandTables =
     [
@@ -55,33 +55,14 @@ public sealed class PackSession(RpfmCli? cli)
         // 注意：main_units / land_units / unit_variants / factions 不在这里 —— 它们归"右下兵种库"实时读取
     ];
 
-    /// <summary>这个包内路径要不要出现在文件树里（战帮相关）。</summary>
-    /// <summary>
-    /// "只加行"的表：工具只会往里**新增**覆盖表文件（`studio_*`），不展示原版全量内容
-    /// （用户要求：这类表初始只展示一个空文件，加入画布时才新建）。
-    /// </summary>
-    public static readonly string[] AddOnlyTables =
-    [
-        "main_units_tables",
-        "units_to_groupings_military_permissions_tables",
-        "resource_costs_tables",
-        "ui_features_to_cultures_tables",
-    ];
-
+    /// <summary>显示全部 DB 文件，以及战帮/战役 UI 文件；不再按文件名前缀过滤。</summary>
     public static bool IsWarbandFile(string innerPath)
     {
         var p = innerPath.Replace('\\', '/');
         if (p.StartsWith("db/", StringComparison.OrdinalIgnoreCase))
         {
-            var table = p.Split('/')[1];
-            if (!WarbandTables.Contains(table, StringComparer.OrdinalIgnoreCase)) return false;
-            // "只加行"的表：只显示工具写的覆盖表文件（studio_*），原版数据文件不列出来
-            if (AddOnlyTables.Contains(table, StringComparer.OrdinalIgnoreCase))
-            {
-                var file = p.Split('/').Length > 2 ? p.Split('/')[2] : "";
-                return file.StartsWith("studio_", StringComparison.OrdinalIgnoreCase);
-            }
-            return true;
+            // 作者文件和 zzzz_studio_* 都是实际数据，不能再按旧的 studio_ 前缀隐藏。
+            return p.Split('/').Length >= 3;
         }
         if (p.StartsWith("ui/", StringComparison.OrdinalIgnoreCase))
             return p.Contains("warband_upgrades", StringComparison.OrdinalIgnoreCase)
@@ -94,14 +75,17 @@ public sealed class PackSession(RpfmCli? cli)
 
     /// <summary>原生打开的包（读表用）。</summary>
     public PackArchive? Archive => _archive;
-    private object? _pendingTables;
+    private Dictionary<string, byte[]>? _pendingTables;
     public bool SetPendingTables(IReadOnlyDictionary<string, byte[]> tables)
     {
-        if (ReferenceEquals(_pendingTables, tables) || PackPath is null) return false;
+        if (PackPath is null) return false;
+        // 编辑集可在同一字典内换表；比较上次条目的字节对象，不能只比较字典本身。
+        if (_pendingTables is not null && _pendingTables.Count == tables.Count &&
+            tables.All(p => _pendingTables.TryGetValue(p.Key, out var bytes) && ReferenceEquals(bytes, p.Value))) return false;
         var view = PackArchive.OpenView(PackPath, tables);
         _archive?.Dispose();
         _archive = view;
-        _pendingTables = tables;
+        _pendingTables = new(tables, StringComparer.OrdinalIgnoreCase);
         _files = view.VisibleEntries.Where(e => IsWarbandFile(e.Path)).Select(e => new RFileInfo
         {
             Path = e.Path, ContainerName = Info!.FileName, FileType = GuessFileType(e.Path),

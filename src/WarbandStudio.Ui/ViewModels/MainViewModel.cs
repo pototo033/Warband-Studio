@@ -71,6 +71,7 @@ public sealed partial class MainViewModel : ObservableObject
         OpenUnitPackCommand = new RelayCommand(() => OpenPackAsync(true), () => !IsBusy);
         SavePackCommand = new RelayCommand(() => SaveAsync(null), () => PackOpen && !IsBusy);
         SavePackAsCommand = new RelayCommand(SaveAsAsync, () => PackOpen && !IsBusy);
+        ExportDiagnosticBundleCommand = new RelayCommand(ExportDiagnosticBundleAsync, () => PackOpen && !IsBusy);
         ClosePackCommand = new RelayCommand(ClosePackAsync, () => PackOpen && !IsBusy);
         CloseProjectCommand = new RelayCommand(CloseProjectAsync, () => HasProject && !IsBusy);
         ChooseGameDirCommand = new RelayCommand(ChooseGameDirAsync, () => !IsBusy);
@@ -210,7 +211,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (!Set(ref _isBusy, value)) return;
             foreach (var c in new[] { OpenPackCommand, OpenUnitPackCommand, SavePackCommand, SavePackAsCommand, ClosePackCommand,
-                                      ChooseGameDirCommand, ApplyGameCommand, DiagnosticsCommand })
+                                      ChooseGameDirCommand, ApplyGameCommand, DiagnosticsCommand, ExportDiagnosticBundleCommand })
                 c.RaiseCanExecute();
         }
     }
@@ -710,6 +711,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             using var message = JsonDocument.Parse(json);
             var type = message.RootElement.GetProperty("type").GetString();
+            if (type == "exportDiagnosticBundle") { _ = ExportDiagnosticBundleAsync(); return; }
             if (type is "undo" or "redo" or "renameGroup" or "copyTab" or "pasteTab") { lock (_backend.StateSync) ApplyCanvasEditCore(json); }
             else _backend.Edit(() => { ApplyCanvasEditCore(json); return true; });
         }
@@ -1511,7 +1513,7 @@ public sealed partial class MainViewModel : ObservableObject
             RefreshPooledResources();  // 右上「成本工坊」的选择资源下拉（原版打底 + 本包覆盖）
             RefreshMods();             // 右上「mod 兵种」页的包清单 + 第一个包的兵种库
             Raise(nameof(PackOpen));
-            foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ClosePackCommand,
+            foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ExportDiagnosticBundleCommand, ClosePackCommand,
                                       OpenPackCommand, OpenUnitPackCommand }) c.RaiseCanExecute();
 
             var pack = _backend.Pack!;
@@ -1601,7 +1603,7 @@ public sealed partial class MainViewModel : ObservableObject
             foreach (var c in packRoot.Children) TagPack(c, session.PackPath);   // 子节点也记住自己属于哪个包
             if (projectRoot is not null) projectRoot.Children.Add(packRoot);
             else TreeRoots.Add(packRoot);
-            FileLog.Write($"文件树：根「{packRoot.Name}」= {files.Count} 个战帮相关文件");
+            FileLog.Write($"文件树：根「{packRoot.Name}」= {files.Count} 个数据表及界面文件");
         }
         if (projectRoot is not null)
         {
@@ -1683,8 +1685,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            FileLog.Write("保存失败", ex);
-            Status = "保存失败：" + ex.Message;
+            ReportSaveFailure("保存失败", ex);
         }
         finally { IsBusy = false; }
     }
@@ -1747,8 +1748,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            FileLog.Write("导出失败", e);
-            Status = "导出失败：" + e.Message;
+            ReportSaveFailure("导出失败", e);
         }
         finally { IsBusy = false; }
     }
@@ -1793,7 +1793,7 @@ public sealed partial class MainViewModel : ObservableObject
             PackText = "Pack：未打开";
         }
         Raise(nameof(PackOpen));
-        foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ClosePackCommand }) c.RaiseCanExecute();
+        foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ExportDiagnosticBundleCommand, ClosePackCommand }) c.RaiseCanExecute();
     }
 
     // ── 诊断 ───────────────────────────────────────────────────

@@ -6,7 +6,18 @@ public enum DiagnosticSeverity { Info, Warning, Error }
 
 public sealed record RpfmDiagnostic(DiagnosticSeverity Severity, string Path, string Type, string Detail)
 {
-    public override string ToString() => $"{Severity}: {Path} — {Type} {Detail}";
+    public IReadOnlyList<(int Row, int Column)> Cells { get; init; } = [];
+    public string? Field { get; init; }
+    public string? Value { get; init; }
+    public string? RowContext { get; init; }
+    public override string ToString()
+    {
+        var rows = Cells.Where(c => c.Row >= 0).Select(c => c.Row + 1).Distinct().ToArray();
+        var location = rows.Length > 0 ? "；数据行 " + string.Join(", ", rows) + "（从 1 开始，不含表头）" : "";
+        var detail = Type == "InvalidReference" && Field is not null
+            ? $"无效引用：列 {Field}，值「{Value}」" : Type + " " + Detail;
+        return $"{Severity}: {Path}{location} — {detail}" + (RowContext is null ? "" : "；" + RowContext);
+    }
 }
 
 /// <summary>RPFM 4.7.4 serializes report_type, not level. Match its DiagnosticReport::level exactly.</summary>
@@ -19,7 +30,8 @@ public sealed record RpfmDiagnosticReport(IReadOnlyList<RpfmDiagnostic> Items)
     public void RequireSaveAllowed()
     {
         if (Errors > 0) throw new InvalidDataException("RPFM 校验未通过，原包和未保存编辑保持不变。" + Summary + "；" +
-            string.Join("；", Items.Where(x => x.Severity == DiagnosticSeverity.Error).Take(8)));
+            Environment.NewLine + string.Join(Environment.NewLine, Items.Where(x => x.Severity == DiagnosticSeverity.Error).Take(8)) +
+            (Errors > 8 ? Environment.NewLine + $"另有 {Errors - 8} 条错误；完整明细已写入日志，可“导出编辑与日志”。" : ""));
     }
 
     public static RpfmDiagnosticReport Parse(string json)
@@ -49,7 +61,17 @@ public sealed record RpfmDiagnosticReport(IReadOnlyList<RpfmDiagnostic> Items)
                 }
                 else throw new RpfmException("诊断未完成：RPFM report_type 格式错误。");
                 var severity = Level(category.Name, name);
-                items.Add(new(severity, path, name, detail));
+                var cells = new List<(int Row, int Column)>();
+                if (report.TryGetProperty("cells_affected", out var affected))
+                    foreach (var cell in affected.EnumerateArray()) cells.Add((cell[0].GetInt32(), cell[1].GetInt32()));
+                string? field = null, value = null;
+                if (name == "InvalidReference" && type.ValueKind == JsonValueKind.Object)
+                {
+                    var pair = type.GetProperty(name);
+                    if (pair.ValueKind == JsonValueKind.Array && pair.GetArrayLength() == 2)
+                    { value = pair[0].GetString(); field = pair[1].GetString(); }
+                }
+                items.Add(new(severity, path, name, detail) { Cells = cells, Field = field, Value = value });
             }
         }
         return new(items);

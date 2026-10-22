@@ -83,6 +83,7 @@
                 <Separator />
                 <MenuItem Header="保存 Pack" InputGestureText="Ctrl+S" Command="{Binding SavePackCommand}" />
                 <MenuItem Header="另存为…" Command="{Binding SavePackAsCommand}" />
+                <MenuItem Header="导出编辑与日志…" Command="{Binding ExportDiagnosticBundleCommand}" />
                 <MenuItem Header="关闭当前 Pack" Command="{Binding ClosePackCommand}" />
                 <Separator />
                 <MenuItem Header="退出" Click="OnExit" />
@@ -108,6 +109,8 @@
                 <Border Style="{StaticResource Workspace.ToolbarDivider}" />
                 <Button Content="保存" Style="{StaticResource AeButton.Primary}" Padding="14,3" Margin="0,0,6,0" Command="{Binding SavePackCommand}" ToolTip="保存当前 Pack（Ctrl+S）" />
                 <Button Content="另存为" Padding="10,3" Margin="0,0,6,0" Command="{Binding SavePackAsCommand}" />
+                <Button Content="导出编辑与日志" Padding="10,3" Margin="0,0,6,0" Command="{Binding ExportDiagnosticBundleCommand}"
+                        ToolTip="导出诊断 ZIP：当前 Pack 底本、未保存编辑、撤销重做、兵种引用包和日志（含本机路径），供本地复现" />
                 <Button Content="关闭 Pack" Padding="10,3" Margin="0,0,12,0" Command="{Binding ClosePackCommand}"
                         ToolTip="关掉当前画布这个包（别的包留着）；有未导出的编辑会先问" />
                 <Border Style="{StaticResource Workspace.ToolbarDivider}" />

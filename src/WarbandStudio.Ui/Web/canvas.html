@@ -77,7 +77,10 @@
   .card img { width: 38px; height: 85px; display: block; object-fit: cover; }
   .card .nm { position: absolute; left: 0; right: 0; bottom: 0; background: #000000b0;
               font-size: 8px; line-height: 9px; padding: 1px 2px; white-space: nowrap; overflow: hidden; }
-  #hdr { position: fixed; left: 8px; top: 6px; color: #B0B6BC; z-index: 10; }
+  #hdr { position: fixed; left: 8px; right: 146px; top: 6px; color: #B0B6BC; z-index: 10; display:flex; gap:8px; align-items:center; }
+  #hdrText { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #bExportDiagnostic { flex-shrink:0; background:#212529; color:#B0B6BC; border:1px solid #464E56; border-radius:4px; padding:1px 7px; font:inherit; line-height:16px; cursor:pointer; }
+  #bExportDiagnostic:hover { color:#64A9E2; border-color:#64A9E2; }
   #bar { position: fixed; left: 8px; top: 26px; z-index: 20; display: flex; gap: 6px; align-items: center; }
   #bar button { background: #212529; color: #B0B6BC; border: 1px solid #464E56; border-radius: 4px;
                 padding: 3px 8px; font-size: 11px; cursor: pointer; }
@@ -193,7 +196,9 @@
     <!-- 选中连线时的"转点"手柄：拖动 = 调整中间那段的位置（写 mid_link_offset，游戏里同一个效果） -->
     <div id="linkKnob" class="hidden" title="拖动 = 调整这条线中间那段的位置（写进 mid_link_offset，游戏里一致）"></div></div>
 </div>
-<div id="hdr">战帮画布（等待数据…）</div>
+<div id="hdr"><span id="hdrText">战帮画布（等待数据…）</span>
+  <button id="bExportDiagnostic" title="导出当前 Pack 底本、未保存编辑、撤销重做、外部兵种引用和日志，供复现排查"
+          onclick="report({type:'exportDiagnosticBundle'})">导出编辑与日志</button></div>
 <div id="bar">
   <span style="display:flex;flex-direction:column;gap:4px">
     <button id="bSel" class="on" title="选择/移动：左键拖兵牌改坐标（实时跟随连线），中键拖动整块画面">选择</button>
@@ -772,11 +777,12 @@ function renderWarband(data) {
            bg: Object.keys(DATA.pageBg || {}).length, skin: Object.keys(DATA.skin || {}).length,
            excl: Object.keys(DATA.unitExcl || {}).length, races: Object.keys(DATA.groupRaces || {}).length,
            firstCard: cardRects[0] || null, lastCard: cardRects[cardRects.length - 1] || null });
-  document.getElementById('hdr').textContent =
+  document.getElementById('hdrText').textContent =
     '战帮画布：' + (DATA.groups || []).length + ' 组 / ' + cards + ' 张牌 / 连线 ' + drawn +
     (DATA.diag ? '（路线 ' + DATA.diag.routes + ' 条）' : '') +
     (DATA.pages ? ' · 页签 ' + DATA.pages.length + ' 个' : '') +
     (DATA.edits ? ' · 未导出编辑：' + DATA.edits : '');
+  document.getElementById('hdrText').title = document.getElementById('hdrText').textContent;
 }
 
 function linkPath3(L) {

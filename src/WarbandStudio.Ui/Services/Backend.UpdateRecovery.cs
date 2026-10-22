@@ -27,6 +27,7 @@ public sealed partial class Backend
     {
         lock (StateSync)
         {
+            path = System.IO.Path.GetFullPath(path);
             var pack = OpenPackAsync(path, displayName: saved.DisplayName + (recoveredCopy ? "（更新恢复副本）" : ""), asUnitPack: saved.IsUnitPack).GetAwaiter().GetResult();
             pack.ProjectDirectory = recoveredCopy ? null : saved.ProjectDirectory;
             pack.ProjectKey = saved.ProjectKey;
