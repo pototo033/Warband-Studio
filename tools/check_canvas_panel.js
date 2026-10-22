@@ -490,10 +490,10 @@ chk('对话框：不在成本清单里的成本要照实显示（不许悄悄变
     '没找到"未知成本照实显示"的处理');
 
 chk('升级线带方向箭头 + 对话框「双向升级」按钮（源码级，v0.166）',
-    /marker-start', 'url\(#arrowDir\)'/.test(SOURCE) && /'id', 'arrowDir'/.test(SOURCE)
-    && !/marker-end', 'url\(#arrowDir\)'/.test(SOURCE)
+    /marker-end', 'url\(#arrowDir\)'/.test(SOURCE) && /'id', 'arrowDir'/.test(SOURCE)
+    && !/marker-start', 'url\(#arrowDir\)'/.test(SOURCE)
     && /rpMutual2/.test(SOURCE) && /type: 'addRoute', base: c\.target, target: c\.base/.test(SOURCE)
-    && /orient', 'auto-start-reverse'/.test(SOURCE),
+    && /orient', 'auto'/.test(SOURCE),
     '没找到箭头 marker / marker-end / 双向升级按钮');
 
 chk('多选两个组时有「升级设置…」按钮（有路线时），点击打开编辑对话框（源码级，v0.165）',
@@ -890,7 +890,7 @@ vm.runInContext("multiGroups = []; paintMulti();", ctx);
 console.log('㉑ mid_link_offset：画布走线模型 + 自动填 + 转点手柄（v0.128）');
 vm.runInContext(`
   DATA = { groups: [ { unit_group: 'pa', x: 100, y: 100, category: 'PA', units: ['u1'] },
-                     { unit_group: 'pb', x: 100, y: 400, category: 'PA', units: ['u2'] } ],
+                     { unit_group: 'pb', x: 400, y: 400, category: 'PA', units: ['u2'] } ],
            links: [ { c: 'pb', p: 'pa', cp: 1, pp: 3, po: 0, co: 0, mo: 0 } ],
            icons: {}, names: { u1: '甲', u2: '乙' }, pages: ['PA'],
            pageRaces: {}, pageFactions: {}, groupRaces: {}, groupFactions: {}, unitExcl: {},
@@ -902,9 +902,8 @@ chk('走线模型：mo=0 时中间段就贴在起点（第一次转折在起始�
     (function () {
       const d = vm.runInContext("linkPath(anchor(GROUPS['pa'], 3), anchor(GROUPS['pb'], 1), 0)", ctx);
       const nums = d.match(/-?[\d.]+/g).map(Number);
-      // 点序：A, a1, (a1.x, a1.y+0), (b1.x, a1.y+0), b1, B → 第 4 个点（索引 6）的 y 应等于 a1.y
-      const a1y = nums[3];
-      return Math.abs(nums[7] - a1y) < 0.001;
+      // 去重后的第一段横线就在父端中心高度，不另加短线。
+      return nums[1] === 143.5 && nums[3] === 143.5;
     })(),
     vm.runInContext("linkPath(anchor(GROUPS['pa'], 3), anchor(GROUPS['pb'], 1), 0)", ctx));
 // mo=60：中间段整体下移 60（沿起始方向 = 下）
@@ -912,16 +911,16 @@ chk('走线模型：mo=60 时中间段沿起始方向下移 60（= 游戏里 mid
     (function () {
       const d0 = vm.runInContext("linkPath(anchor(GROUPS['pa'], 3), anchor(GROUPS['pb'], 1), 0)", ctx);
       const d60 = vm.runInContext("linkPath(anchor(GROUPS['pa'], 3), anchor(GROUPS['pb'], 1), 60)", ctx);
-      const y0 = d0.match(/-?[\d.]+/g).map(Number)[7];
-      const y60 = d60.match(/-?[\d.]+/g).map(Number)[7];
+      const y0 = d0.match(/-?[\d.]+/g).map(Number)[3];
+      const y60 = d60.match(/-?[\d.]+/g).map(Number)[3];
       return Math.abs((y60 - y0) - 60) < 0.001;
     })(),
     vm.runInContext("linkPath(anchor(GROUPS['pa'], 3), anchor(GROUPS['pb'], 1), 60)", ctx));
 chk('autoMidOffset：中间段落在两端正中（上下两端 → 取 y 差值一半）',
     (function () {
       const v = vm.runInContext("autoMidOffset(GROUPS['pa'], GROUPS['pb'], 3, 1)", ctx);
-      // 两个中心 y 相差 300，无基础短线，自动值为 150。
-      return v === 150;
+      // 父端中心 y=143.5、目标上边缘 y=400，无基础短线，自动值为 round(256.5/2)=128。
+      return v === 128;
     })(),
     vm.runInContext("autoMidOffset(GROUPS['pa'], GROUPS['pb'], 3, 1)", ctx));
 clear();
@@ -1239,10 +1238,11 @@ const knobCases = vm.runInContext(`
   for (let pp = 1; pp <= 4; pp++) for (let cp = 1; cp <= 4; cp++) for (const mo of [-60, 0, 80]) {
    const rec = {p: 'knobParent', c: 'knobChild', pp, cp, mo};
    const points = linkPath3(rec).match(/-?[\\d.]+/g).map(Number);
-   const k = knobPosOf(rec), child = anchor(GROUPS.knobChild, cp).p, parent = anchor(GROUPS.knobParent, pp).p;
+   const k = knobPosOf(rec), child = anchor(GROUPS.knobChild, cp, true).p, parent = anchor(GROUPS.knobParent, pp).p;
    results.push({pp, cp, mo,
-    center: Math.abs(k.x - (points[4] + points[6]) / 2) < 0.001 && Math.abs(k.y - (points[5] + points[7]) / 2) < 0.001,
-    endpoints: points[0] === child.x && points[1] === child.y && points[10] === parent.x && points[11] === parent.y,
+    center: Math.abs(k.x - ((pp===1||pp===3)?(parent.x+child.x)/2:parent.x+mo))<0.001
+      && Math.abs(k.y - ((pp===1||pp===3)?parent.y+mo:(parent.y+child.y)/2))<0.001,
+    endpoints: points[0] === parent.x && points[1] === parent.y && points.at(-2) === child.x && points.at(-1) === child.y,
     axis: k.vertical === (pp === 1 || pp === 3)});
   }
   return results;
@@ -1359,10 +1359,10 @@ const bases=vm.runInContext(`(()=>{
  return [1,2,3,4].map(p=>{
   const a=anchor(g,p), b=anchor(other,p);
   const pts=linkPath(a,b,0).match(/-?[\\d.]+/g).map(Number);
-  return {length:Math.hypot(pts[2]-pts[0],pts[3]-pts[1]),x:pts[6],y:pts[7],sx:pts[2],sy:pts[3]};
+  return {x:pts[2],y:pts[3],sx:pts[0],sy:pts[1]};
  });
 })()`,ctx);
-chk('四方向附加基础短线均为零',bases.every(p=>p.length===0));
+chk('四方向均直接从中心起算，无附加基础短线',bases.every(p=>p.sx===120&&p.sy===143.5)&&/STUB = 0/.test(SOURCE));
 chk('mid offset 为零时从兵牌中心转折',bases.every((p,i)=>i%2===0 ? p.y===143.5:p.x===120));
 const centerCases=vm.runInContext(`(()=>{
  const out=[];
@@ -1373,6 +1373,31 @@ const centerCases=vm.runInContext(`(()=>{
  return out;
 })()`,ctx);
 chk('单兵与多兵组四方向都从各自中心起算',centerCases.length===12&&centerCases.every(Boolean));
+const targetEdges=vm.runInContext(`(()=>{
+ const out=[];
+ GROUPS.edgeParent={x:50,y:20,units:['p']};
+ for(const n of [1,2,4])for(let cp=1;cp<=4;cp++)for(let pp=1;pp<=4;pp++)for(const mo of [-60,0,80]){
+  const child={x:400,y:350,units:Array(n).fill('c')};GROUPS.edgeChild=child;
+  const b=box(child), rec={p:'edgeParent',c:'edgeChild',pp,cp,mo};
+  const points=linkPath3(rec).match(/-?[\\d.]+/g).map(Number);
+  const expected=cp===1?[b.x+b.w/2,b.y]:cp===2?[b.x+b.w,b.y+b.h/2]:cp===3?[b.x+b.w/2,b.y+b.h]:[b.x,b.y+b.h/2];
+  const k=knobPosOf(rec);
+  const onPath=points.some((_,i)=>i>=2&&i%2===0&&
+    ((points[i]===points[i-2]&&k.x===points[i]&&k.y>=Math.min(points[i-1],points[i+1])&&k.y<=Math.max(points[i-1],points[i+1]))
+    ||(points[i+1]===points[i-1]&&k.y===points[i+1]&&k.x>=Math.min(points[i-2],points[i])&&k.x<=Math.max(points[i-2],points[i]))));
+  out.push({edge:points.at(-2)===expected[0]&&points.at(-1)===expected[1],start:points[0]===70&&points[1]===63.5,
+   knob:onPath, nonzero:points.every((_,i)=>i<2||i%2!==0||points[i]!==points[i-2]||points[i+1]!==points[i-1])});
+ }
+ return out;
+})()`,ctx);
+chk('单兵/多兵组的所有端口和正零负偏移，终点均在目标边缘',targetEdges.length===144&&targetEdges.every(r=>r.edge));
+chk('终点修正不改变父端中心起算',targetEdges.every(r=>r.start));
+chk('终点修正后折点手柄仍在线段中点',targetEdges.every(r=>r.knob));
+chk('无连线预览也使用目标边缘端点',/linkPath\(anchor\(gb, pos\.parentPos\), anchor\(gt, pos\.childPos, true\)/.test(SOURCE));
+chk('所有端口组合均不产生零长度首尾段',targetEdges.every(r=>r.nonzero));
+chk('箭头尖端精确对齐路径末端，普通线和虚线都挂 marker-end',/setAttribute\('refX', '10'\)/.test(SOURCE)
+ && /setAttribute\('orient', 'auto'\)/.test(SOURCE)&& (SOURCE.match(/setAttribute\('marker-end', 'url\(#arrowDir\)'\)/g)||[]).length===2);
+chk('完全重合的路径不生成无方向箭头',vm.runInContext("linkPath({p:{x:1,y:2},d:[0,1]},{p:{x:1,y:2},d:[0,-1]},0)===null",ctx));
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }
 console.log('【结果】✓ 全部 ' + good + ' 项通过');

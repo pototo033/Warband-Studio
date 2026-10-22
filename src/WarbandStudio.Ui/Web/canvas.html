@@ -504,15 +504,19 @@ function box(g) {
   const n = Math.max(1, (g.units || []).length);
   return { x: g.x, y: g.y, w: CARD_W + SLOT * (n - 1), h: CARD_H };
 }
-function anchor(g, pos) {
+function anchor(g, pos, atEdge = false) {
   const b = box(g);
   const d = DIR[pos] || [0, 1];
   const p = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  if (atEdge) {
+    if (d[0] === 0) p.y = d[1] < 0 ? b.y : b.y + b.h;
+    else p.x = d[0] < 0 ? b.x : b.x + b.w;
+  }
   return { p: p, d: d };
 }
-// 用户指定的预览：不附加基础短线，mid_link_offset 从父组中心起算；0 在中心转折。
+// 用户指定的预览：不附加基础短线，父端从中心起算，子端按端口停在兵牌边缘；0 在父端中心转折。
 // 已有 mo 数值不迁移。上下端口挪 y，左右端口挪 x，正负仍跟坐标轴；不声称是已证实的引擎公式。
-function linkPath(a, b, mo, reverse = false) {
+function linkPath(a, b, mo) {
   const A = a.p, B = b.p;
   const a1 = { x: A.x + a.d[0] * STUB, y: A.y + a.d[1] * STUB };
   const b1 = { x: B.x + b.d[0] * STUB, y: B.y + b.d[1] * STUB };
@@ -525,15 +529,16 @@ function linkPath(a, b, mo, reverse = false) {
     const mx = a1.x + mv;
     pts = [A, a1, { x: mx, y: a1.y }, { x: mx, y: b1.y }, b1, B];
   }
-  if (reverse) pts.reverse(); // 只反转 SVG 点序以保留子端箭头，几何始终按父端计算。
-  return pts.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ');
+  // STUB=0 或 mo=0 会重合多个点；不要留下零长度首尾段干扰 SVG 箭头定向。
+  const points = pts.filter((p, i) => i === 0 || p.x !== pts[i - 1].x || p.y !== pts[i - 1].y);
+  return points.length < 2 ? null : points.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ');
 }
 
 // 自动 mid offset：让中间那段落在两端中间（就是画布以前的观感），并且**写进表** ——
-// 自动值使用同一中心基准，避免预览和写入不一致；最终由游戏对照验收。
+// 自动值使用父端中心/子端边缘，避免预览和写入不一致；最终由游戏对照验收。
 function autoMidOffset(parentG, childG, parentPos, childPos) {
   if (!parentG || !childG) return 0;
-  const A = anchor(parentG, parentPos || 3), B = anchor(childG, childPos || 1);
+  const A = anchor(parentG, parentPos || 3), B = anchor(childG, childPos || 1, true);
   const a1x = A.p.x + A.d[0] * STUB, a1y = A.p.y + A.d[1] * STUB;
   const b1x = B.p.x + B.d[0] * STUB, b1y = B.p.y + B.d[1] * STUB;
   return A.d[0] === 0 ? Math.round((b1y - a1y) / 2) : Math.round((b1x - a1x) / 2);
@@ -557,16 +562,16 @@ function renderWarband(data) {
   for (const el of Array.from(tree.querySelectorAll('.card'))) el.remove();
   const svg = document.getElementById('links');
   svg.innerHTML = '';
-  // 升级线加**箭头**方便看方向（parent=base 来源 → child=target 结果；游戏里不画箭头，这是画布辅助）。
+  // 升级线加方向箭头（parent=base 来源 → child=target 结果），尖端精确落在目标边缘。
   // 用 polygon 不用 path：画布多处按 '#links path' 遍历（过滤/自检），别把 marker 里的形状算成一条线。
   {
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
     const mk2 = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
     mk2.setAttribute('id', 'arrowDir');
     mk2.setAttribute('viewBox', '0 0 10 10');
-    mk2.setAttribute('refX', '9'); mk2.setAttribute('refY', '5');
+    mk2.setAttribute('refX', '10'); mk2.setAttribute('refY', '5'); // 三角形尖端正好等于路径终点。
     mk2.setAttribute('markerWidth', '5.5'); mk2.setAttribute('markerHeight', '5.5');
-    mk2.setAttribute('orient', 'auto-start-reverse');   // marker-start 反向定向：箭头指向起点（= child/target）
+    mk2.setAttribute('orient', 'auto'); // 正向路径 parent → child，箭头跟随末段方向。
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     poly.setAttribute('points', '0,0 10,5 0,10');
     poly.setAttribute('fill', 'context-stroke');       // 跟着线的颜色（选中黄/高亮蓝也自动跟着）
@@ -603,9 +608,8 @@ function renderWarband(data) {
     // ② 可见线（真正画出来的那条；不吃事件，由命中线负责 hover 高亮它）
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     el.setAttribute('d', d);
-    // 几何从 parent 计算，再反转点序；箭头挂 SVG 起点 child。
-    // 用 auto-start-reverse 反向定向 → 箭头落在 child 端、**指向 child** = parent → child 的升级方向 ✓
-    el.setAttribute('marker-start', 'url(#arrowDir)');
+    // 路径按 parent → child 排列，marker-end 的尖端直接落在 child 边缘。
+    el.setAttribute('marker-end', 'url(#arrowDir)');
     el.dataset.c = L.c; el.dataset.p = L.p;
     el.dataset.cat = hit.dataset.cat;
     const rec = { el: el, hit: hit, c: L.c, p: L.p, cp: L.cp, pp: L.pp, mo: L.mo, k: L.k || '', rc: L.rc || '', rr: L.rr || 0, rs: L.rs || 0 };
@@ -778,7 +782,7 @@ function renderWarband(data) {
 function linkPath3(L) {
   const gc = GROUPS[L.c], gp = GROUPS[L.p];
   if (!gc || !gp) return null;
-  return linkPath(anchor(gp, L.pp), anchor(gc, L.cp), L.mo, true);
+  return linkPath(anchor(gp, L.pp), anchor(gc, L.cp, true), L.mo);
 }
 // 转点手柄：放在"中间那段"的中点。拖动它 → 改 rec.mo（沿起始方向挪多少像素）→ 立刻重画，
 // 松手把新 mo 发给后端（写进 ui_links.mid_link_offset，游戏里同一条走线）。
@@ -786,7 +790,7 @@ let knobDrag = null;
 function knobPosOf(rec) {
   const gc = GROUPS[rec.c], gp = GROUPS[rec.p];
   if (!gc || !gp) return null;
-  const A = anchor(gp, rec.pp), B = anchor(gc, rec.cp);
+  const A = anchor(gp, rec.pp), B = anchor(gc, rec.cp, true);
   const a1 = { x: A.p.x + A.d[0] * STUB, y: A.p.y + A.d[1] * STUB };
   const b1 = { x: B.p.x + B.d[0] * STUB, y: B.p.y + B.d[1] * STUB };
   const mv = rec.mo || 0;
@@ -824,9 +828,9 @@ addEventListener('mousemove', e => {
   const delta = knobDrag.vertical ? e.clientY - knobDrag.y : e.clientX - knobDrag.x;
   rec.mo = Math.round(knobDrag.start + delta / knobDrag.zoom);
   const d = linkPath3(rec);
-  if (d !== null) setLinkD(rec, d);
+  setLinkD(rec, d || ''); // 完全重合时清掉旧线，避免残留之前的箭头。
   showKnob(rec);
-  document.getElementById('xy').textContent = 'mid_link_offset = ' + rec.mo + '（相对基础短线末端；0 = 基础末端转折）';
+  document.getElementById('xy').textContent = 'mid_link_offset = ' + rec.mo + '（相对起点中心；0 = 中心转折）';
 });
 addEventListener('mouseup', e => {
   if (!knobDrag) return;
@@ -860,12 +864,12 @@ function drawNoLinkRoutes() {
     if (!gb || !gt || pairHasLink(r.b, r.t)) continue;
     const pos = positionsFor(gb, gt);
     const mo = autoMidOffset(gb, gt, pos.parentPos, pos.childPos);
-    const d = linkPath(anchor(gb, pos.parentPos), anchor(gt, pos.childPos), mo, true);
+    const d = linkPath(anchor(gb, pos.parentPos), anchor(gt, pos.childPos, true), mo);
     if (!d) continue;
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     el.classList.add('nolink');
     el.setAttribute('d', d);
-    el.setAttribute('marker-start', 'url(#arrowDir)');     // 虚线同理：箭头落在 child 端、指向 child
+    el.setAttribute('marker-end', 'url(#arrowDir)'); // 虚线也以目标端的箭头尖端结束。
     // **和真连线一样带页签/两端 key**：applyFilter 按 dataset.cat 过滤 —— 不带的话所有页签的虚线会叠在一起（用户实测）
     el.dataset.cat = (GROUPS[r.t].category || '') + '|' + (GROUPS[r.b].category || '');
     el.dataset.c = r.t; el.dataset.p = r.b;
@@ -901,7 +905,7 @@ function redrawLinksFor(gk) {
   for (const L of LINKELS) {
     if (L.c !== gk && L.p !== gk) continue;
     const d = linkPath3(L);
-    if (d !== null) { setLinkD(L, d); n++; }
+    setLinkD(L, d || ''); n++;
   }
   return n;
 }
