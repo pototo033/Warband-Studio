@@ -283,7 +283,7 @@ def main():
                   has(costs, id=plan["newCost"], treasury_cost=str(plan["newCostAmount"])),
                   detail=f"期望 {plan['newCost']} = {plan['newCostAmount']}")
             grants = table_rows(os.path.join(ex, "grants"))
-            check("加兵时按军事组授权写进了 units_to_groupings_military_permissions_tables",
+            check("显式新增的军事组授权写进了 units_to_groupings_military_permissions_tables",
                   has(grants, unit=plan.get("grantUnit", ""), military_group=plan.get("grantGroup", "")) is not None,
                   detail=f"期望 {plan.get('grantUnit')} → {plan.get('grantGroup')}")
             exclusive = table_rows(os.path.join(ex, "exclusive"))

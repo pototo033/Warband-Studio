@@ -73,6 +73,8 @@ public sealed partial class MainViewModel
     {
         var t = (_costResText ?? "").Trim();
         if (t.Length == 0) return null;
+        var picked=PooledResAll.FirstOrDefault(x=>x.Key.Equals(_pickedResKey,StringComparison.OrdinalIgnoreCase));
+        if(picked is not null && (picked.Name.Equals(t,StringComparison.OrdinalIgnoreCase)||picked.Key.Equals(t,StringComparison.OrdinalIgnoreCase))) return picked;
         return PooledResAll.FirstOrDefault(x => x.Name.Equals(t, StringComparison.OrdinalIgnoreCase))
             ?? PooledResAll.FirstOrDefault(x => x.Key.Equals(t, StringComparison.OrdinalIgnoreCase));
     }
@@ -138,6 +140,15 @@ public sealed partial class MainViewModel
     /// <summary>资源下拉里选中了一条 → 同上。</summary>
     public void NotePickedRes(string key) => _pickedResKey = (key ?? "").Trim();
 
+    // 展开是重新选资源；当前完整名称不能继续把其他可选项过滤掉。
+    public void ShowAllCostResourceChoices() => SyncFiltered(PooledResShown, PooledResAll.ToList());
+
+    public void PickCostResource(Services.Backend.PooledResource resource)
+    {
+        NotePickedRes(resource.Key);
+        CostResText=string.IsNullOrWhiteSpace(resource.Name) ? resource.Key : resource.Name;
+    }
+
     /// <summary>id 打全了且命中已有成本 → 预填金币/资源，并把按钮切成「保存修改」。</summary>
     private void SyncCostFromId()
     {
@@ -152,8 +163,10 @@ public sealed partial class MainViewModel
             CostResourceLinks.Clear();
             foreach (var resource in hit.Resources) CostResourceLinks.Add(resource);
             _selectedCostResourceLink = null;
-            SelectedCostResourceLink = CostResourceLinks.FirstOrDefault(r => r.PoolId.Equals(preferredPool, StringComparison.OrdinalIgnoreCase)) ?? CostResourceLinks.FirstOrDefault();
-            if (SelectedCostResourceLink is null)
+            if (!_addingCostResource)
+                SelectedCostResourceLink = CostResourceLinks.FirstOrDefault(r => r.PoolId.Equals(preferredPool, StringComparison.OrdinalIgnoreCase)) ?? CostResourceLinks.FirstOrDefault();
+            else Raise(nameof(SelectedCostResourceLink));
+            if (SelectedCostResourceLink is null && !_addingCostResource)
             {
                 _costResText = ""; _costResAmount = "";
                 _loadedResKey = ""; _loadedResAmount = 0; _loadedPoolId = "";
@@ -273,6 +286,11 @@ public sealed partial class MainViewModel
         var id = (CostId ?? "").Trim();
         var gold = ParseDouble(CostGold);
         var res = ResolvedResource();
+        if (!string.IsNullOrWhiteSpace(CostResText) && res is null)
+        {
+            CostStatus = "请选择有效的资源名称或资源 key；如需移除关联，请清空资源框或点击移除选中资源。";
+            return;
+        }
         var resKey = res?.Key ?? "";
         var amount = (long)ParseDouble(CostResAmount);
         string msg;

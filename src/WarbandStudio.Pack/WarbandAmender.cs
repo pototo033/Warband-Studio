@@ -417,7 +417,7 @@ public static class WarbandAmender
                         if (fpc >= 0 && fpc < raw.Length) raw[fpc] = DbValue.OfStr(w.Parent);
                         if (fcp >= 0 && fcp < raw.Length) raw[fcp] = DbValue.Of((long)w.Cp);
                         if (fpp >= 0 && fpp < raw.Length) raw[fpp] = DbValue.Of((long)w.Pp);
-                        // mid_link_offset = 中间那段沿起始方向走多少像素（游戏里同一个走线；0 = 起点处就转）。
+                        // mid_link_offset 保留原始相对偏移；预览基础短线变化不迁移包内数值。
                         // **po/co 不动** —— 它们的数值不是像素（用户查证），不归这里管。
                         if (fmo >= 0 && fmo < raw.Length) raw[fmo] = DbValue.Of(w.Mid);
                         raws.Add(raw);
@@ -1164,16 +1164,16 @@ public static class WarbandAmender
         if (visibilityPath is not null && CurrentBytes(pack, repl, visibilityPath) is { } visibilityBytes)
         {
             var xml = System.Text.Encoding.UTF8.GetString(visibilityBytes);
-            if (e.TabAllowedFactions.Count > 0 || (xml.Contains("WarbandStudio.TabFactionVisibility.v1:", StringComparison.Ordinal)
+            if (e.TabAllowedFactions.Count > 0 || e.TabAllowedRaces.Count > 0 || e.TabVisibilityExcluded.Count > 0 || (xml.Contains("WarbandStudio.TabFactionVisibility.v1:", StringComparison.Ordinal)
                 && (e.TabRenames.Count > 0 || e.NewTabs.Count > 0)))
             {
                 repl[visibilityPath] = System.Text.Encoding.UTF8.GetBytes(TabFactionVisibility.Apply(xml,
-                    e.TabAllowedFactions, e.TabRenames, createdTabDonors));
-                notes.Add("页签显示派系：已更新可见性、自动选页与兵牌树筛选（不修改兵种授权）。");
+                    e.TabAllowedFactions, e.TabRenames, createdTabDonors, e.TabAllowedRaces, e.TabVisibilityExcluded));
+                notes.Add("页签显示派系/种族：已更新可见性、自动选页与兵牌树筛选（不修改兵种授权）。");
                 changed++;
             }
         }
-        else if (e.TabAllowedFactions.Count > 0) throw new InvalidDataException("包中缺少战帮 TWUI，无法保存页签显示派系。");
+        else if (e.TabAllowedFactions.Count > 0 || e.TabAllowedRaces.Count > 0 || e.TabVisibilityExcluded.Count > 0) throw new InvalidDataException("包中缺少战帮 TWUI，无法保存页签显示派系/种族。");
 
         if(e.TabFileNames.Count>0 || e.TabRenames.Count>0 && pack.Find(TabFileBindings.MetadataPath) is not null)
         {

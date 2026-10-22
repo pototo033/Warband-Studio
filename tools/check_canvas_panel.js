@@ -920,8 +920,8 @@ chk('走线模型：mo=60 时中间段沿起始方向下移 60（= 游戏里 mid
 chk('autoMidOffset：中间段落在两端正中（上下两端 → 取 y 差值一半）',
     (function () {
       const v = vm.runInContext("autoMidOffset(GROUPS['pa'], GROUPS['pb'], 3, 1)", ctx);
-      // pa 底 + STUB 到 pb 顶 - STUB 的距离一半（两个 40 宽的单兵牌、起点终点同 x）
-      return typeof v === 'number' && v > 0;
+      // 两个中心 y 相差 300，无基础短线，自动值为 150。
+      return v === 150;
     })(),
     vm.runInContext("autoMidOffset(GROUPS['pa'], GROUPS['pb'], 3, 1)", ctx));
 clear();
@@ -1277,6 +1277,39 @@ clear();
 vm.runInContext("openTabFactionPop('EMP'); tfSelected.add('wissenland');",ctx);
 byId.tfSave.onclick();
 chk('多选按页签发送完整名单', last().factions.length === 3 && last().factions.includes('wissenland'));
+clear();
+// 最小 DOM 桩的 innerHTML 不清空 children；本断言前显式模拟浏览器清空行为。
+byId.tfRaceList.children.length=0;
+vm.runInContext("DATA.tabVisibility.allowedRaces={EMP:['empire','missing_mod_race']}; openTabFactionPop('EMP');",ctx);
+chk('重开种族名单并保留缺失 MOD 种族 key',vm.runInContext("tfSelectedRaces.has('empire') && tfSelectedRaces.has('missing_mod_race')",ctx));
+chk('种族选择与派系筛选分开显示',byId.tfRaceList.children.length===3 && byId.tfRace.value==='empire');
+const dwarfCheck=byId.tfRaceList.children[1].children[0]; dwarfCheck.checked=true; dwarfCheck.onchange();
+byId.tfRace.value='dwarfs'; byId.tfRace.onchange();
+byId.tfSave.onclick();
+chk('种族与派系在同一消息中提交，切换筛选保留种族',last().races.length===3 && last().races.includes('dwarfs') && last().factions.includes('reikland'));
+clear();vm.runInContext("openTabFactionPop('EMP'); tfSelectedRaces.clear();",ctx);byId.tfCancel.onclick();
+vm.runInContext("openTabFactionPop('EMP');",ctx);
+chk('取消不污染种族名单',msgs().length===0 && vm.runInContext("tfSelectedRaces.size===2",ctx));
+byId.tfClear.onclick();byId.tfSave.onclick();
+chk('清空同时清空派系和种族',last().factions.length===0 && last().races.length===0);
+clear();vm.runInContext("openTabFactionPop('EMP');",ctx);byId.tfInvert.onclick();
+chk('反选切换只改变模式，不翻转勾选项',vm.runInContext("tfExcluded && tfSelected.has('reikland') && tfSelectedRaces.has('empire')",ctx));
+chk('反选明确显示种族与派系排除范围',byId.tfInvert.textContent.includes('开启') && byId.tfFactionTitle.textContent.includes('排除') && byId.tfRaceTitle.textContent.includes('交集'));
+byId.tfSave.onclick();chk('反选随名单提交',last().excluded===true && last().factions.includes('reikland'));
+clear();vm.runInContext("DATA.tabVisibility.excluded={EMP:true}; openTabFactionPop('EMP');",ctx);
+chk('重开恢复反选模式',vm.runInContext('tfExcluded',ctx));
+byId.tfInvert.onclick();byId.tfCancel.onclick();vm.runInContext("openTabFactionPop('EMP');",ctx);
+chk('取消切换不污染已存模式',msgs().length===0 && vm.runInContext('tfExcluded',ctx));
+byId.tfClear.onclick();byId.tfSave.onclick();
+chk('反选清空保持模式，名单为空不排除任何人',last().excluded===true && last().factions.length===0 && last().races.length===0 && byId.tfSummary.textContent.includes('不限制'));
+clear();vm.runInContext("openTabFactionPop('EMP');",ctx);byId.tfInvert.onclick();byId.tfSave.onclick();
+chk('关闭反选显式提交 false，并保留名单',last().excluded===false && last().factions.includes('reikland'));
+vm.runInContext("openTabFactionPop('EMP'); tfSelected.clear(); drawTabFactionList();",ctx);
+chk('反选只勾种族提示整个种族隐藏',byId.tfSummary.textContent.includes('种族的全部派系'));
+vm.runInContext("tfSelected.add('reikland'); drawTabFactionList();",ctx);
+chk('反选两份名单都有时提示只隐藏交集',byId.tfSummary.textContent.includes('交集'));
+vm.runInContext("tfSelectedRaces.clear(); drawTabFactionList();",ctx);
+chk('反选只勾派系提示不限种族',byId.tfSummary.textContent.includes('排除 1 个派系（不限种族）'));
 
 clear();
 vm.runInContext("ctxGroups = ['a']; prompt = () => 'renamed_group';", ctx);
@@ -1312,6 +1345,34 @@ clear();
 vm.runInContext("DATA.tabFileNames={}; DATA.tabFileCandidates={EMP2:['author_a','author_b']}; openNewPop('rename');",ctx);
 chk('歧义文件要求手动选择',byId.npFileName.value==='');
 byId.npOk.onclick();chk('未选文件不能提交',msgs().length===0);
+console.log('页签复制粘贴：当前右键页、未复制与跨包禁用');
+clear();vm.runInContext("tmCategory='SRC';",ctx);byId.tmCopy.onclick();
+chk('复制请求使用右键页签而非当前选中页',last().type==='copyTab'&&last().category==='SRC');
+clear();vm.runInContext("tmCategory='DEST'; DATA.tabClipboard=null;",ctx);byId.tmPaste.onclick();
+chk('未复制时不粘贴',msgs().length===0);
+vm.runInContext("DATA.tabClipboard={category:'SRC',groups:2,canPaste:false};",ctx);byId.tmPaste.onclick();
+chk('不同 Pack 的快照不粘贴',msgs().length===0);
+vm.runInContext("DATA.tabClipboard.canPaste=true;",ctx);byId.tmPaste.onclick();
+chk('粘贴使用目标页签',last().type==='pasteTab'&&last().category==='DEST');
+const bases=vm.runInContext(`(()=>{
+ const g={x:100,y:100,units:['u']},other={x:400,y:400,units:['v']};
+ return [1,2,3,4].map(p=>{
+  const a=anchor(g,p), b=anchor(other,p);
+  const pts=linkPath(a,b,0).match(/-?[\\d.]+/g).map(Number);
+  return {length:Math.hypot(pts[2]-pts[0],pts[3]-pts[1]),x:pts[6],y:pts[7],sx:pts[2],sy:pts[3]};
+ });
+})()`,ctx);
+chk('四方向附加基础短线均为零',bases.every(p=>p.length===0));
+chk('mid offset 为零时从兵牌中心转折',bases.every((p,i)=>i%2===0 ? p.y===143.5:p.x===120));
+const centerCases=vm.runInContext(`(()=>{
+ const out=[];
+ for(const n of [1,2,4])for(let p=1;p<=4;p++){
+  const g={x:100,y:80,units:Array(n).fill('u')};const a=anchor(g,p),b=box(g);
+  out.push(a.p.x===b.x+b.w/2&&a.p.y===b.y+b.h/2);
+ }
+ return out;
+})()`,ctx);
+chk('单兵与多兵组四方向都从各自中心起算',centerCases.length===12&&centerCases.every(Boolean));
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }
 console.log('【结果】✓ 全部 ' + good + ' 项通过');

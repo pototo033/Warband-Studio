@@ -339,10 +339,12 @@
   <div class="t" id="tmTitle">页签</div>
   <div class="row" id="tmRow1">
     <button id="tmRename">重命名…</button>
+    <button id="tmCopy">复制本页内容</button>
+    <button id="tmPaste" disabled>粘贴到此页</button>
     <button id="tmArt">换图…</button>
     <button id="tmImport">从其他 mod 导入页签…</button>
     <button id="tmScope">应用到其他种族…</button>
-    <button id="tmFactions">允许显示的派系…</button>
+    <button id="tmFactions">允许显示的派系 / 种族…</button>
     <button id="tmClose">关闭</button>
   </div>
   <div class="row" id="tmRow2" style="display:none;max-height:220px;overflow:auto;max-width:420px;flex-wrap:wrap"></div>
@@ -353,8 +355,12 @@
 </div>
 
 <div id="tabFactionPop" class="pop hidden" style="width:560px;max-width:90vw;max-height:85vh;overflow:auto">
-  <div class="t" id="tfTitle">页签允许显示的派系</div>
-  <div style="color:#9CA9B5;font-size:12px;margin-bottom:10px">控制游戏中当前军队能看到的页签，不修改兵种授权。未勾选表示不限制。</div>
+  <div class="t" id="tfTitle">页签允许显示的派系 / 种族</div>
+  <div id="tfHint" style="color:#9CA9B5;font-size:12px;margin-bottom:10px"></div>
+  <div class="row" style="margin-bottom:10px"><button id="tfInvert" aria-pressed="false">反选：关闭（勾选者显示）</button></div>
+  <div id="tfRaceTitle" style="font-size:12px;margin-bottom:6px">允许显示的种族（该种族全部派系）</div>
+  <div id="tfRaceList" style="max-height:160px;overflow:auto;display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px"></div>
+  <div id="tfFactionTitle" style="font-size:12px;margin-bottom:6px">另行允许的派系</div>
   <div class="row">
     <select id="tfRace" style="max-width:180px" aria-label="筛选种族"></select>
     <input id="tfSearch" placeholder="搜索派系名或 key" aria-label="搜索派系" style="flex:1;min-width:100px">
@@ -465,7 +471,7 @@ window.addEventListener('load', function () {
 });
 
 window.addEventListener('unhandledrejection', function (e) { report({ type: 'jsError', msg: 'promise: ' + ((e.reason && e.reason.message) || e.reason) }); });
-const CARD_W = 40, CARD_H = 87, SLOT = 46, STUB = 12;   // 步长 46（用户口径，别改成网格的 50）
+const CARD_W = 40, CARD_H = 87, SLOT = 46, STUB = 0;   // 用户指定取消附加短线，从兵牌/组中心计算，步长仍为 46。
 let drag = null;
 let DATA = { groups: [], links: [], icons: {} };
 let GROUPS = {};          // 组 key → 组对象（坐标的唯一真相，拖动时改它）
@@ -502,14 +508,10 @@ function anchor(g, pos) {
   const b = box(g);
   const d = DIR[pos] || [0, 1];
   const p = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
-  if (d[0] === 0) p.y = d[1] < 0 ? b.y : b.y + b.h;
-  else p.x = d[0] < 0 ? b.x : b.x + b.w;
   return { p: p, d: d };
 }
-// 走线（用户实测口径，必须和游戏一致）：
-//   mid_link_offset = 从起点沿**起始方向**先走这么多像素（游戏坐标单位，正负跟坐标轴）**才转第一个弯**；
-//   0 = 就在起始点转（游戏原本的单折路径）。所以中间那一小段的位置 = a1 + mo，
-//   起始方向是上下 → 挪 y；左右 → 挪 x。（以前这里按"两端中点"画，游戏里对不上。）
+// 用户指定的预览：不附加基础短线，mid_link_offset 从父组中心起算；0 在中心转折。
+// 已有 mo 数值不迁移。上下端口挪 y，左右端口挪 x，正负仍跟坐标轴；不声称是已证实的引擎公式。
 function linkPath(a, b, mo, reverse = false) {
   const A = a.p, B = b.p;
   const a1 = { x: A.x + a.d[0] * STUB, y: A.y + a.d[1] * STUB };
@@ -528,7 +530,7 @@ function linkPath(a, b, mo, reverse = false) {
 }
 
 // 自动 mid offset：让中间那段落在两端中间（就是画布以前的观感），并且**写进表** ——
-// 这样游戏里画出来的走线和画布一模一样（见 §7.45）。偏了就让用户拖转点手柄。
+// 自动值使用同一中心基准，避免预览和写入不一致；最终由游戏对照验收。
 function autoMidOffset(parentG, childG, parentPos, childPos) {
   if (!parentG || !childG) return 0;
   const A = anchor(parentG, parentPos || 3), B = anchor(childG, childPos || 1);
@@ -824,7 +826,7 @@ addEventListener('mousemove', e => {
   const d = linkPath3(rec);
   if (d !== null) setLinkD(rec, d);
   showKnob(rec);
-  document.getElementById('xy').textContent = 'mid_link_offset = ' + rec.mo + '（沿起始方向走的像素；0 = 起点处就转）';
+  document.getElementById('xy').textContent = 'mid_link_offset = ' + rec.mo + '（相对基础短线末端；0 = 基础末端转折）';
 });
 addEventListener('mouseup', e => {
   if (!knobDrag) return;
@@ -1357,6 +1359,10 @@ function buildRail(pages) {
       ev.preventDefault();
       tmCategory = value;
       document.getElementById('tmTitle').textContent = '页签 ' + value;
+      const copied = DATA.tabClipboard;
+      document.getElementById('tmPaste').disabled = !copied || !copied.canPaste;
+      document.getElementById('tmPaste').textContent = copied && copied.canPaste ? '粘贴 ' + copied.category + '（' + copied.groups + ' 组）' : '粘贴到此页';
+      document.getElementById('tmPaste').title = '只复制页内路线；成本共用，军事组与派系授权不补齐';
       document.getElementById('tmRow1').style.display = '';
       document.getElementById('tmRow2').style.display = 'none';
       document.getElementById('tmRow3').style.display = 'none';
@@ -2262,7 +2268,32 @@ document.getElementById('upClose').onclick = () => hidePop('upgPop');
 
 /* ───────────── 页签右键菜单 ───────────── */
 let tmCategory = '';
-let tfCategory = '', tfSelected = new Set();
+let tfCategory = '', tfSelected = new Set(), tfSelectedRaces = new Set(), tfExcluded = false;
+function drawTabVisibilityMode() {
+  const btn = document.getElementById('tfInvert');
+  btn.textContent = tfExcluded ? '反选：开启（勾选者隐藏）' : '反选：关闭（勾选者显示）';
+  btn.setAttribute('aria-pressed', String(tfExcluded)); btn.classList.toggle('primary', tfExcluded);
+  document.getElementById('tfHint').textContent = (tfExcluded
+    ? '只勾种族：该种族全部隐藏；只勾派系：这些派系隐藏；两者都勾：仅隐藏所选种族中的所选派系。其余保留原有显示条件。'
+    : '属于任一勾选种族或派系即允许显示，保留原有升级条件。') + ' 空名单不限制，不修改兵种授权。';
+  document.getElementById('tfRaceTitle').textContent = tfExcluded ? '排除的种族范围（勾派系后仅排除交集）' : '允许显示的种族（该种族全部派系）';
+  document.getElementById('tfFactionTitle').textContent = tfExcluded ? '排除的派系（未勾种族时不限种族）' : '另行允许的派系';
+}
+function drawTabRaceList() {
+  const host = document.getElementById('tfRaceList'); host.innerHTML = '';
+  const known = DATA.allRaces || [], keys = new Set(known.map(r => r.r));
+  const list = known.concat(Array.from(tfSelectedRaces).filter(r => !keys.has(r)).map(r => ({r, n:r})));
+  for (const r of list) {
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px;background:#202830;border-radius:4px;cursor:pointer;font-size:12px';
+    label.title = r.r;
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = r.r; cb.checked = tfSelectedRaces.has(r.r);
+    cb.onchange = () => { if (cb.checked) tfSelectedRaces.add(r.r); else tfSelectedRaces.delete(r.r); drawTabFactionList(); };
+    const text = document.createElement('span'); text.textContent = r.n || r.r;
+    label.appendChild(cb); label.appendChild(text); host.appendChild(label);
+  }
+  if (!list.length) host.textContent = '没有可用种族。';
+}
 function tabFactionCatalog() {
   const known = (DATA.tabVisibility || {}).factions || [];
   const keys = new Set(known.map(f => f.key));
@@ -2276,7 +2307,11 @@ function drawTabFactionList() {
   const race = document.getElementById('tfRace').value;
   const list = tabFactionCatalog().filter(f => (!race || f.race === race)
     && (!search || (f.key + ' ' + (f.name || '')).toLowerCase().includes(search)));
-  document.getElementById('tfSummary').textContent = (tfSelected.size ? ('已选 ' + tfSelected.size + ' 个派系') : '不限制派系')
+  document.getElementById('tfSummary').textContent = (tfSelected.size || tfSelectedRaces.size
+    ? (tfExcluded ? (tfSelectedRaces.size && tfSelected.size
+        ? ('排除 ' + tfSelectedRaces.size + ' 个种族内的 ' + tfSelected.size + ' 个所选派系（交集）')
+        : tfSelectedRaces.size ? ('排除 ' + tfSelectedRaces.size + ' 个种族的全部派系') : ('排除 ' + tfSelected.size + ' 个派系（不限种族）'))
+      : ('显示：' + tfSelectedRaces.size + ' 个种族 / ' + tfSelected.size + ' 个派系（任一满足）')) : '不限制种族和派系')
     + ' · 当前筛选 ' + list.length + ' 项' + (list.length > 120 ? '（仅显示前120项，请继续筛选）' : '');
   for (const f of list.slice(0, 120)) {
     const label = document.createElement('label');
@@ -2296,7 +2331,9 @@ function openTabFactionPop(category) {
   if (!data.known) { alert(data.error || '派系显示配置尚未读取，请稍后再试。'); return; }
   tfCategory = category;
   tfSelected = new Set((data.allowed || {})[category] || []);
-  document.getElementById('tfTitle').textContent = '页签 ' + category + ' · 允许显示的派系';
+  tfSelectedRaces = new Set((data.allowedRaces || {})[category] || []);
+  tfExcluded = (data.excluded || {})[category] === true;
+  document.getElementById('tfTitle').textContent = '页签 ' + category + ' · 允许显示的派系 / 种族';
   document.getElementById('tfSearch').value = '';
   const select = document.getElementById('tfRace'); select.innerHTML = '';
   for (const r of [{r: '', n: '全部种族'}, ...(DATA.allRaces || [])]) {
@@ -2304,21 +2341,31 @@ function openTabFactionPop(category) {
   }
   select.value = (DATA.allRaces || []).some(r => r.r === filterRace) ? filterRace : '';
   document.getElementById('tabMenu').classList.add('hidden');
-  drawTabFactionList(); showPop('tabFactionPop');
+  drawTabVisibilityMode(); drawTabRaceList(); drawTabFactionList(); showPop('tabFactionPop');
 }
 document.getElementById('tmFactions').onclick = () => openTabFactionPop(tmCategory);
 document.getElementById('tfRace').onchange = drawTabFactionList;
 document.getElementById('tfSearch').oninput = drawTabFactionList;
-document.getElementById('tfClear').onclick = () => { tfSelected.clear(); drawTabFactionList(); };
+document.getElementById('tfInvert').onclick = () => { tfExcluded = !tfExcluded; drawTabVisibilityMode(); drawTabFactionList(); };
+document.getElementById('tfClear').onclick = () => { tfSelected.clear(); tfSelectedRaces.clear(); drawTabRaceList(); drawTabFactionList(); };
 document.getElementById('tfCancel').onclick = () => hidePop('tabFactionPop');
 document.getElementById('tfSave').onclick = () => {
-  report({type: 'setTabAllowedFactions', category: tfCategory, factions: Array.from(tfSelected).sort()});
+  report({type: 'setTabAllowedFactions', category: tfCategory, factions: Array.from(tfSelected).sort(), races: Array.from(tfSelectedRaces).sort(), excluded: tfExcluded});
   hidePop('tabFactionPop');
 };
 document.getElementById('tmRename').onclick = () => {
   document.getElementById('tabMenu').classList.add('hidden');
   npRenameOld = tmCategory;
   openNewPop('rename');
+};
+document.getElementById('tmCopy').onclick = () => {
+  document.getElementById('tabMenu').classList.add('hidden');
+  report({type: 'copyTab', category: tmCategory});
+};
+document.getElementById('tmPaste').onclick = () => {
+  if (!DATA.tabClipboard || !DATA.tabClipboard.canPaste) return;
+  document.getElementById('tabMenu').classList.add('hidden');
+  report({type: 'pasteTab', category: tmCategory});
 };
 document.getElementById('tmClose').onclick = () => document.getElementById('tabMenu').classList.add('hidden');
 

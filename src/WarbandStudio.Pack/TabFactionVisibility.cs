@@ -9,10 +9,14 @@ public static class TabFactionVisibility
 {
     private const string Marker = "WarbandStudio.TabFactionVisibility.v1:";
     private const string Faction = "SelectedCharacter.MilitaryForceContext.FactionContext.FactionRecordContext.Key";
+    // CcoCampaignFaction.SubcultureContext：原版 character_information.twui.xml 同样使用此入口。
+    private const string Race = "SelectedCharacter.MilitaryForceContext.FactionContext.SubcultureContext.Key";
 
     public sealed class Settings
     {
         public Dictionary<string, string[]> Tabs { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string[]> Races { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, bool> Excluded { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> Visibility { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public string AutoSelect { get; set; } = "";
         public string Tree { get; set; } = "";
@@ -29,12 +33,20 @@ public static class TabFactionVisibility
             var data = JsonSerializer.Deserialize<Settings>(Convert.FromBase64String(comments[0].Value[Marker.Length..]))
                        ?? throw new InvalidDataException("配置为空");
             data.Tabs = new(data.Tabs, StringComparer.OrdinalIgnoreCase);
+            data.Races = new(data.Races, StringComparer.OrdinalIgnoreCase);
+            data.Excluded = new(data.Excluded, StringComparer.OrdinalIgnoreCase);
             data.Visibility = new(data.Visibility, StringComparer.OrdinalIgnoreCase);
-            foreach (var key in data.Tabs.Keys.ToArray())
+            foreach (var rules in new[] { data.Tabs, data.Races })
+            foreach (var key in rules.Keys.ToArray())
             {
                 if (!Regex.IsMatch(key, "^[A-Za-z0-9_]+$")) throw new InvalidDataException("页签 key 无效。");
-                data.Tabs[key] = Normalize(data.Tabs[key]);
-                if (data.Tabs[key].Length == 0) data.Tabs.Remove(key);
+                rules[key] = Normalize(rules[key]);
+                if (rules[key].Length == 0) rules.Remove(key);
+            }
+            foreach (var key in data.Excluded.Keys.ToArray())
+            {
+                if (!Regex.IsMatch(key, "^[A-Za-z0-9_]+$")) throw new InvalidDataException("页签 key 无效。");
+                if (!data.Excluded[key]) data.Excluded.Remove(key);
             }
             return (data, comments[0]);
         }
@@ -45,9 +57,17 @@ public static class TabFactionVisibility
         ? new(StringComparer.OrdinalIgnoreCase)
         : Metadata(XDocument.Parse(xml, LoadOptions.PreserveWhitespace)).Settings.Tabs;
 
+    public static Dictionary<string, string[]> ReadRaces(string? xml) => string.IsNullOrWhiteSpace(xml)
+        ? new(StringComparer.OrdinalIgnoreCase)
+        : Metadata(XDocument.Parse(xml, LoadOptions.PreserveWhitespace)).Settings.Races;
+
+    public static Dictionary<string, bool> ReadExcluded(string? xml) => string.IsNullOrWhiteSpace(xml)
+        ? new(StringComparer.OrdinalIgnoreCase)
+        : Metadata(XDocument.Parse(xml, LoadOptions.PreserveWhitespace)).Settings.Excluded;
+
     public static string[] Normalize(IEnumerable<string> factions) => factions.Select(f => f.Trim())
         .Where(f => f.Length > 0).Select(f => Regex.IsMatch(f, "^[A-Za-z0-9_]+$") ? f
-            : throw new ArgumentException("无效的派系 key：" + f))
+            : throw new ArgumentException("无效的派系/种族 key：" + f))
         .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToArray();
 
     private static IEnumerable<XElement> Callbacks(XContainer root) => root.Descendants()
@@ -60,48 +80,83 @@ public static class TabFactionVisibility
     private static XElement Visibility(XElement holder) => Callbacks(holder)
         .SingleOrDefault(e => (string?)e.Attribute("callback_id") == "ContextVisibilitySetter")
         ?? throw new InvalidDataException("页签缺少唯一的可见性回调：" + (string?)holder.Attribute("id"));
-    private static string Allowed(Settings settings, string category) => string.Join(" && ", settings.Tabs.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
-        .Select(kv => $"({category} != \"{kv.Key}\" || ({string.Join(" || ", kv.Value.Select(f => $"{Faction} == \"{f}\""))}))"));
+    private static IEnumerable<string> Categories(Settings settings) => settings.Tabs.Keys.Concat(settings.Races.Keys).Concat(settings.Excluded.Keys)
+        .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(k => k, StringComparer.OrdinalIgnoreCase);
+    private static string Selection(Settings settings, string key)
+    {
+        var factions = string.Join(" || ", settings.Tabs.GetValueOrDefault(key, []).Select(f => $"{Faction} == \"{f}\""));
+        var races = string.Join(" || ", settings.Races.GetValueOrDefault(key, []).Select(r => $"{Race} == \"{r}\""));
+        if (settings.Excluded.GetValueOrDefault(key))
+        {
+            // 只选种族/派系时排除整份名单；两者都有时，仅排除这些种族中的这些派系。
+            var hidden = string.Join(" && ", new[] { races, factions }.Where(s => s.Length > 0).Select(s => $"({s})"));
+            return hidden.Length == 0 ? "true" : $"({hidden}) == false";
+        }
+        var matches = string.Join(" || ", new[] { factions, races }.Where(s => s.Length > 0));
+        return matches.Length == 0 ? "true" : matches;
+    }
+    private static string Allowed(Settings settings, string category) => string.Join(" && ", Categories(settings)
+        .Select(key => $"({category} != \"{key}\" || ({Selection(settings, key)}))"));
 
     public static string Apply(string xml, IReadOnlyDictionary<string, string[]> edits,
         IEnumerable<(string Old, string New)>? renames = null,
-        IEnumerable<(string Key, string Donor)>? newTabs = null)
+        IEnumerable<(string Key, string Donor)>? newTabs = null,
+        IReadOnlyDictionary<string, string[]>? raceEdits = null,
+        IReadOnlyDictionary<string, bool>? excludedEdits = null)
     {
         var doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
         var (settings, comment) = Metadata(doc);
         var holders = Holders(doc);
         foreach (var (oldKey, newKey) in renames ?? [])
-            if (settings.Tabs.Remove(oldKey, out var selected)) settings.Tabs[newKey] = selected;
+        {
+            foreach (var rules in new[] { settings.Tabs, settings.Races })
+                if (rules.Remove(oldKey, out var selected)) rules[newKey] = selected;
+            if (settings.Excluded.Remove(oldKey, out var excluded)) settings.Excluded[newKey] = excluded;
+        }
 
-        // 克隆页签默认不限派系，不能悄悄继承母版的限制表达式。
+        // 克隆页签默认不限派系/种族，不能悄悄继承母版的限制表达式。
         foreach (var (key, donor) in newTabs ?? [])
             if (holders.TryGetValue(key, out var clone) && holders.TryGetValue(donor, out var original)
                 && settings.Visibility.TryGetValue(Id(original), out var baseExpression))
                 Visibility(clone).SetAttributeValue("context_function_id", baseExpression);
 
-        foreach (var (key, factions) in edits)
+        void ApplyRules(IReadOnlyDictionary<string, string[]> changes, Dictionary<string, string[]> rules)
         {
-            if (!Regex.IsMatch(key, "^[A-Za-z0-9_]+$")) throw new ArgumentException("无效的页签 key：" + key);
-            if (!holders.ContainsKey(key)) throw new InvalidDataException("页签缺少 TWUI holder，无法设置派系显示：" + key);
-            var selected = Normalize(factions);
-            if (selected.Length == 0) settings.Tabs.Remove(key);
-            else
+            foreach (var (key, entries) in changes)
             {
-                var canonical = (string?)holders[key].Descendants().FirstOrDefault(p => p.Name.LocalName == "property"
-                    && (string?)p.Attribute("name") == "God")?.Attribute("value") ?? key;
-                if (!Regex.IsMatch(canonical, "^[A-Za-z0-9_]+$")) throw new InvalidDataException("页签分类 key 无效。");
-                settings.Tabs.Remove(key);
-                settings.Tabs[canonical] = selected;
+                if (!Regex.IsMatch(key, "^[A-Za-z0-9_]+$")) throw new ArgumentException("无效的页签 key：" + key);
+                if (!holders.ContainsKey(key)) throw new InvalidDataException("页签缺少 TWUI holder，无法设置显示名单：" + key);
+                var selected = Normalize(entries);
+                if (selected.Length == 0) rules.Remove(key);
+                else
+                {
+                    var canonical = (string?)holders[key].Descendants().FirstOrDefault(p => p.Name.LocalName == "property"
+                        && (string?)p.Attribute("name") == "God")?.Attribute("value") ?? key;
+                    if (!Regex.IsMatch(canonical, "^[A-Za-z0-9_]+$")) throw new InvalidDataException("页签分类 key 无效。");
+                    rules.Remove(key);
+                    rules[canonical] = selected;
+                }
             }
+        }
+        ApplyRules(edits, settings.Tabs);
+        if (raceEdits is not null) ApplyRules(raceEdits, settings.Races);
+        foreach (var (key, excluded) in excludedEdits ?? new Dictionary<string, bool>())
+        {
+            if (!holders.ContainsKey(key)) throw new InvalidDataException("页签缺少 TWUI holder，无法设置反选：" + key);
+            var canonical = (string?)holders[key].Descendants().FirstOrDefault(p => p.Name.LocalName == "property"
+                && (string?)p.Attribute("name") == "God")?.Attribute("value") ?? key;
+            if (!Regex.IsMatch(canonical, "^[A-Za-z0-9_]+$")) throw new InvalidDataException("页签分类 key 无效。");
+            settings.Excluded.Remove(key);
+            if (excluded) settings.Excluded[canonical] = true;
         }
         foreach (var (key, holder) in holders)
         {
             var cb = Visibility(holder);
             if (settings.Visibility.TryGetValue(Id(holder), out var original)) cb.SetAttributeValue("context_function_id", original);
-            if (!settings.Tabs.TryGetValue(key, out var factions)) continue;
+            if (!settings.Tabs.ContainsKey(key) && !settings.Races.ContainsKey(key) && !settings.Excluded.ContainsKey(key)) continue;
             var baseline = Expression(cb);
             settings.Visibility.TryAdd(Id(holder), baseline);
-            cb.SetAttributeValue("context_function_id", $"({baseline}) && ({string.Join(" || ", factions.Select(f => $"{Faction} == \"{f}\""))})");
+            cb.SetAttributeValue("context_function_id", $"({baseline}) && ({Selection(settings, key)})");
         }
         var auto = Callbacks(doc).SingleOrDefault(e => (string?)e.Attribute("context_object_id") == "CcoCampaignUnit"
             && (Expression(e).Contains("FirstValidUpgradeCategoryForUnit") || Expression(e).Contains("studioVisibleTabs")))
@@ -112,7 +167,7 @@ public static class TabFactionVisibility
         if (settings.Tree.Length == 0) settings.Tree = Expression(tree);
         auto.SetAttributeValue("context_function_id", settings.AutoSelect);
         tree.SetAttributeValue("context_function_id", settings.Tree);
-        if (settings.Tabs.Count > 0)
+        if (settings.Tabs.Count > 0 || settings.Races.Count > 0 || settings.Excluded.Count > 0)
         {
             // 与实机验证的两页测试相同：可选列表先排除不属于军队派系的页，再保留原有优先页/回退到首个可用页。
             var preferred = "UnitUpgradeManagerContext.FirstValidUpgradeCategoryForUnit(this, self.CurrentSelectedComponents.FirstContext.ParentContext.GetProperty(\"God\"))";

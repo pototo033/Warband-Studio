@@ -104,6 +104,10 @@ public sealed class WarbandEdits
 
     /// <summary>页签游戏内可见派系；空数组表示取消限制，与兵种授权完全独立。</summary>
     public Dictionary<string, string[]> TabAllowedFactions { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>页签游戏内可见种族（subculture）；与派系名单取并集，两者都为空才不限制。</summary>
+    public Dictionary<string, string[]> TabAllowedRaces { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>页签名单反选：只选种族/派系时排除该名单，两者都有时排除交集；false 恢复允许模式。</summary>
+    public Dictionary<string, bool> TabVisibilityExcluded { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>新建页签时记下的归属：种族级（Faction 空）= 该种族所有军事组；派系级 = 只它那一个。</summary>
     public List<(string Category, string? Race, string? Faction)> TabScopes { get; } = [];
@@ -246,7 +250,7 @@ public sealed class WarbandEdits
     public int Count =>
         TabFileNames.Count + TableReplacements.Count + AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
         AddRoute.Count + RemoveRoute.Count + AddLink.Count + RemoveLink.Count + AddCost.Count + NewTabs.Count + AddUnitGroup.Count + FileReplacements.Count + RemoveUnitGroup.Count + TabScopes.Count + OpenedTabs.Count + TabRenames.Count + UnlockXp.Count + TabRaceScopes.Count + RemoveFiles.Count +
-        PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count + RemovePoolLinks.Count + TabAllowedFactions.Count;
+        PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count + RemovePoolLinks.Count + TabAllowedFactions.Count + TabAllowedRaces.Count + TabVisibilityExcluded.Count;
 
     public bool IsEmpty => Count == 0;
 
@@ -284,6 +288,8 @@ public sealed class WarbandEdits
         P("换图", FileReplacements.Count);
         P("页签→其他种族", TabRaceScopes.Count);
         P("页签显示派系", TabAllowedFactions.Count);
+        P("页签显示种族", TabAllowedRaces.Count);
+        P("页签显示反选", TabVisibilityExcluded.Count);
         P("删文件", RemoveFiles.Count);
         return parts.Count == 0 ? "没有编辑" : string.Join("，", parts);
     }
@@ -323,6 +329,8 @@ public sealed class WarbandEdits
         c.UnlockXp.AddRange(UnlockXp);
         c.TabRaceScopes.AddRange(TabRaceScopes);
         foreach (var (key, factions) in TabAllowedFactions) c.TabAllowedFactions[key] = factions.ToArray();
+        foreach (var (key, races) in TabAllowedRaces) c.TabAllowedRaces[key] = races.ToArray();
+        foreach (var (key, excluded) in TabVisibilityExcluded) c.TabVisibilityExcluded[key] = excluded;
         return c;
     }
 }

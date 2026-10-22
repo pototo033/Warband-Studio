@@ -678,24 +678,7 @@
                                        Foreground="{DynamicResource AeBrush.Warning}"
                                        Text="⚠ 请先确定你所要用的资源id" />
                             <!-- 默认**空**（不用其他资源）；打字按名称/key 筛选，选一项才用 -->
-                            <ComboBox x:Name="CmbCostRes" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
-                                      TextSearch.TextPath="Name"
-                                      ItemsSource="{Binding PooledResShown}"
-                                      Text="{Binding CostResText, UpdateSourceTrigger=PropertyChanged}"
-                                      PreviewMouseLeftButtonDown="OnComboArrowDown"
-                                      SelectionChanged="OnCostResPickChanged"
-                                      HorizontalContentAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal">
-                                            <Image Source="{Binding IconFile}" Width="18" Height="18" Margin="0,0,6,0"
-                                                   RenderOptions.BitmapScalingMode="HighQuality" />
-                                            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"
-                                                       ToolTip="{Binding Key}" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
+                            <views:CostResourcePicker x:Name="CmbCostRes" />
                             <TextBlock Text="已有资源关联（选择一条编辑；其余关联保留）" Margin="0,8,0,2" Foreground="{DynamicResource Text.Secondary}" />
                             <ComboBox ItemsSource="{Binding CostResourceLinks}" SelectedItem="{Binding SelectedCostResourceLink}" DisplayMemberPath="Label" />
                             <WrapPanel Margin="0,6,0,0">

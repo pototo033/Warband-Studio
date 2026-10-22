@@ -129,11 +129,19 @@ public static class AmendTestRunner
                                 "ui/skins/default/warband_upgrades/background_images_emp.png"));
         // 本地素材当来源：目标条目在包里本来是没的 → 导出时新增，字节 = 本地文件
         e.FileReplacements.Add(("ui/skins/default/warband_upgrades/background_images_studio_local.png", localBg));
-        e.AddUnitGroup.Add((sampleUnit, "wh_main_group_empire"));  // 军事组授权（种族级：填该种族所有组）
         // 同一个单位新增两家派系专属许可，确保写表不能按 unit 单键合并。
         string[] exclusiveFactions;
+        string grantGroup;
         using (var permissionVanilla = PackArchive.Open(vanillaPath))
         {
+            // 固定帝国组可能已由原版授权，正常去重后不会新增行；选择真正缺少的组合验收新增分支。
+            const string militaryTable="units_to_groupings_military_permissions_tables";
+            var baseMilitary=TableFiles.ReadComposite(permissionVanilla,militaryTable,["unit","military_group"],schema)!;
+            var military=TableFiles.MergeComposite(baseMilitary,TableFiles.ReadComposite(pack,militaryTable,["unit","military_group"],schema),["unit","military_group"])!;
+            var assigned=military.Rows.Where(r=>r[Col(military,"unit")].ToTsv().Equals(sampleUnit,StringComparison.OrdinalIgnoreCase))
+                .Select(r=>r[Col(military,"military_group")].ToTsv()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            grantGroup=baseMilitary.Rows.Select(r=>r[Col(baseMilitary,"military_group")].ToTsv()).First(g=>!assigned.Contains(g));
+            e.AddUnitGroup.Add((sampleUnit,grantGroup));
             var originalExclusive = TableFiles.ReadComposite(permissionVanilla, "units_to_exclusive_faction_permissions_tables", ["key", "faction"], schema)!;
             var alreadyGranted = originalExclusive.Rows.Where(r => r[Col(originalExclusive, "key")].ToTsv().Equals(sampleUnit, StringComparison.OrdinalIgnoreCase)
                 && (r[Col(originalExclusive, "allowed")].ToTsv().Equals("true", StringComparison.OrdinalIgnoreCase) || r[Col(originalExclusive, "allowed")].ToTsv() == "1"))
@@ -396,7 +404,7 @@ public static class AmendTestRunner
             ["deletedJunctionGroup"] = delJunctionGroup,
             ["grantUnit"] = sampleUnit,
             ["unlockUnit"] = unlockUnit,
-            ["grantGroup"] = "wh_main_group_empire",
+            ["grantGroup"] = grantGroup,
             ["exclusiveFactions"] = exclusiveFactions,
             ["renameOld"] = "BRT",
             ["renameNew"] = "BRTREN",

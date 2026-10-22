@@ -488,6 +488,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         if (oldKey.Length == 0 || newKey.Length == 0 || oldKey.Equals(newKey, StringComparison.OrdinalIgnoreCase)) { InvalidateCanvas(); return; }
         Edits.TabRenames.Add((oldKey, newKey));
         if (Edits.TabAllowedFactions.Remove(oldKey, out var allowedFactions)) Edits.TabAllowedFactions[newKey] = allowedFactions;
+        if (Edits.TabAllowedRaces.Remove(oldKey, out var allowedRaces)) Edits.TabAllowedRaces[newKey] = allowedRaces;
+        if (Edits.TabVisibilityExcluded.Remove(oldKey, out var excluded)) Edits.TabVisibilityExcluded[newKey] = excluded;
         for (var i = 0; i < Edits.TabScopes.Count; i++)
             if (Edits.TabScopes[i].Category.Equals(oldKey, StringComparison.OrdinalIgnoreCase))
                 Edits.TabScopes[i] = (newKey, Edits.TabScopes[i].Race, Edits.TabScopes[i].Faction);
@@ -1073,7 +1075,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                 DropFiles("units_to_exclusive_faction_permissions_tables", t => Enumerable.Range(0, t.Rows.Count)
                     .Any(i => dropExclusive.Contains(CellOf(t, "key", i) + "\u0001" + CellOf(t, "faction", i))));
             if (Edits.UnlockXp.Count > 0) Studio("main_units_tables", WarbandExporter.UnlockTableFileName);
-            if (Edits.TabAllowedFactions.Count > 0)
+            if (Edits.TabAllowedFactions.Count > 0 || Edits.TabAllowedRaces.Count > 0 || Edits.TabVisibilityExcluded.Count > 0)
             {
                 var visibilityFile = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
                 if (visibilityFile is not null) set.Add(visibilityFile.Path.Replace(Path.DirectorySeparatorChar, '/'));
@@ -3008,6 +3010,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             fileNames[tab]=bindings.GetValueOrDefault(tab)??(infoNames.Length==1 ? infoNames[0].Split('/')[^1] : candidates.Length==1 ? candidates[0] : "");
         }
         jso["tabFileNames"]=fileNames;jso["tabFileCandidates"]=fileChoices;
+        jso["tabClipboard"]=PageClipboardJson();
         foreach (var t in Edits.OpenedTabs) if (seenPages.Add(t)) pages.Add(t);   // 「打开页签」加进来的
         jso["openedTabs"] = ToJsonArray(Edits.OpenedTabs);
         // 页签右键「应用到其他种族」：手工归属（并进 pageRaces 一起给页面判断"这个页签归谁"）

@@ -27,17 +27,27 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
             """;
         var path = MakePack("visibility.pack", (inner, Encoding.UTF8.GetBytes(xml)));
         await _backend.OpenPackAsync(path);
-        _backend.Edit(() => { _backend.SetTabAllowedFactions("EMP", ["reikland", "wissenland"]); return true; });
+        _backend.Edit(() => { _backend.SetTabVisibility("EMP", ["reikland", "wissenland"], ["wh_main_sc_emp_empire"], true); return true; });
         Assert.Contains(inner, _backend.EditedFiles());
         Assert.Empty(_backend.Edits.AddUnitGroup); Assert.Empty(_backend.Edits.AddExclusive);
-        Assert.True(_backend.Undo()); Assert.Empty(_backend.Edits.TabAllowedFactions);
+        var recovery = _backend.CaptureUpdateRecovery();
+        var recovered = System.Text.Json.JsonSerializer.Deserialize<RecoverySession>(System.Text.Json.JsonSerializer.Serialize(recovery, UpdateRecovery.Json), UpdateRecovery.Json)!;
+        Assert.Equal(["wh_main_sc_emp_empire"], recovered.Packs.Single(p => p.OriginalPath == path).Edits.TabAllowedRaces["EMP"]);
+        Assert.True(recovered.Packs.Single(p => p.OriginalPath == path).Edits.TabVisibilityExcluded["EMP"]);
+        Assert.True(_backend.Undo()); Assert.Empty(_backend.Edits.TabAllowedFactions); Assert.Empty(_backend.Edits.TabAllowedRaces);
+        Assert.Empty(_backend.Edits.TabVisibilityExcluded);
         Assert.True(_backend.Redo()); Assert.Equal(2, _backend.Edits.TabAllowedFactions["EMP"].Length);
+        Assert.Equal(["wh_main_sc_emp_empire"], _backend.Edits.TabAllowedRaces["EMP"]);
+        Assert.True(_backend.Edits.TabVisibilityExcluded["EMP"]);
         await _backend.SaveInPlaceAsync();
         Assert.Equal(0, _backend.EditCount);
         using (var archive = PackArchive.Open(path))
         {
-            var saved = TabFactionVisibility.Read(Encoding.UTF8.GetString(archive.ReadDecoded(archive.Find(inner)!)));
+            var savedXml = Encoding.UTF8.GetString(archive.ReadDecoded(archive.Find(inner)!));
+            var saved = TabFactionVisibility.Read(savedXml);
             Assert.Equal(["reikland", "wissenland"], saved["EMP"]);
+            Assert.Equal(["wh_main_sc_emp_empire"], TabFactionVisibility.ReadRaces(savedXml)["EMP"]);
+            Assert.True(TabFactionVisibility.ReadExcluded(savedXml)["EMP"]);
         }
         await _backend.OpenPackAsync(_pack);
         Assert.Empty(_backend.Edits.TabAllowedFactions);
@@ -45,7 +55,29 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
         _backend.Edit(() => { _backend.SetTabAllowedFactions("EMP", []); return true; });
         await _backend.SaveInPlaceAsync();
         using (var archive = PackArchive.Open(path))
-            Assert.Empty(TabFactionVisibility.Read(Encoding.UTF8.GetString(archive.ReadDecoded(archive.Find(inner)!))));
+        {
+            var savedXml = Encoding.UTF8.GetString(archive.ReadDecoded(archive.Find(inner)!));
+            Assert.Empty(TabFactionVisibility.Read(savedXml));
+            Assert.Single(TabFactionVisibility.ReadRaces(savedXml));
+            Assert.True(TabFactionVisibility.ReadExcluded(savedXml)["EMP"]);
+        }
+        _backend.Edit(() => { _backend.SetTabVisibility("EMP", [], []); return true; });
+        await _backend.SaveInPlaceAsync();
+        using (var archive = PackArchive.Open(path))
+        {
+            var savedXml = Encoding.UTF8.GetString(archive.ReadDecoded(archive.Find(inner)!));
+            Assert.Empty(TabFactionVisibility.Read(savedXml)); Assert.Empty(TabFactionVisibility.ReadRaces(savedXml));
+            Assert.True(TabFactionVisibility.ReadExcluded(savedXml)["EMP"]);
+        }
+        _backend.Edit(() => { _backend.SetTabVisibility("EMP", [], [], false); return true; });
+        await _backend.SaveInPlaceAsync();
+        using (var archive = PackArchive.Open(path))
+        {
+            var savedXml = Encoding.UTF8.GetString(archive.ReadDecoded(archive.Find(inner)!));
+            Assert.Empty(TabFactionVisibility.Read(savedXml)); Assert.Empty(TabFactionVisibility.ReadRaces(savedXml));
+            Assert.Empty(TabFactionVisibility.ReadExcluded(savedXml));
+            Assert.True(System.Xml.Linq.XNode.DeepEquals(System.Xml.Linq.XDocument.Parse(xml), System.Xml.Linq.XDocument.Parse(savedXml)));
+        }
     }
     private readonly Schema _schema = Schema.Load(RpfmCli.LocateSchema()!);
     private Backend _backend = null!;

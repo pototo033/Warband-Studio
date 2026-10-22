@@ -27,6 +27,7 @@ public sealed partial class MainViewModel
             if (!Set(ref _selectedCostResourceLink, value) || value is null) return;
             _addingCostResource = false;
             _loadedPoolId = value.PoolId; _loadedResKey = value.Resource; _loadedResAmount = value.Amount;
+            _pickedResKey = value.Resource;
             _costResText = PooledResAll.FirstOrDefault(r => r.Key.Equals(value.Resource, StringComparison.OrdinalIgnoreCase))?.Name ?? value.Resource;
             _costResAmount = value.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture);
             ++_costFormRevision;
@@ -41,6 +42,7 @@ public sealed partial class MainViewModel
         SelectedCostResourceLink = null;
         _addingCostResource = true;
         _loadedPoolId = ""; _loadedResKey = ""; _loadedResAmount = 0;
+        _pickedResKey = "";
         _costResText = ""; _costResAmount = "";
         ++_costFormRevision;
         Raise(nameof(CostResText)); Raise(nameof(CostResAmount));
@@ -52,6 +54,8 @@ public sealed partial class MainViewModel
         if (!_loadedExisting || SelectedCostResourceLink is not { } link) { CostStatus = "先选中一条资源关联"; return; }
         CostStatus = CostEdit(() => _backend.RemoveWarbandCostResource(CostId, link.PoolId));
         if (!CostStatus.StartsWith("成本工坊", StringComparison.Ordinal)) return;
+        CostResourceLinks.Remove(link);
+        AddCostResourceLine(); // 立即进入追加状态，清理旧选中项；其余资源不被下一次选择覆盖。
         RebuildTree(); RefreshPooledResources(); PackOpened?.Invoke(); AutoSaveSoon();
     }
     private string CostEdit(Func<string> action)

@@ -127,22 +127,6 @@ public partial class MainWindow : Window
             }
             Services.FileLog.Write($"[ui] 成本 id 下拉展开：{CmbCostId.Items.Count} 条");
         };
-        CmbCostRes.DropDownOpened += (_, _) =>
-        {
-            var text = CmbCostRes.Text;
-            if (CmbCostRes.SelectedItem is Services.Backend.PooledResource r &&
-                !string.Equals(text, r.Name, StringComparison.Ordinal) &&
-                !string.Equals(text, r.Key, StringComparison.Ordinal))
-            {
-                CmbCostRes.SelectedItem = null;
-                if (!string.Equals(CmbCostRes.Text, text, StringComparison.Ordinal))
-                {
-                    CmbCostRes.Text = text;
-                    _vm.CostResText = text;
-                }
-            }
-            Services.FileLog.Write($"[ui] 选用资源下拉展开：{CmbCostRes.Items.Count} 条");
-        };
     }
 
     /// <summary>成本工坊：「重命名…」→ 把当前成本 id 改成新名字（保存后旧 id 那条会被删掉）。</summary>
@@ -390,19 +374,6 @@ public partial class MainWindow : Window
         _vm.CostId = pick.Id;
     }
 
-    // 资源下拉里选了某一项 → 同样把输入框钉死成**资源名**（可编辑下拉默认填记录 ToString 乱码；
-    // VM 的 ResolvedResource() 按 名称/key 解析，所以填 Name（空则退回 key））
-    private void OnCostResPickChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        if (sender is not System.Windows.Controls.ComboBox cb) return;
-        var pick = (e.AddedItems.Count > 0 ? e.AddedItems[0] : null) as Services.Backend.PooledResource
-                   ?? cb.SelectedItem as Services.Backend.PooledResource;
-        if (pick is null) return;
-        var text = pick.Name.Length > 0 ? pick.Name : pick.Key;
-        if (!string.Equals(cb.Text, text, StringComparison.Ordinal)) cb.Text = text;
-        _vm.NotePickedRes(pick.Key);      // 过滤时保留这条（同成本下拉）
-        _vm.CostResText = text;
-    }
 
     // 删成本：先问一句（删的是原文件里的行，撤销不了）
     private void OnDeleteCost(object sender, RoutedEventArgs e)
@@ -712,7 +683,7 @@ public partial class MainWindow : Window
         }
 
         Dump("初始 CmbCostId", CmbCostId);
-        Dump("初始 CmbCostRes", CmbCostRes);
+        FileLog.Write($"[selftest] 初始资源选择器：items={CmbCostRes.Items.Count} text={CmbCostRes.Text}");
         FileLog.Write("[selftest] 工坊「当前包」提示：" + _vm.CostPackLine);
 
         CmbCostId.IsDropDownOpen = true;                              // ① 直接设（等同"属性层能开吗"）
@@ -736,7 +707,7 @@ public partial class MainWindow : Window
 
         CmbCostRes.IsDropDownOpen = true;                             // ③ 资源下拉对照
         await Task.Delay(400);
-        Dump("③ CmbCostRes 设 open=true", CmbCostRes);
+        FileLog.Write($"[selftest] ③ 资源选择器：open={CmbCostRes.IsDropDownOpen} items={CmbCostRes.Items.Count}");
         CmbCostRes.IsDropDownOpen = false;
         await Task.Delay(250);
 

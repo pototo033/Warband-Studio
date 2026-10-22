@@ -710,7 +710,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             using var message = JsonDocument.Parse(json);
             var type = message.RootElement.GetProperty("type").GetString();
-            if (type is "undo" or "redo" or "renameGroup") { lock (_backend.StateSync) ApplyCanvasEditCore(json); }
+            if (type is "undo" or "redo" or "renameGroup" or "copyTab" or "pasteTab") { lock (_backend.StateSync) ApplyCanvasEditCore(json); }
             else _backend.Edit(() => { ApplyCanvasEditCore(json); return true; });
         }
         catch (Exception ex) { Status = "画布编辑失败：" + ex.Message; FileLog.Write("画布编辑事务失败", ex); }
@@ -862,6 +862,14 @@ public sealed partial class MainViewModel : ObservableObject
                 case "renameTab":
                     _backend.RenameTab(S("old"), S("new"), S("fileName").Length>0 ? S("fileName"):null);
                     break;
+                case "copyTab":
+                    Status = _backend.CopyTab(S("category"));
+                    PackOpened?.Invoke();
+                    return;
+                case "pasteTab":
+                    Status = _backend.PasteTab(S("category"));
+                    _backend.InvalidateCanvas();RebuildTree();PackOpened?.Invoke();RefreshOpenTables();RefreshLibrarySoon();AutoSaveSoon();
+                    return;
                 case "renameGroup":
                     _backend.RenameGroup(S("old"), S("new"));
                     break;
@@ -871,8 +879,22 @@ public sealed partial class MainViewModel : ObservableObject
                         throw new InvalidOperationException("页签显示派系名单格式错误。");
                     var factions = allowed.EnumerateArray().Select(x => x.GetString()
                         ?? throw new InvalidOperationException("派系 key 不能为空。")).ToArray();
-                    _backend.SetTabAllowedFactions(S("category"), factions);
-                    Status = "已设置页签显示派系（待保存）；不修改兵种授权。";
+                    string[]? races = null;
+                    if (m.TryGetProperty("races", out var raceList))
+                    {
+                        if (raceList.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("页签显示种族名单格式错误。");
+                        races = raceList.EnumerateArray().Select(x => x.GetString()
+                            ?? throw new InvalidOperationException("种族 key 不能为空。")).ToArray();
+                    }
+                    bool? excluded = null;
+                    if (m.TryGetProperty("excluded", out var mode))
+                    {
+                        if (mode.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                            throw new InvalidOperationException("页签反选模式格式错误。");
+                        excluded = mode.GetBoolean();
+                    }
+                    _backend.SetTabVisibility(S("category"), factions, races, excluded);
+                    Status = "已设置页签显示派系/种族（待保存）；不修改兵种授权。";
                     break;
                 }
                 case "closeTab":

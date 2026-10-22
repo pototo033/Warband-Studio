@@ -25,6 +25,7 @@ public sealed partial class BackendSafetyTests
             if(type==typeof(string)) return "test_key";
             if(type==typeof(byte[])) return new byte[]{1,7,255};
             if(type==typeof(string[])) return new[]{"faction_a","faction_b"};
+            if(type==typeof(bool)) return true;
             if(type==typeof(int)) return 7;
             if(type==typeof(long)) return -19L;
             if(type==typeof(double)) return -3.25d;
