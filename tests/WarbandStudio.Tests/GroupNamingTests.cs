@@ -8,21 +8,26 @@ public class GroupNamingTests
     private static readonly Func<string, bool> None = _ => false;
 
     [Theory]
-    [InlineData("wh2_main_skv_inf_clanrat_1", "clanrat")]      // 结尾 _1 是变体号，不算"词"
-    [InlineData("Yukino_Skv_Inf_Night_Runners", "Runners")]
-    [InlineData("wh_main_brt_art_field_trebuchet", "trebuchet")]
+    [InlineData("wh2_main_skv_inf_clanrat_1", "inf_clanrat")]
+    [InlineData("Yukino_Skv_Inf_Night_Runners", "Night_Runners")]
+    [InlineData("wh_main_brt_art_field_trebuchet", "field_trebuchet")]
+    [InlineData("wh2_dlc11_cst_inf_zombie_gunnery_mob_ror_0", "gunnery_mob_ror")]
+    [InlineData("wh2_dlc11_cst_mon_rotting_leviathan_ROR_0", "rotting_leviathan_ROR")]
+    [InlineData("wh2_cst_inf_zombie_0_ror_1", "inf_zombie_ror")]
+    [InlineData("unit_ror_0", "unit_ror")]
+    [InlineData("some_mirror_warrior_0", "mirror_warrior")]
     [InlineData("unit_0_1", "unit")]                          // 结尾全是数字 → 退到最后一个有意义的词
     [InlineData("999", "999")]                                // 全数字 → 兜底用尾段
     [InlineData("", "")]
-    public void LastWord_取最后一个有意义的词(string unit, string want) =>
-        Assert.Equal(want, GroupNaming.LastWord(unit));
+    public void UnitWords_普通两词精英三词且忽略数字(string unit, string want) =>
+        Assert.Equal(want, GroupNaming.UnitWords(unit));
 
     [Fact]
     public void NewKey_前缀_页签_兵种词_多兵依次接()
     {
         var k = GroupNaming.NewKey("Yukino", "SKV",
             new[] { "wh2_main_skv_inf_clanrat_1", "Yukino_Skv_Inf_Night_Runners" }, None);
-        Assert.Equal("Yukino_SKV_clanrat_Runners", k);
+        Assert.Equal("Yukino_SKV_inf_clanrat_Night_Runners", k);
     }
 
     [Fact]
@@ -31,7 +36,7 @@ public class GroupNamingTests
 
     [Fact]
     public void NewKey_前缀两头的下划线会被清掉() =>
-        Assert.Equal("Yukino_SKV_clanrat", GroupNaming.NewKey("_Yukino_", "SKV", new[] { "a_clanrat_1" }, None));
+        Assert.Equal("Yukino_SKV_a_clanrat", GroupNaming.NewKey("_Yukino_", "SKV", new[] { "a_clanrat_1" }, None));
 
     [Fact]
     public void NewKey_没配前缀_返回null_由调用方退回旧命名() =>
@@ -42,8 +47,8 @@ public class GroupNamingTests
     {
         var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "Yukino_SKV_clanrat", "Yukino_SKV_clanrat_2",
+            "Yukino_SKV_a_clanrat", "Yukino_SKV_a_clanrat_2",
         };
-        Assert.Equal("Yukino_SKV_clanrat_3", GroupNaming.NewKey("Yukino", "SKV", new[] { "a_clanrat" }, taken.Contains));
+        Assert.Equal("Yukino_SKV_a_clanrat_3", GroupNaming.NewKey("Yukino", "SKV", new[] { "a_clanrat" }, taken.Contains));
     }
 }

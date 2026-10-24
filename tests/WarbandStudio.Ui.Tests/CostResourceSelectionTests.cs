@@ -9,6 +9,92 @@ namespace WarbandStudio.Ui.Tests;
 
 public sealed partial class BackendSafetyTests
 {
+    [Fact]
+    public Task ResourcePickerInsideRightTabsDoesNotReloadDraftOnBubbledSelection() => OnCostPickerSta(async () =>
+    {
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
+        await using var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
+        await backend.OpenPackAsync(MakePack("routed-cost-picker.pack"));
+        backend.Edit(() => backend.RemoveWarbandCostResource("C", "chiv_pool"));
+        await vm.RefreshPooledResourcesAsync(); vm.CostId = "C";
+        var picker = new CostResourcePicker { DataContext = vm };
+        var costTab = new TabItem { Content = picker };
+        var tabs = new TabControl { Items = { costTab }, SelectedItem = costTab };
+        // 只装配真实控件树和生产事件处理器，不启动主窗口的 WebView/更新检查。
+        var shell = (MainWindow)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(MainWindow));
+        const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+        typeof(MainWindow).GetField("_vm", fields)!.SetValue(shell, vm);
+        typeof(MainWindow).GetField("RightTabs", fields)!.SetValue(shell, tabs);
+        typeof(MainWindow).GetField("CostTab", fields)!.SetValue(shell, costTab);
+        var handler = (SelectionChangedEventHandler)typeof(MainWindow).GetMethod("OnRightTabsChanged", fields)!
+            .CreateDelegate(typeof(SelectionChangedEventHandler), shell);
+        tabs.SelectionChanged += handler;
+        var bubbled = 0;
+        tabs.AddHandler(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
+            new SelectionChangedEventHandler((_, e) => { if (!ReferenceEquals(e.OriginalSource, tabs)) bubbled++; }), true);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        picker.IsDropDownOpen = true;
+        ((ListBox)picker.FindName("Choices")).SelectedItem = vm.PooledResAll.Single(r => r.Key == "chivalry");
+        vm.CostResAmount = "-27";
+        await Task.Delay(100);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.True(bubbled > 0);
+        Assert.Equal("chivalry", picker.Text); Assert.Equal("-27", vm.CostResAmount);
+        picker.IsDropDownOpen = true;
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(vm.PooledResAll.Count, picker.Items.Count);
+        picker.IsDropDownOpen = false;
+        vm.CreateWarbandCost(); await vm.RefreshPooledResourcesAsync();
+        Assert.Equal("chivalry", Assert.Single(vm.CostResourceLinks).Resource);
+        Assert.Equal(-27, vm.CostResourceLinks.Single().Amount);
+        tabs.SelectionChanged -= handler;
+    });
+
+    [Fact]
+    public Task ResourceButtonsAppendReplaceRemoveAndConsecutiveEditsPreserveOtherLinks() => OnCostPickerSta(async () =>
+    {
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
+        await using var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
+        var path = MakePack("cost-actions.pack", ("db/pooled_resources_tables/extra", Table("pooled_resources_tables", new Dictionary<string, object>() { ["key"] = "extra" })));
+        await backend.OpenPackAsync(path);
+        await vm.RefreshPooledResourcesAsync(); vm.CostId = "C";
+        vm.SelectedCostResourceLink = vm.CostResourceLinks.Single(r => r.Resource == "chivalry");
+        vm.PickCostResource(vm.PooledResAll.Single(r => r.Key == "extra")); vm.CostResAmount = "-7";
+        vm.AddCostResourceCommand.Execute(null);
+        Assert.Equal(3, vm.CostResourceLinks.Count);
+        Assert.Equal(-4, vm.CostResourceLinks.Single(r => r.Resource == "chivalry").Amount);
+        // 不等待异步刷新：新增后立刻改值、删除、重新追加。
+        vm.CostResAmount = "-8"; vm.CreateWarbandCost();
+        Assert.Equal(-8, vm.SelectedCostResourceLink!.Amount);
+        vm.RemoveCostResourceCommand.Execute(null);
+        vm.PickCostResource(vm.PooledResAll.Single(r => r.Key == "extra")); vm.CostResAmount = "-9";
+        vm.AddCostResourceCommand.Execute(null);
+        Assert.Equal(3, vm.CostResourceLinks.Count);
+        Assert.Equal(-9, vm.SelectedCostResourceLink!.Amount);
+        vm.PickCostResource(vm.PooledResAll.Single(r => r.Key == "food"));
+        vm.AddCostResourceCommand.Execute(null);
+        Assert.Contains("已有配置", vm.CostStatus);
+        vm.ReplaceCostResourceCommand.Execute(null);
+        Assert.Contains("已有配置", vm.CostStatus);
+        Assert.Equal(-3, vm.CostResourceLinks.Single(r => r.Resource == "food").Amount);
+        vm.SelectedCostResourceLink = vm.CostResourceLinks.Single(r => r.Resource == "extra");
+        vm.RemoveCostResourceCommand.Execute(null);
+        await vm.RefreshPooledResourcesAsync();
+        vm.SelectedCostResourceLink = vm.CostResourceLinks.Single(r => r.Resource == "chivalry");
+        vm.PickCostResource(vm.PooledResAll.Single(r => r.Key == "extra")); vm.CostResAmount = "-11";
+        vm.ReplaceCostResourceCommand.Execute(null);
+        Assert.Equal(2, vm.CostResourceLinks.Count);
+        Assert.Equal("percentage", vm.SelectedCostResourceLink!.Context);
+        Assert.Equal("secondary", vm.SelectedCostResourceLink.UiPooled);
+        Assert.True(backend.Undo());
+        Assert.Contains(backend.CostList().Single(c => c.Id == "C").Resources, r => r.Resource == "chivalry");
+        Assert.True(backend.Redo());
+        await backend.SaveInPlaceAsync(); await backend.OpenPackAsync(path);
+        var links = backend.CostList().Single(c => c.Id == "C").Resources;
+        Assert.Equal(2, links.Count); Assert.Equal(-3, links.Single(r => r.Resource == "food").Amount);
+        Assert.Equal(-11, links.Single(r => r.Resource == "extra").Amount);
+    });
+
     private static Task OnCostPickerSta(Func<Task> action)
     {
         var done=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

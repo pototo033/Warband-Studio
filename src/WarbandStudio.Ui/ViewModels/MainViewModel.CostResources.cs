@@ -34,9 +34,16 @@ public sealed partial class MainViewModel
             Raise(nameof(CostResText)); Raise(nameof(CostResAmount)); UpdateCostPreview();
         }
     }
-    public RelayCommand AddCostResourceCommand => new(() => { AddCostResourceLine(); return Task.CompletedTask; });
+    public RelayCommand AddCostResourceCommand => new(() => { SaveCostResource(append: true); return Task.CompletedTask; });
+    public RelayCommand ReplaceCostResourceCommand => new(() =>
+    {
+        if (SelectedCostResourceLink is null) CostStatus = "先在已有资源关联中选择要替换的一条";
+        else if (ResolvedResource() is null) CostStatus = "请选择要替换成的有效资源";
+        else CreateWarbandCost();
+        return Task.CompletedTask;
+    });
     public RelayCommand RemoveCostResourceCommand => new(() => { RemoveSelectedCostResource(); return Task.CompletedTask; });
-    private void AddCostResourceLine()
+    private void ClearCostResourceSelection()
     {
         if (!_loadedExisting) { CostStatus = "先创建或选择一条成本"; return; }
         SelectedCostResourceLink = null;
@@ -46,7 +53,7 @@ public sealed partial class MainViewModel
         _costResText = ""; _costResAmount = "";
         ++_costFormRevision;
         Raise(nameof(CostResText)); Raise(nameof(CostResAmount));
-        CostStatus = "选择要追加的资源和数量，再点保存修改；已有资源保留";
+        CostStatus = "已移除选中资源；可重新选择资源和数量追加，其他关联保留";
         UpdateCostPreview();
     }
     private void RemoveSelectedCostResource()
@@ -55,7 +62,7 @@ public sealed partial class MainViewModel
         CostStatus = CostEdit(() => _backend.RemoveWarbandCostResource(CostId, link.PoolId));
         if (!CostStatus.StartsWith("成本工坊", StringComparison.Ordinal)) return;
         CostResourceLinks.Remove(link);
-        AddCostResourceLine(); // 立即进入追加状态，清理旧选中项；其余资源不被下一次选择覆盖。
+        ClearCostResourceSelection(); // 清理旧选中项；其余资源不被下一次选择覆盖。
         RebuildTree(); RefreshPooledResources(); PackOpened?.Invoke(); AutoSaveSoon();
     }
     private string CostEdit(Func<string> action)

@@ -682,14 +682,17 @@
                                        Text="⚠ 请先确定你所要用的资源id" />
                             <!-- 默认**空**（不用其他资源）；打字按名称/key 筛选，选一项才用 -->
                             <views:CostResourcePicker x:Name="CmbCostRes" />
-                            <TextBlock Text="已有资源关联（选择一条编辑；其余关联保留）" Margin="0,8,0,2" Foreground="{DynamicResource Text.Secondary}" />
-                            <ComboBox ItemsSource="{Binding CostResourceLinks}" SelectedItem="{Binding SelectedCostResourceLink}" DisplayMemberPath="Label" />
-                            <WrapPanel Margin="0,6,0,0">
-                                <Button Content="追加资源" Command="{Binding AddCostResourceCommand}" Padding="8,2" />
-                                <Button Content="移除选中资源" Command="{Binding RemoveCostResourceCommand}" Padding="8,2" Margin="6,0,0,0" />
-                            </WrapPanel>
                             <TextBlock Text="数额（负 = 消耗 / 正 = 获得）" Margin="0,6,0,2" Foreground="{DynamicResource Text.Primary}" />
                             <TextBox Text="{Binding CostResAmount, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Text="已有资源关联（选择要编辑或移除的一条）" Margin="0,8,0,2" Foreground="{DynamicResource Text.Secondary}" />
+                            <ComboBox ItemsSource="{Binding CostResourceLinks}" SelectedItem="{Binding SelectedCostResourceLink}" DisplayMemberPath="Label" />
+                            <WrapPanel Margin="0,6,0,0">
+                                <Button Content="追加资源" Command="{Binding AddCostResourceCommand}" Padding="8,2" Margin="0,0,6,4" />
+                                <Button Content="移除选中资源" Command="{Binding RemoveCostResourceCommand}" Padding="8,2" Margin="0,0,6,4" />
+                                <Button Content="替换当前资源" Command="{Binding ReplaceCostResourceCommand}" Padding="8,2" Margin="0,0,0,4" />
+                            </WrapPanel>
+                            <TextBlock Text="追加保留已有资源；替换或保存修改只更新选中的关联。以上操作仍需保存 Pack。"
+                                       TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Text.Secondary}"
                                        Text="选了资源就自动建资源池：id = &lt;资源名&gt;_warband_upgrade、factor = other、min/max = ∓2147483647、sort_order = 0（表里其它列留空/照抄）。" />
 

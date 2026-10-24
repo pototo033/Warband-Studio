@@ -1,11 +1,11 @@
 namespace WarbandStudio.Pack;
 
 /// <summary>
-/// 新建"单位组"的命名（用户 2026-10-07 定的规则）：
+/// 新建"单位组"的命名（用户 2026-10-24 调整的规则）：
 /// `<c>&lt;用户填的 key&gt;_&lt;页签 key&gt;_&lt;兵种词…&gt;</c>`（一个组里有多个兵就依次往后接）。
 ///
-/// 兵种词 = unit key **去掉结尾纯数字段后的最后一段**：`wh2_main_skv_inf_clanrat_1` → `clanrat`、
-/// `Yukino_Skv_Inf_Night_Runners` → `Runners`（结尾的 `_0`/`_1` 是变体号，不算"词"）。
+/// 普通单位取最后两个词，含独立 ror 段的精英单位取最后三个词；纯数字段不算词。
+/// 例如 `wh2_main_skv_inf_clanrat_1` → `inf_clanrat`，`Yukino_Night_Runners_ror_1` → `Night_Runners_ror`。
 ///
 /// 用户没填 key（全局选项里留空）时返回 null —— 调用方退回旧的时间戳命名（studio_new_…）。
 /// **前端和后端都要用同一条规则**：后端（Backend.MakeGroupKey）负责所有"程序自己起名"的入口；
@@ -23,7 +23,7 @@ public static class GroupNaming
         if (!string.IsNullOrWhiteSpace(category)) name += "_" + category.Trim().Trim('_');
         foreach (var u in units)
         {
-            var w = LastWord(u);
+            var w = UnitWords(u);
             if (w.Length > 0) name += "_" + w;
         }
         return Unique(name, taken);
@@ -41,12 +41,13 @@ public static class GroupNaming
         return $"{name}_x";
     }
 
-    /// <summary>兵种 key 的"最后一个词"：跳过结尾的纯数字段（变体号），取最后一段有意义的词。</summary>
-    public static string LastWord(string unit)
+    /// <summary>跳过数字变体号，普通单位取两个词，精英单位取三个词；不足时保留所有可用词。</summary>
+    public static string UnitWords(string unit)
     {
         var parts = (unit ?? "").Split('_', StringSplitOptions.RemoveEmptyEntries);
-        for (var i = parts.Length - 1; i >= 0; i--)
-            if (!parts[i].All(char.IsDigit)) return parts[i];
-        return parts.Length > 0 ? parts[^1] : "";
+        var words = parts.Where(p => !p.All(char.IsDigit)).ToArray();
+        if (words.Length == 0) return parts.Length > 0 ? parts[^1] : "";
+        var count = words.Any(p => p.Equals("ror", StringComparison.OrdinalIgnoreCase)) ? 3 : 2;
+        return string.Join("_", words.TakeLast(count));
     }
 }

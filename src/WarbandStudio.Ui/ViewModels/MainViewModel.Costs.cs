@@ -281,7 +281,9 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>主按钮：新建 或 保存修改（资源那块只有"用户真的改了"才动，没动就保留作者原来的池/关联）。</summary>
-    public void CreateWarbandCost()
+    public void CreateWarbandCost() => SaveCostResource(append: false);
+
+    private void SaveCostResource(bool append)
     {
         var id = (CostId ?? "").Trim();
         var gold = ParseDouble(CostGold);
@@ -292,6 +294,14 @@ public sealed partial class MainViewModel
             return;
         }
         var resKey = res?.Key ?? "";
+        if (append && res is null) { CostStatus = "先选择要追加的资源并填写数额"; return; }
+        // 追加不得覆盖已有行；替换不得吞掉另一个已有资源的配置。
+        if (res is not null && CostResourceLinks.Any(r => r.Resource.Equals(resKey, StringComparison.OrdinalIgnoreCase)
+            && (append || !r.PoolId.Equals(_loadedPoolId, StringComparison.OrdinalIgnoreCase))))
+        {
+            CostStatus = "该资源已有配置，请在已有资源关联中选择它再修改数额；未改动其他关联";
+            return;
+        }
         var amount = (long)ParseDouble(CostResAmount);
         string msg;
         if (_loadedExisting)
@@ -299,9 +309,9 @@ public sealed partial class MainViewModel
             var resSame = _loadedResKey.Equals(resKey, StringComparison.OrdinalIgnoreCase);
             // **资源或数量变了都要重写关联**：以前只看"资源 key 改没改"，只改数量会被整块跳过（用户实测"改数量没生效"）
             msg = CostEdit(() => _backend.UpdateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount,
-                                             !resSame || amount != _loadedResAmount || _addingCostResource,
-                                             resSame && _loadedPoolId.Length > 0 ? _loadedPoolId : null,
-                                             _loadedPoolId.Length > 0 ? _loadedPoolId : null, _addingCostResource));
+                                             !resSame || amount != _loadedResAmount || _addingCostResource || append,
+                                             !append && resSame && _loadedPoolId.Length > 0 ? _loadedPoolId : null,
+                                             !append && _loadedPoolId.Length > 0 ? _loadedPoolId : null, _addingCostResource || append));
         }
         else
             msg = CostEdit(() => _backend.CreateWarbandCost(id, gold, resKey.Length > 0 ? resKey : null, amount));
@@ -309,6 +319,18 @@ public sealed partial class MainViewModel
         if (msg.StartsWith("成本工坊", StringComparison.Ordinal))
         {
             _addingCostResource = false;
+            // 同步当前成本后才启动异步清单刷新，连续追加/替换不会沿用上一次的旧关联。
+            var updated = _backend.CostList().First(c => c.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            _loadedPoolId = updated.Resources.FirstOrDefault(r => r.Resource.Equals(resKey, StringComparison.OrdinalIgnoreCase))?.PoolId ?? "";
+            var old = CostListAll.FirstOrDefault(c => c.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            _applyingCostLists = true;
+            try
+            {
+                if (old is not null) CostListAll[CostListAll.IndexOf(old)] = updated;
+                else CostListAll.Add(updated);
+            }
+            finally { _applyingCostLists = false; }
+            SyncCostFromId();
             RebuildTree();
             RefreshPooledResources();      // 清单里立刻出现/更新
             PackOpened?.Invoke();          // 升级对话框的成本下拉跟着刷新

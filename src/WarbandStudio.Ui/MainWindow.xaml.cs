@@ -360,6 +360,8 @@ public partial class MainWindow : Window
     /// 派生状态别只靠"打开包那一条路"刷新：切页签、切画布、保存重开后看到的都得是当前包的清单。</summary>
     private void OnRightTabsChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        // 子级成本/资源下拉也会冒泡 SelectionChanged，不能当作切页重新回填表单。
+        if (!ReferenceEquals(e.OriginalSource, sender)) return;
         if (ReferenceEquals(RightTabs.SelectedItem, CostTab) && _vm.PackOpen) _vm.RefreshPooledResources();
     }
 
