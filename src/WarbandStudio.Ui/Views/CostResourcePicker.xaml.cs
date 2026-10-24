@@ -17,8 +17,27 @@ public partial class CostResourcePicker : UserControl
     private void OnOpened(object sender, RoutedEventArgs e)
     {
         Choices.SelectedItem = null;
-        if (DataContext is MainViewModel vm) vm.ShowAllCostResourceChoices();
+        if (DataContext is MainViewModel vm) vm.OpenCostResourceChoices();
+        ResetScroll();
         FileLog.Write($"[ui] 选用资源下拉展开：{Items.Count} 条");
+    }
+    private void OnPopupOpened(object? sender, EventArgs e) => ResetScroll();
+    private void OnInputTextChanged(object sender, TextChangedEventArgs e) => ResetScroll();
+
+    // 等候集合与布局更新后回到首项，避免沿用上次滚动/集合增量更新保留的底部偏移。
+    private void ResetScroll() => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+    {
+        if (!IsDropDownOpen) return;
+        Choices.UpdateLayout();
+        FindScroll(Choices)?.ScrollToHome();
+    }));
+
+    private static ScrollViewer? FindScroll(DependencyObject parent)
+    {
+        if (parent is ScrollViewer scroll) return scroll;
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            if (FindScroll(System.Windows.Media.VisualTreeHelper.GetChild(parent, i)) is { } found) return found;
+        return null;
     }
     private void OnChoiceChanged(object sender, SelectionChangedEventArgs e)
     {

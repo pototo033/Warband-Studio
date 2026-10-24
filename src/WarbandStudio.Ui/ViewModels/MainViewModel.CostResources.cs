@@ -15,6 +15,7 @@ public sealed partial class MainViewModel
         _costId = ""; _costGold = ""; _costResText = ""; _costResAmount = "";
         _pickedCostId = ""; _pickedResKey = ""; _loadedPoolId = ""; _loadedResKey = ""; _loadedResAmount = 0;
         _loadedExisting = false; _addingCostResource = false; _selectedCostResourceLink = null; _costFormPackPath = null;
+        _costResourceSearch = false;
         CostResourceLinks.Clear(); ++_costFormRevision;
         foreach (var property in new[] { nameof(CostId), nameof(CostGold), nameof(CostResText), nameof(CostResAmount),
             nameof(CostIsExisting), nameof(CostActionText), nameof(SelectedCostResourceLink) }) Raise(property);
@@ -26,6 +27,7 @@ public sealed partial class MainViewModel
         {
             if (!Set(ref _selectedCostResourceLink, value) || value is null) return;
             _addingCostResource = false;
+            _costResourceSearch = false;
             _loadedPoolId = value.PoolId; _loadedResKey = value.Resource; _loadedResAmount = value.Amount;
             _pickedResKey = value.Resource;
             _costResText = PooledResAll.FirstOrDefault(r => r.Key.Equals(value.Resource, StringComparison.OrdinalIgnoreCase))?.Name ?? value.Resource;

@@ -59,7 +59,7 @@ public sealed partial class MainViewModel
     public string CostResText
     {
         get => _costResText;
-        set { if (_applyingCostLists || _costResText == value) return; _costResText = value; ++_costFormRevision; Raise(nameof(CostResText)); FilterResList(); UpdateCostPreview(); }
+        set { if (_applyingCostLists || _costResText == value) return; _costResourceSearch = true; _costResText = value; ++_costFormRevision; Raise(nameof(CostResText)); FilterResList(); UpdateCostPreview(); }
     }
     /// <summary>创建工作坊里的一行提示（结果/错误）。</summary>
     public string CostStatus { get => _costStatus; set { _costStatus = value; Raise(nameof(CostStatus)); } }
@@ -125,11 +125,6 @@ public sealed partial class MainViewModel
             .Where(r => t.Length == 0 || r.Name.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0
                                       || r.Key.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)
             .ToList();
-        if (_pickedResKey.Length > 0 && !want.Any(r => r.Key.Equals(_pickedResKey, StringComparison.OrdinalIgnoreCase)))
-        {
-            var sel = PooledResAll.FirstOrDefault(r => r.Key.Equals(_pickedResKey, StringComparison.OrdinalIgnoreCase));
-            if (sel is not null) want.Insert(0, sel);
-        }
         SyncFiltered(PooledResShown, want);
         if (keep.Length > 0 && _costResText.Length == 0) { _costResText = keep; Raise(nameof(CostResText)); }
     }
@@ -143,10 +138,18 @@ public sealed partial class MainViewModel
     // 展开是重新选资源；当前完整名称不能继续把其他可选项过滤掉。
     public void ShowAllCostResourceChoices() => SyncFiltered(PooledResShown, PooledResAll.ToList());
 
+    private bool _costResourceSearch;
+    public void OpenCostResourceChoices()
+    {
+        if (_costResourceSearch) FilterResList();
+        else ShowAllCostResourceChoices();
+    }
+
     public void PickCostResource(Services.Backend.PooledResource resource)
     {
         NotePickedRes(resource.Key);
         CostResText=string.IsNullOrWhiteSpace(resource.Name) ? resource.Key : resource.Name;
+        _costResourceSearch = false;
     }
 
     /// <summary>id 打全了且命中已有成本 → 预填金币/资源，并把按钮切成「保存修改」。</summary>

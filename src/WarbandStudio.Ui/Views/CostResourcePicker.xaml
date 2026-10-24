@@ -4,17 +4,17 @@
              x:Name="Root" MinHeight="26">
     <Grid>
         <TextBox x:Name="ResourceInput" Text="{Binding CostResText, UpdateSourceTrigger=PropertyChanged}"
-                 Padding="8,2,28,2" VerticalContentAlignment="Center" PreviewKeyDown="OnInputKeyDown" />
+                 Padding="8,2,28,2" VerticalContentAlignment="Center" PreviewKeyDown="OnInputKeyDown" TextChanged="OnInputTextChanged" />
         <ToggleButton x:Name="Toggle" Content="▾" Style="{DynamicResource AeComboToggle}" Width="25" HorizontalAlignment="Right"
                       Focusable="False" Checked="OnOpened" />
         <Popup x:Name="ChoicesPopup" Placement="Bottom" PlacementTarget="{Binding ElementName=ResourceInput}"
                IsOpen="{Binding IsChecked, ElementName=Toggle, Mode=TwoWay}" StaysOpen="False"
-               AllowsTransparency="True">
+               AllowsTransparency="True" Opened="OnPopupOpened">
             <Border Background="{DynamicResource AeBrush.Surface2}" BorderBrush="{DynamicResource AeBrush.BorderStrong}"
                     BorderThickness="1" CornerRadius="3" Width="{Binding ActualWidth, ElementName=Root}">
                 <ListBox x:Name="Choices" ItemsSource="{Binding PooledResShown}" MaxHeight="260"
                          Background="Transparent" BorderThickness="0" SelectionMode="Single"
-                         IsSynchronizedWithCurrentItem="False" SelectionChanged="OnChoiceChanged" PreviewKeyDown="OnListKeyDown">
+                         IsTextSearchEnabled="False" IsSynchronizedWithCurrentItem="False" SelectionChanged="OnChoiceChanged" PreviewKeyDown="OnListKeyDown">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal" ToolTip="{Binding Key}">

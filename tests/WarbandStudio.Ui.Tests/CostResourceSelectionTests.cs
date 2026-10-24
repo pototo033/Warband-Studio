@@ -10,6 +10,53 @@ namespace WarbandStudio.Ui.Tests;
 public sealed partial class BackendSafetyTests
 {
     [Fact]
+    public Task ResourceSearchSurvivesOpeningAndPopupResetsPreviousBottomScroll() => OnCostPickerSta(async () =>
+    {
+        var vm = new MainViewModel(_settings, ValidateFixturePack);
+        await using var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
+        await backend.OpenPackAsync(MakePack("resource-search-scroll.pack"));
+        await vm.RefreshPooledResourcesAsync(); vm.CostId = "C";
+        // 多个候选制造真实滚动范围；复用资源记录保持图标和显示结构一致。
+        var proto = vm.PooledResAll.First();
+        for (var i = 0; i < 80; i++) vm.PooledResAll.Add(proto with { Key = $"test_resource_{i:00}", Name = $"test_resource_{i:00}" });
+        var picker = new CostResourcePicker { DataContext = vm, Width = 260 };
+        var host = new System.Windows.Window { Content = picker, Width = 300, Height = 120, Left = -10000, Top = -10000, ShowInTaskbar = false, ShowActivated = false };
+        host.Show();
+        try
+        {
+        picker.Measure(new System.Windows.Size(260, 30)); picker.Arrange(new System.Windows.Rect(0, 0, 260, 30));
+        var input = (TextBox)picker.FindName("ResourceInput");
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        input.Text = "resource_07";
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        picker.IsDropDownOpen = true;
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal("test_resource_07", Assert.Single(vm.PooledResShown).Key);
+        input.Text = "no_match_resource";
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Empty(vm.PooledResShown);
+        input.Text = "";
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        var choices = (ListBox)picker.FindName("Choices");
+        var scroll = (ScrollViewer)typeof(CostResourcePicker).GetMethod("FindScroll", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [choices])!;
+        scroll.ScrollToEnd(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.True(scroll.VerticalOffset > 0);
+        picker.IsDropDownOpen = false; picker.IsDropDownOpen = true;
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(0, scroll.VerticalOffset);
+        Assert.Equal(vm.PooledResAll.Count, picker.Items.Count);
+        choices.SelectedItem = vm.PooledResAll.Single(r => r.Key == "test_resource_79");
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        picker.IsDropDownOpen = true;
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(vm.PooledResAll.Count, picker.Items.Count);
+        Assert.Equal(0, scroll.VerticalOffset);
+        picker.IsDropDownOpen = false;
+        }
+        finally { picker.IsDropDownOpen = false; host.Close(); }
+    });
+
+    [Fact]
     public Task ResourcePickerInsideRightTabsDoesNotReloadDraftOnBubbledSelection() => OnCostPickerSta(async () =>
     {
         var vm = new MainViewModel(_settings, ValidateFixturePack);
@@ -135,6 +182,7 @@ public sealed partial class BackendSafetyTests
         Assert.False(picker.IsDropDownOpen);Assert.Null(choices.SelectedItem);
         input.Text="food";await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         Assert.Equal("food",vm.CostResText);
+        input.Text="";await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); // 清除搜索后才选择其他资源。
         Select("chivalry");await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         Assert.Equal("chivalry",picker.Text); // 同一选项可以重新选。
         vm.CostResAmount="-17";vm.CreateWarbandCost();await vm.RefreshPooledResourcesAsync();
