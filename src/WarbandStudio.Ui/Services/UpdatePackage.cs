@@ -96,7 +96,7 @@ public static class UpdatePackage
                 if (name.EndsWith('/')) { _ = Under(payload, name); continue; }
                 if (name.Split('/').Any(p => p is "" or "." or "..") || name.Contains(':') || name.StartsWith('/') || !seen.Add(name)) throw new InvalidDataException("更新包包含非法或重复路径：" + name);
                 var rootFile = !name.Contains('/') && (RequiredFiles.Contains(name, StringComparer.OrdinalIgnoreCase) || name.StartsWith("WarbandStudio.", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase));
-                if (!rootFile && !name.StartsWith("Web/", StringComparison.OrdinalIgnoreCase) && !name.StartsWith("schemas/", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("更新包包含不属于程序的文件：" + name);
+                if (!rootFile && !InstallationAudit.IsComponent(name) && !name.StartsWith("Web/", StringComparison.OrdinalIgnoreCase) && !name.StartsWith("schemas/", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("更新包包含不属于程序的文件：" + name);
                 if (((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000 || (expanded += entry.Length) > 512L * 1024 * 1024) throw new InvalidDataException("更新包格式或解压大小无效。");
                 var dest = Under(payload, name); _ = Under(install, name);
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dest)!);
@@ -110,7 +110,10 @@ public static class UpdatePackage
         {
             InstallationCheck.Verify(payload,release.Version);
             var manifest=JsonSerializer.Deserialize<InstallationManifest>(await File.ReadAllTextAsync(Under(payload,InstallationCheck.ManifestName),ct))!;
-            var problems=InstallationAudit.ComponentProblems(install,manifest);
+            var listed=new HashSet<string>(manifest.Files.Keys.Concat(manifest.Components?.Keys ?? Enumerable.Empty<string>()).Select(p=>p.Replace('\\','/')),StringComparer.OrdinalIgnoreCase) { InstallationCheck.ManifestName };
+            if(files.Any(f=>!listed.Contains(f.Path))) throw new InvalidDataException("更新包含未列入发行清单的程序文件。");
+            // 新格式必须自带全部运行组件；旧格式仍可验证安装目录保留组件。
+            var problems=InstallationAudit.ComponentProblems(payload,manifest,manifest.Format==1 ? install : null);
             if(problems.Length>0) throw new InvalidDataException("更新前全检发现程序包不会覆盖的组件需要修复，请使用本版本完整包覆盖安装：\n"+string.Join("\n",problems.Take(12)));
         }
         // 权限问题在退出前发现，不能关掉程序才发现目录无法写入。

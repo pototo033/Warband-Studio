@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace WarbandStudio.Ui.Services;
 
 public sealed record InstallationManifest(int Format, string Version, Dictionary<string,string> Files,
-    Dictionary<string,string>? Components = null);
+    Dictionary<string,string>? Components = null, Dictionary<string,string>? ReferenceFiles = null);
 
 /// <summary>发行文件一致性检查；清单只管理程序文件，不触碰用户数据。</summary>
 public static class InstallationCheck
@@ -20,7 +20,7 @@ public static class InstallationCheck
         var manifest = JsonSerializer.Deserialize<InstallationManifest>(File.ReadAllText(manifestPath))
             ?? throw new InvalidDataException("程序文件校验清单无法读取。");
         static Version? Normalize(string text) => Version.TryParse(text,out var v) ? new Version(v.Major,v.Minor,Math.Max(v.Build,0)) : null;
-        if (manifest.Format != 1 || Normalize(manifest.Version) is not { } declared || declared != Normalize(version) || manifest.Files is null)
+        if (manifest.Format is not (1 or 2) || Normalize(manifest.Version) is not { } declared || declared != Normalize(version) || manifest.Files is null)
             throw new InvalidDataException("程序与文件清单版本不一致，请重新完整覆盖最新版程序包。");
         var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var problems = new List<string>();

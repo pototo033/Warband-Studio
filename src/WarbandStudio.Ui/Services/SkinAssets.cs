@@ -33,7 +33,7 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
             if (File.Exists(f)) v = "?v=" + File.GetLastWriteTimeUtc(f).Ticks;
         }
         catch { }
-        return "http://skins.local/" + _tag + "/" + cacheName + v;
+        return "http://skins.local/" + Uri.EscapeDataString(_tag) + "/" + Uri.EscapeDataString(cacheName) + v;
     }
 
     /// <summary>UI 区固定要的几个：名字 → 缓存文件名。</summary>
@@ -64,10 +64,13 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
     public Dictionary<string, string> Prepare(IEnumerable<(string Cat, string BgName, string BtnName)> pages)
     {
         Directory.CreateDirectory(CacheDir);
+        var list = pages.ToArray();
+        PrepareExternal(Fixed.Select(x => x.Inner).Concat(list.SelectMany(x => new[] { x.BgName, x.BtnName })
+            .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => TwuiTabs.SkinDir + x)));
         foreach (var (name, inner) in Fixed)
             if (Extract(inner, $"{name}.png") is { } u) _urls[name] = u;
 
-        foreach (var (cat, bgFile, btnFile) in pages)
+        foreach (var (cat, bgFile, btnFile) in list)
         {
             if (string.IsNullOrWhiteSpace(cat)) continue;
             if (!string.IsNullOrWhiteSpace(bgFile) &&
@@ -98,8 +101,7 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
             if (!File.Exists(localPath)) return null;
             Directory.CreateDirectory(CacheDir);
             var target = Path.Combine(CacheDir, cacheName);
-            if (!File.Exists(target) || new FileInfo(target).Length != new FileInfo(localPath).Length)
-                File.Copy(localPath, target, overwrite: true);
+            File.Copy(localPath, target, overwrite: true);
             _keys[cacheName] = LocalKey(localPath);      // 暂存的这张**优先**：Prepare 别拿包里的旧图顶掉它
             return Url(cacheName);
         }
@@ -162,13 +164,47 @@ public sealed class SkinAssets(PackArchive? pack, string? gameDir, Action<string
             }
             catch (Exception ex) { log?.Invoke($"皮肤素材 {inner} 抽出失败：{ex.Message}"); }
         }
-        // 包里没有这个条目：缓存里要是有（新建页签拿母版图暂存的那份、或上次留下的）就用它，
-        // 别让"新页签的画布预览"变成空背景。
-        if (File.Exists(target)) return Url(cacheName);
-
-        // **只从打开的包里取**。以前这里会去扫 data 下所有 pack 兜底，
-        // 结果同名图（例如原版自己的 background_images_skv4.png）会把用户为这个页签选的图顶掉
-        // —— 看起来就是"我没选过这张图"。原版素材以后由「UI 素材库」显式导入，不再自动兜底。
+        PrepareExternal([inner]);
+        if (_external.TryGetValue(inner, out var bytes))
+        {
+            File.WriteAllBytes(target, bytes);
+            _keys[cacheName] = keyAs ?? key;
+            return Url(cacheName);
+        }
+        // 无来源的旧文件不能证明解析成功；暂存预览已由上方 local: 分支保留。
+        log?.Invoke($"页签图片缺失：{inner}；当前包、声明依赖和原版UI均未找到，未使用旧缓存。");
         return null;
+    }
+
+    private readonly Dictionary<string, byte[]> _external = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _searched = new(StringComparer.OrdinalIgnoreCase);
+    private void PrepareExternal(IEnumerable<string> requested)
+    {
+        var missing = requested.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(p => pack?.Find(p) is null && !_searched.Contains(p)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (missing.Count == 0) return;
+        var data = string.IsNullOrWhiteSpace(gameDir) ? null : Path.Combine(gameDir, "data");
+        var sources = new List<string>();
+        if (pack is not null)
+            sources.AddRange(ReferencePackSources.Resolve(pack.FilePath, data is null ? null : Path.Combine(data, "db.pack"), []));
+        // 仅声明依赖和固定原版UI来源；不扫描其他玩家MOD，不按图名猜其他页签。
+        if (data is not null) sources.AddRange(new[] { "ui3.pack", "ui2.pack", "ui.pack" }.Select(n => Path.Combine(data, n)));
+        foreach (var path in sources.Distinct(StringComparer.OrdinalIgnoreCase).Where(File.Exists))
+        {
+            try
+            {
+                using var source = PackArchive.Open(path);
+                foreach (var inner in missing.ToArray())
+                    if (source.Find(inner) is { } entry)
+                    {
+                        _external[inner] = source.ReadDecoded(entry);
+                        missing.Remove(inner);
+                        log?.Invoke($"页签图片来源：{inner} ← {path}");
+                    }
+            }
+            catch (Exception ex) { log?.Invoke($"页签图片来源读取失败：{path}：{ex.Message}"); }
+            if (missing.Count == 0) break;
+        }
+        foreach (var inner in requested) _searched.Add(inner);
     }
 }

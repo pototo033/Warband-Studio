@@ -43,16 +43,18 @@ public sealed class UpdaterTests
         Assert.Throws<InvalidDataException>(() => UpdatePackage.ParseRelease(metadata.Replace("_app.zip", "_full.zip"), "owner/repo"));
     }
 
-    private static byte[] Zip(string? extra = null, bool omitSchema = false, Dictionary<string,string>? components = null)
+    private static byte[] Zip(string? extra = null, bool omitSchema = false, Dictionary<string,string>? components = null, bool complete = false)
     {
         using var buffer = new MemoryStream();
         using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, true))
         {
             foreach (var name in Required.Where(n => !omitSchema || n != "schemas/schema_wh3.ron").Concat(extra is null ? [] : [extra]))
             { using var writer = new StreamWriter(zip.CreateEntry(name).Open()); writer.Write("new:" + name); }
+            if (complete && components is not null)
+                foreach (var name in components.Keys) { using var writer = new StreamWriter(zip.CreateEntry(name).Open()); writer.Write("new:" + name); }
             var hashes=Required.Where(n=>!omitSchema || n!="schemas/schema_wh3.ron").ToDictionary(n=>n,n=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("new:"+n))));
             using var manifestWriter=new StreamWriter(zip.CreateEntry(InstallationCheck.ManifestName).Open());
-            manifestWriter.Write(System.Text.Json.JsonSerializer.Serialize(new InstallationManifest(1,"1.8",hashes,components)));
+            manifestWriter.Write(System.Text.Json.JsonSerializer.Serialize(new InstallationManifest(complete ? 2 : 1,"1.8",hashes,components)));
         }
         return buffer.ToArray();
     }
@@ -60,6 +62,18 @@ public sealed class UpdaterTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) });
+    }
+    [Fact]
+    public async Task CompletePayloadReplacesOldRuntimeAndSupportsEmptyInstallation()
+    {
+        var names = new[] { "rpfm/rpfm_cli.exe", "coreclr.dll", "runtimes/win-x64/native/WebView2Loader.dll", "bundled/wuu/source.pack", "zh-Hans/resources.dll" };
+        var components = names.ToDictionary(n => n, n => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("new:" + n))));
+        Directory.CreateDirectory(Path.Combine(_root, "install", "rpfm"));
+        File.WriteAllText(Path.Combine(_root, "install", "rpfm", "rpfm_cli.exe"), "outdated");
+        var plan = await Prepare(Zip(components: components, complete: true));
+        Assert.All(names, name => Assert.Contains(plan.Files, f => f.Path == name));
+        Assert.Equal(0, await RunInstaller(plan));
+        Assert.All(names, name => Assert.Equal("new:" + name, File.ReadAllText(Path.Combine(plan.InstallDirectory, name))));
     }
     [Theory]
     [InlineData(true)]

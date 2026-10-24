@@ -1240,10 +1240,11 @@ const knobCases = vm.runInContext(`
    const points = linkPath3(rec).match(/-?[\\d.]+/g).map(Number);
    const k = knobPosOf(rec), child = anchor(GROUPS.knobChild, cp, true).p, parent = anchor(GROUPS.knobParent, pp).p;
    results.push({pp, cp, mo,
-    center: Math.abs(k.x - ((pp===1||pp===3)?(parent.x+child.x)/2:parent.x+mo))<0.001
-      && Math.abs(k.y - ((pp===1||pp===3)?parent.y+mo:(parent.y+child.y)/2))<0.001,
+    center: k ? Math.abs(k.x - ((pp===1||pp===3)?(parent.x+child.x)/2:parent.x+mo))<0.001
+      && Math.abs(k.y - ((pp===1||pp===3)?parent.y+mo:(parent.y+child.y)/2))<0.001
+      : !!zeroCorner(anchor(GROUPS.knobParent,pp),anchor(GROUPS.knobChild,cp,true),mo),
     endpoints: points[0] === parent.x && points[1] === parent.y && points.at(-2) === child.x && points.at(-1) === child.y,
-    axis: k.vertical === (pp === 1 || pp === 3)});
+    axis: !k || k.vertical === (pp === 1 || pp === 3)});
   }
   return results;
  })()
@@ -1382,9 +1383,10 @@ const targetEdges=vm.runInContext(`(()=>{
   const points=linkPath3(rec).match(/-?[\\d.]+/g).map(Number);
   const expected=cp===1?[b.x+b.w/2,b.y]:cp===2?[b.x+b.w,b.y+b.h/2]:cp===3?[b.x+b.w/2,b.y+b.h]:[b.x,b.y+b.h/2];
   const k=knobPosOf(rec);
-  const onPath=points.some((_,i)=>i>=2&&i%2===0&&
+  const onPath=k ? points.some((_,i)=>i>=2&&i%2===0&&
     ((points[i]===points[i-2]&&k.x===points[i]&&k.y>=Math.min(points[i-1],points[i+1])&&k.y<=Math.max(points[i-1],points[i+1]))
-    ||(points[i+1]===points[i-1]&&k.y===points[i+1]&&k.x>=Math.min(points[i-2],points[i])&&k.x<=Math.max(points[i-2],points[i]))));
+    ||(points[i+1]===points[i-1]&&k.y===points[i+1]&&k.x>=Math.min(points[i-2],points[i])&&k.x<=Math.max(points[i-2],points[i]))))
+    : !!zeroCorner(anchor(GROUPS.edgeParent,pp),anchor(child,cp,true),mo);
   out.push({edge:points.at(-2)===expected[0]&&points.at(-1)===expected[1],start:points[0]===70&&points[1]===63.5,
    knob:onPath, nonzero:points.every((_,i)=>i<2||i%2!==0||points[i]!==points[i-2]||points[i+1]!==points[i-1])});
  }
@@ -1398,6 +1400,14 @@ chk('所有端口组合均不产生零长度首尾段',targetEdges.every(r=>r.no
 chk('箭头尖端精确对齐路径末端，普通线和虚线都挂 marker-end',/setAttribute\('refX', '10'\)/.test(SOURCE)
  && /setAttribute\('orient', 'auto'\)/.test(SOURCE)&& (SOURCE.match(/setAttribute\('marker-end', 'url\(#arrowDir\)'\)/g)||[]).length===2);
 chk('完全重合的路径不生成无方向箭头',vm.runInContext("linkPath({p:{x:1,y:2},d:[0,1]},{p:{x:1,y:2},d:[0,-1]},0)===null",ctx));
+const cthZero=vm.runInContext(`(()=>{
+ const p={x:250,y:450,units:['jade','crossbow']}, c={x:400,y:300,units:['crow']};
+ GROUPS.cthParent=p;GROUPS.cthChild=c;
+ return {path:linkPath3({p:'cthParent',c:'cthChild',pp:1,cp:4,mo:0}),
+   mid:autoMidOffset(p,c,1,4), knob:knobPosOf({p:'cthParent',c:'cthChild',pp:1,cp:4,mo:0})};
+})()`,ctx);
+chk('CTH实际双兵组上端到鸦人左端、mid=0：先竖直再水平',cthZero.path==='M293 493.5 L293 343.5 L400 343.5');
+chk('CTH单折点默认mid为零且不显示会改变拓扑的拖动手柄',cthZero.mid===0&&cthZero.knob===null);
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }
 console.log('【结果】✓ 全部 ' + good + ' 项通过');

@@ -194,7 +194,7 @@
   <div id="panel"></div>
   <div id="tree"><svg id="links" width="3000" height="2200" viewBox="-900 -500 3000 2200"></svg>
     <!-- 选中连线时的"转点"手柄：拖动 = 调整中间那段的位置（写 mid_link_offset，游戏里同一个效果） -->
-    <div id="linkKnob" class="hidden" title="拖动 = 调整这条线中间那段的位置（写进 mid_link_offset，游戏里一致）"></div></div>
+    <div id="linkKnob" class="hidden" title="拖动调整预览转折位置（保存 mid_link_offset；游戏走线仍需校准）"></div></div>
 </div>
 <div id="hdr"><span id="hdrText">战帮画布（等待数据…）</span>
   <button id="bExportDiagnostic" title="导出当前 Pack 底本、未保存编辑、撤销重做、外部兵种引用和日志，供复现排查"
@@ -519,15 +519,25 @@ function anchor(g, pos, atEdge = false) {
   }
   return { p: p, d: d };
 }
-// 用户指定的预览：不附加基础短线，父端从中心起算，子端按端口停在兵牌边缘；0 在父端中心转折。
+// CTH实机对照：相邻轴且端口面向彼此、mid=0时，只需一个直角，不能退化成父端横穿兵牌。
+function zeroCorner(a, b, mo) {
+  if ((mo || 0) !== 0 || (a.d[0] === 0) === (b.d[0] === 0)) return null;
+  const corner = a.d[0] === 0 ? {x:a.p.x,y:b.p.y} : {x:b.p.x,y:a.p.y};
+  const out = (corner.x-a.p.x)*a.d[0]+(corner.y-a.p.y)*a.d[1];
+  const incoming = (corner.x-b.p.x)*b.d[0]+(corner.y-b.p.y)*b.d[1];
+  return out >= 0 && incoming >= 0 ? corner : null;
+}
+// 不附加基础短线，父端从中心起算，子端按端口停在兵牌边缘。
 // 已有 mo 数值不迁移。上下端口挪 y，左右端口挪 x，正负仍跟坐标轴；不声称是已证实的引擎公式。
 function linkPath(a, b, mo) {
   const A = a.p, B = b.p;
   const a1 = { x: A.x + a.d[0] * STUB, y: A.y + a.d[1] * STUB };
   const b1 = { x: B.x + b.d[0] * STUB, y: B.y + b.d[1] * STUB };
   const mv = mo || 0;
+  const corner = zeroCorner(a, b, mv);
   let pts;
-  if (a.d[0] === 0) {
+  if (corner) pts = [A, corner, B];
+  else if (a.d[0] === 0) {
     const my = a1.y + mv;
     pts = [A, a1, { x: a1.x, y: my }, { x: b1.x, y: my }, b1, B];
   } else {
@@ -544,6 +554,7 @@ function linkPath(a, b, mo) {
 function autoMidOffset(parentG, childG, parentPos, childPos) {
   if (!parentG || !childG) return 0;
   const A = anchor(parentG, parentPos || 3), B = anchor(childG, childPos || 1, true);
+  if (zeroCorner(A, B, 0)) return 0;
   const a1x = A.p.x + A.d[0] * STUB, a1y = A.p.y + A.d[1] * STUB;
   const b1x = B.p.x + B.d[0] * STUB, b1y = B.p.y + B.d[1] * STUB;
   return A.d[0] === 0 ? Math.round((b1y - a1y) / 2) : Math.round((b1x - a1x) / 2);
@@ -791,12 +802,14 @@ function linkPath3(L) {
   return linkPath(anchor(gp, L.pp), anchor(gc, L.cp, true), L.mo);
 }
 // 转点手柄：放在"中间那段"的中点。拖动它 → 改 rec.mo（沿起始方向挪多少像素）→ 立刻重画，
-// 松手把新 mo 发给后端（写进 ui_links.mid_link_offset，游戏里同一条走线）。
+// 松手把新 mo 发给后端；原生TreeCallback算法尚未完整校准，不保证预览转折与游戏一致。
 let knobDrag = null;
 function knobPosOf(rec) {
   const gc = GROUPS[rec.c], gp = GROUPS[rec.p];
   if (!gc || !gp) return null;
   const A = anchor(gp, rec.pp), B = anchor(gc, rec.cp, true);
+  // 单折点已由两端方向确定，没有独立中间段供拖动；非零mid仍可在数值表单编辑。
+  if (zeroCorner(A, B, rec.mo)) return null;
   const a1 = { x: A.p.x + A.d[0] * STUB, y: A.p.y + A.d[1] * STUB };
   const b1 = { x: B.p.x + B.d[0] * STUB, y: B.p.y + B.d[1] * STUB };
   const mv = rec.mo || 0;

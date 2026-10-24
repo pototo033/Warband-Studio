@@ -53,7 +53,7 @@ public static class InstallationAudit
         FileLog.Write($"升级全检：通过，组件 {count} 个，清单外文件 {extra.Length} 个（仅报告，未删除）；报告：{reportPath}");
         return reportPath;
     }
-    public static string[] ComponentProblems(string installation,InstallationManifest manifest)
+    public static string[] ComponentProblems(string installation,InstallationManifest manifest,string? retainedInstallation=null)
     {
         if(manifest.Components is null) return [];
         var expected=new HashSet<string>(manifest.Files.Keys,StringComparer.OrdinalIgnoreCase);
@@ -63,6 +63,7 @@ public static class InstallationAudit
             var relative=name.Replace('\\','/');
             if(!IsComponent(relative)||!expected.Add(relative)) throw new InvalidDataException("全检清单含无效或重复路径："+name);
             var path=InstallationCheck.SafePath(installation,relative);
+            if (!File.Exists(path) && retainedInstallation is not null) path=InstallationCheck.SafePath(retainedInstallation,relative);
             if(!File.Exists(path)) problems.Add(relative+"（缺失）");
             else if(!Hash(path).Equals(hash,StringComparison.OrdinalIgnoreCase)) problems.Add(relative+"（与本版本不一致）");
         }
@@ -73,15 +74,16 @@ public static class InstallationAudit
         installation ??= AppContext.BaseDirectory;
         if(!Directory.Exists(directory)) return [];
         var manifestPath=Path.Combine(installation,InstallationCheck.ManifestName);
-        var components=File.Exists(manifestPath)
-            ? JsonSerializer.Deserialize<InstallationManifest>(File.ReadAllText(manifestPath))?.Components : null;
+        var manifest=File.Exists(manifestPath)
+            ? JsonSerializer.Deserialize<InstallationManifest>(File.ReadAllText(manifestPath)) : null;
+        var components=manifest?.Components;
         var files=Directory.GetFiles(directory,pattern);
         if(components is null) return files; // 开发输出不带发行清单。
-        var expected=new HashSet<string>(components.Keys.Select(p=>p.Replace('\\','/')),StringComparer.OrdinalIgnoreCase);
+        var expected=new HashSet<string>(components.Keys.Concat(manifest?.ReferenceFiles?.Keys ?? Enumerable.Empty<string>()).Select(p=>p.Replace('\\','/')),StringComparer.OrdinalIgnoreCase);
         return files.Where(p=>expected.Contains(Path.GetRelativePath(installation,p).Replace('\\','/'))).ToArray();
     }
     private static string Hash(string path){using var input=File.OpenRead(path);return Convert.ToHexString(SHA256.HashData(input));}
-    private static bool IsComponent(string name)=>!name.Contains('/')&&(name.EndsWith(".dll",StringComparison.OrdinalIgnoreCase)||name.EndsWith(".exe",StringComparison.OrdinalIgnoreCase)||name.EndsWith(".json",StringComparison.OrdinalIgnoreCase))
+    public static bool IsComponent(string name)=>!name.Contains('/')&&(name.EndsWith(".dll",StringComparison.OrdinalIgnoreCase)||name.EndsWith(".exe",StringComparison.OrdinalIgnoreCase)||name.EndsWith(".json",StringComparison.OrdinalIgnoreCase))
         || name.StartsWith("rpfm/",StringComparison.OrdinalIgnoreCase)||name.StartsWith("bundled/",StringComparison.OrdinalIgnoreCase)
         || name.StartsWith("runtimes/",StringComparison.OrdinalIgnoreCase)
         || System.Text.RegularExpressions.Regex.IsMatch(name,@"^[a-z]{2}(-[A-Za-z]{2,4})?/[^/]+\.dll$",System.Text.RegularExpressions.RegexOptions.IgnoreCase);

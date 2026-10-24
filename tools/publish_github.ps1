@@ -18,7 +18,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,   # 本地这版（v1.3.2 这种未推送号，或已经是发布号）
     [string]$Notes = "",
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$PackageOnly
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path $PSScriptRoot -Parent
@@ -59,14 +60,14 @@ $tag = "v$Release"
 
 Write-Host "[=] 发布 $tag → $repo" -ForegroundColor Cyan
 Write-Host "    完整包：$fullZip"
-Write-Host "    程序包：$appZip（exe + WarbandStudio.*.dll + Web/ + schemas/ + update_repo.txt）"
+Write-Host "    程序包：$appZip（完整运行组件 + RPFM + Web/schema/模板；参考素材库可选）"
 if ($DryRun) { Write-Host "    [dry] 不打包、不上传" ; return }
 
 if ([version]$Release -ge [version]'1.7.5') {
     $manifestPath = Join-Path $Src 'schemas/installation-manifest.json'
     if (!(Test-Path -LiteralPath $manifestPath)) { throw '发行文件校验清单缺失，请重新构建。' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.Format -ne 1 -or $manifest.Version -ne $Release) { throw '发行文件清单版本不匹配。' }
+    if ($manifest.Format -notin @(1,2) -or $manifest.Version -ne $Release) { throw '发行文件清单版本不匹配。' }
     $manifestFiles = @($manifest.Files.PSObject.Properties)
     if ($manifest.Components) { $manifestFiles += @($manifest.Components.PSObject.Properties) }
     foreach ($file in $manifestFiles) {
@@ -97,20 +98,18 @@ try {
 }
 Write-Host ("[✓] 完整包：{0:N1} MB" -f ((Get-Item $fullZip).Length / 1MB)) -ForegroundColor Green
 
-# ③ 程序包（程序、Web 与 schema；rpfm/ 与 bundled/ 不重复下）
+# ③ 更新包按完整发行清单复制，运行时、识别库、RPFM与模板同步更新。
 $appTmp = Join-Path $RelDir "_app_pack"
 Assert-ReleasePath $appTmp
 if (Test-Path $appTmp) { Remove-Item $appTmp -Recurse -Force }
 New-Item -ItemType Directory -Path $appTmp | Out-Null
-foreach ($f in @("WarbandStudio.exe", "WarbandStudio.dll", "WarbandStudio.deps.json", "WarbandStudio.runtimeconfig.json",
-                 "WarbandStudio.Core.dll", "WarbandStudio.Pack.dll", "WarbandStudio.Packfile.dll", "WarbandStudio.Rpfm.dll",
-                 "WarbandStudio.Editors.dll", "update_repo.txt")) {
+foreach ($f in @($manifestFiles | ForEach-Object {$_.Name}) + @('schemas/installation-manifest.json')) {
     $p = Join-Path $Src $f
-    if (Test-Path $p) { Copy-Item $p $appTmp }
+    $dest = [IO.Path]::GetFullPath((Join-Path $appTmp $f))
+    if (!$dest.StartsWith([IO.Path]::GetFullPath($appTmp).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw '更新包文件路径越界' }
+    New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($dest)) -Force | Out-Null
+    Copy-Item -LiteralPath $p -Destination $dest
 }
-Copy-Item (Join-Path $Src "Web") $appTmp -Recurse
-# schema 会随游戏补丁更新，老用户覆盖程序包时必须一并获得新版。
-Copy-Item (Join-Path $Src "schemas") $appTmp -Recurse
 Compress-Archive -Path (Join-Path $appTmp "*") -DestinationPath $appZip -Force
 Remove-Item $appTmp -Recurse -Force
 Write-Host ("[✓] 程序包：{0:N1} MB" -f ((Get-Item $appZip).Length / 1MB)) -ForegroundColor Green
@@ -133,6 +132,7 @@ foreach ($archivePath in @($fullZip, $appZip)) {
     } finally { $archive.Dispose() }
 }
 Write-Host "[✓] 完整包与程序包的 schema 校验通过" -ForegroundColor Green
+if ($PackageOnly) { Write-Host '[✓] 仅生成发布包，未上传GitHub'; return }
 
 # ④ 上传（gh CLI）
 # gh：优先用工作区里的（<工作区>\tools\gh\gh.exe，和 build.ps1 找 dotnet 一个路子），没有就退回 PATH
