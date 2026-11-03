@@ -1682,6 +1682,10 @@ public sealed partial class MainViewModel : ObservableObject
             Status = msg;
             FileLog.Write("保存（写回原包）：" + msg);
         }
+        catch (WarbandStudio.Pack.UpgradeRuleConflictException ex)
+        {
+            if (ResolveDuplicateUpgradeRules(packPath!,ex)) await SaveAsync(path);
+        }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
@@ -1736,6 +1740,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>导出（原生写）：精英解锁 + 原样搬运其余条目。</summary>
     public async Task ExportToAsync(string destPath)
     {
+        var exportPackPath = _backend.Pack?.PackPath;
         IsBusy = true;
         try
         {
@@ -1744,6 +1749,10 @@ public sealed partial class MainViewModel : ObservableObject
             Status = $"已导出：{Path.GetFileName(destPath)}（树里 {rep.UnitsInTree} 个兵，解锁 {rep.Unlocked}，" +
                      $"本来就解锁 {rep.AlreadyUnlocked}）；" + rep.Notes.FirstOrDefault(n => n.StartsWith("RPFM："));
             FileLog.Write("导出完成：" + Status);
+        }
+        catch (WarbandStudio.Pack.UpgradeRuleConflictException ex)
+        {
+            if (exportPackPath is not null && ResolveDuplicateUpgradeRules(exportPackPath,ex)) await ExportToAsync(destPath);
         }
         catch (OperationCanceledException) { }
         catch (Exception e)

@@ -39,6 +39,7 @@ try
         "export-unlock" => await ExportUnlock(args),
         "refcheck" => await RefCheck(args),
         "export-edit" => await ExportEdit(args),
+        "native-export-edit" => await NativeExportEdit(args),
         "amend-test" => WarbandStudio.Probe.AmendTestRunner.Run(args),
         "milgroups" => WarbandStudio.Probe.MilGroups.Run(args),
         "tidy-overrides" => WarbandStudio.Probe.TidyOverrides.Run(args),
@@ -50,6 +51,8 @@ try
         "dedupe-grants" => WarbandStudio.Probe.DedupeGrants.Run(args),
         "tab-art" => WarbandStudio.Probe.TabArtCheck.Run(args),
         "tab-factions" => WarbandStudio.Probe.TabFactions.Run(args),
+        "duplicate-upgrades" => WarbandStudio.Probe.DuplicateUpgrades.Run(args),
+        "duplicate-upgrades-baseline" => WarbandStudio.Probe.DuplicateUpgrades.AttachBaseline(args),
         "cli-diagnose" => await WarbandStudio.Probe.CliDiagnostics.Run(args),
         "save-gate-test" => WarbandStudio.Probe.SaveGateTest.Run(args),
         "native-write-pack" => await NativeWritePack(args),
@@ -85,6 +88,7 @@ void Usage()
           probe saveas <pack> <目标.pack>
           probe roundtrip <pack> <pack内路径> <工作目录>
           probe table-rows <pack> <表名> <组合键列（逗号分隔）> [原版.pack]
+          probe native-export-edit <pack> <原版db.pack> <目标.pack> <组key> <x> <y>（仅格式层，不编译运行时；仍执行 RPFM 门禁）
           probe tidy-overrides <pack> [out.pack]
           probe tab-split <pack> [out.pack] --key Yukino [--drop <包内路径>]... [--dry-run]
           probe fix-table-names <pack> [out.pack] [--dry-run]
@@ -381,6 +385,27 @@ async Task<int> ExportEdit(string[] a)
         Path.GetFullPath(a[1]), Path.GetFullPath(a[2]), Path.GetFullPath(a[3]), schema, edits);
     Console.WriteLine($"[✓] 导出（含 1 处拖动）：{rep.DestPath}");
     foreach (var e in rep.AddedEntries) Console.WriteLine("      新增 " + e);
+    return 0;
+}
+
+/// <summary>格式对拍专用：保留实验脚本，验证坐标就地落表；不经过生产运行时编译。</summary>
+async Task<int> NativeExportEdit(string[] a)
+{
+    await Task.CompletedTask;
+    if (a.Length != 7) { Usage(); return 1; }
+    var input = Path.GetFullPath(a[1]); var vanilla = Path.GetFullPath(a[2]); var dest = Path.GetFullPath(a[3]);
+    if (input.Equals(dest, StringComparison.OrdinalIgnoreCase))
+        throw new ArgumentException("格式对拍不得覆盖输入包。");
+    var schema = WarbandStudio.Packfile.Schema.Load(RpfmCli.LocateSchema()!);
+    using var pack = WarbandStudio.Packfile.PackArchive.Open(input);
+    using var native = WarbandStudio.Packfile.PackArchive.Open(vanilla);
+    var edits = new WarbandStudio.Pack.WarbandEdits();
+    edits.InfoEdits[a[4]] = (int.Parse(a[5]), int.Parse(a[6]), null);
+    var replacements = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+    WarbandStudio.Pack.WarbandAmender.Apply(pack, native, edits, schema, replacements, new List<string>());
+    WarbandStudio.Packfile.PackWriter.WriteFrom(pack, replacements, dest);
+    WarbandStudio.Pack.RpfmExportValidation.Validate(dest, vanilla).RequireSaveAllowed();
+    Console.WriteLine($"[✓] 仅格式层坐标写入 + RPFM 门禁：{dest}");
     return 0;
 }
 

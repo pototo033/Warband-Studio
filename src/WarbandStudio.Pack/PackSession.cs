@@ -72,6 +72,7 @@ public sealed class PackSession(RpfmCli? cli)
     public ContainerInfo? Info { get; private set; }
     public IReadOnlyList<RFileInfo> Files => _files;
     public bool IsOpen => _archive is not null;
+    public IReadOnlyList<string> CompatibilityRecoveryNotes { get; private set; } = [];
 
     /// <summary>原生打开的包（读表用）。</summary>
     public PackArchive? Archive => _archive;
@@ -82,7 +83,7 @@ public sealed class PackSession(RpfmCli? cli)
         // 编辑集可在同一字典内换表；比较上次条目的字节对象，不能只比较字典本身。
         if (_pendingTables is not null && _pendingTables.Count == tables.Count &&
             tables.All(p => _pendingTables.TryGetValue(p.Key, out var bytes) && ReferenceEquals(bytes, p.Value))) return false;
-        var view = PackArchive.OpenView(PackPath, tables);
+        var view = DuplicateUpgradeArchive.OpenView(PackPath, tables);
         _archive?.Dispose();
         _archive = view;
         _pendingTables = new(tables, StringComparer.OrdinalIgnoreCase);
@@ -97,7 +98,9 @@ public sealed class PackSession(RpfmCli? cli)
     public Task OpenAsync(string packPath, CancellationToken ct = default)
     {
         Close();
-        var archive = PackArchive.Open(packPath);
+        var recoveryNotes = new List<string>();
+        var archive = DuplicateUpgradeArchive.OpenView(packPath, recoveryNotes: recoveryNotes);
+        CompatibilityRecoveryNotes = recoveryNotes;
         _archive = archive;
         PackPath = packPath;
         Info = new ContainerInfo { FileName = Path.GetFileName(packPath), FilePath = packPath };
@@ -124,6 +127,7 @@ public sealed class PackSession(RpfmCli? cli)
     private void Close()
     {
         _pendingTables = null;
+        CompatibilityRecoveryNotes = [];
         _archive?.Dispose();
         _archive = null;
         PackPath = null;

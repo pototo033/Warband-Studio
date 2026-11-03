@@ -31,7 +31,7 @@ public static class WarbandAmender
         TabFileBindingOperations.NormalizeRecovered(pack,e,schema,notes);
         foreach(var path in previousBuffers)
             if(!e.TableReplacements.ContainsKey(path)) repl.Remove(path);
-        using var editedView = e.TableReplacements.Count > 0 ? PackArchive.OpenView(pack.FilePath, e.TableReplacements, e.RemoveFiles) : null;
+        using var editedView = e.TableReplacements.Count > 0 ? DuplicateUpgradeArchive.OpenView(pack.FilePath, e.TableReplacements, e.RemoveFiles) : null;
         if (editedView is not null) pack = editedView;
         foreach (var (path, bytes) in e.TableReplacements)
             if (!e.RemoveFiles.Contains(path,StringComparer.OrdinalIgnoreCase)) repl[path] = bytes;
@@ -39,7 +39,7 @@ public static class WarbandAmender
         var createdTabDonors = new List<(string Key, string Donor)>();
         const string Junc = "unit_to_unit_group_junctions_tables";
         TabFileBindingOperations.ApplyNames(pack,e,schema,repl,notes);
-        using var renamedView=e.TabFileNames.Count>0 ? PackArchive.OpenView(pack.FilePath,repl,e.RemoveFiles):null;
+        using var renamedView=e.TabFileNames.Count>0 ? DuplicateUpgradeArchive.OpenView(pack.FilePath,repl,e.RemoveFiles):null;
         if(renamedView is not null) pack=renamedView;
 
         // ── -1) 旧名覆盖表搬家（见 MigrateLegacy 的说明）──

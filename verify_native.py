@@ -2,12 +2,16 @@
 # -*- coding: utf-8 -*-
 """原生格式层回归：把"和 rpfm_cli 4.7.4 逐字节对拍"这套验收做成一条命令。
 
-  python verify_native.py <你的.pack> [原版 data/db.pack]
+  python verify_native.py <你的.pack> [原版 data/db.pack] [--format-only]
 
-三项检查（全绿才算过）：
+四项检查（全绿才算过）：
   ① 表往返：原版 db.pack 的每张表「解码 → 再编码」与原始字节一致
   ② 重写包：把你的包原生重写一遍，rpfm_cli 能读、且列表与内容都对得上
   ③ 画布拖动导出：指定一个组拖到 (700,150)，rpfm_cli 读导出包确认坐标已改
+  ④ 编辑落表：新增、修改和删除后由 rpfm_cli 读回核对
+
+--format-only 用于独立的游戏实验包：③仅测原生写入，不编译生产运行时，仍执行
+完整 RPFM Error 门禁。这不表示实验脚本已获生产保存链路支持；默认流程不变。
 
 依赖：本机的 rpfm_cli 4.7.4（对拍基准）+ 构建好的 Probe。
 """
@@ -58,12 +62,17 @@ def cli(cli_exe, *args):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("用法: python verify_native.py <你的.pack> [原版 data/db.pack]")
+    arguments = sys.argv[1:]
+    format_only = "--format-only" in arguments
+    arguments = [value for value in arguments if value != "--format-only"]
+    if not 1 <= len(arguments) <= 2:
+        print("用法: python verify_native.py <你的.pack> [原版 data/db.pack] [--format-only]")
         return 1
-    mod_pack = os.path.abspath(sys.argv[1])
+    mod_pack = os.path.abspath(arguments[0])
 
-    vanilla = sys.argv[2] if len(sys.argv) > 2 else None
+    vanilla = arguments[1] if len(arguments) > 1 else None
+    if format_only:
+        print("[仅格式层] 不编译生产运行时；坐标写入和编辑落表仍执行 RPFM Error 门禁。")
     if not vanilla:
         game = ""
         cfg = os.path.join(HERE, "config.json")
@@ -145,7 +154,8 @@ def main():
         fails.append("③ 找不到可用的组")
     else:
         exported = os.path.join(TMP, "moved.pack")
-        rc, out = probe("export-edit", mod_pack, vanilla, exported, group, "700", "150")
+        command = "native-export-edit" if format_only else "export-edit"
+        rc, out = probe(command, mod_pack, vanilla, exported, group, "700", "150")
         if rc != 0:
             fails.append("③ 导出失败：" + out.strip().splitlines()[-1])
         else:

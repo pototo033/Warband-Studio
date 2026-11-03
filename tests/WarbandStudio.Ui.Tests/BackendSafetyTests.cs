@@ -383,6 +383,21 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
         await vm.CloseProjectAsync(); await backend.DisposeAsync();
     }
 
+    [Fact]
+    public async Task BadRecognizedPackDoesNotPreventHealthyPackOrRecentProjectReopen()
+    {
+        var vm=new MainViewModel(_settings,ValidateFixturePack);
+        var backend=(Backend)typeof(MainViewModel).GetField("_backend",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(vm)!;
+        var project=Path.Combine(_root,"partial");var info=ProjectStore.Ensure(project);
+        var good=Path.Combine(ProjectStore.PackDirOf(project),"good.pack");File.Copy(_pack,good);
+        var bad=Path.Combine(ProjectStore.PackDirOf(project),"bad.pack");File.WriteAllText(bad,"broken");
+        info.Packs=[ProjectStore.RelPath(project,bad),ProjectStore.RelPath(project,good)];info.LastPack=bad;ProjectStore.Save(project,info);
+        Assert.True(await vm.OpenRecentProjectAsync(project));Assert.Single(backend.Packs);Assert.Equal(good,backend.Pack!.PackPath);
+        Assert.Contains("1 个包未打开",vm.Status);Assert.Contains("bad.pack",vm.Status);Assert.Equal(2,ProjectStore.Ensure(project).Packs.Count);
+        await vm.CloseProjectAsync();Assert.True(await vm.OpenLastProjectAsync());Assert.Single(backend.Packs);
+        await vm.CloseProjectAsync();await backend.DisposeAsync();
+    }
+
     private static byte[] Loc(string text)
     {
         using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);

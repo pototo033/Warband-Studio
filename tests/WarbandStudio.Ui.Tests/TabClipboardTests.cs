@@ -52,7 +52,7 @@ public sealed partial class BackendSafetyTests
         _backend.PasteTab("DEST");Assert.Equal(5,_backend.ReadTable($"db/{TG}/DestData").Rows.Count);
         Assert.True(_backend.Undo());Assert.True(_backend.Redo());
         await _backend.SaveInPlaceAsync();await _backend.OpenPackAsync(path);
-        using var pack=PackArchive.Open(path);
+        using var pack=DuplicateUpgradeArchive.OpenView(path);
         Assert.Equal(8,TableFiles.ReadComposite(pack,TG,["unit_group"],_schema)!.Rows.Count);
         Assert.Equal(4,TableFiles.ReadComposite(pack,TR,["upgrade_key"],_schema)!.Rows.Count);
         Assert.Equal(6,TableFiles.ReadComposite(pack,"unit_upgrade_to_tech_requirements_tables",["unit_upgrade","technology"],_schema)!.Rows.Count);

@@ -36,7 +36,7 @@ public sealed partial class Backend
         {
             RequireEditablePack(_pack?.PackPath??"");
             var (bytes,snapshot)=ProjectTables();
-            using var view=PackArchive.OpenView(_pack!.PackPath!,bytes,snapshot.RemoveFiles);
+            using var view=DuplicateUpgradeArchive.OpenView(_pack!.PackPath!,bytes,snapshot.RemoveFiles);
             var schema=GetSchema();
             DbTable? Read(string table)
             {
@@ -90,7 +90,7 @@ public sealed partial class Backend
         var copy=_pageCopy??throw new InvalidOperationException("请先复制一个页签。");
         if(!copy.Pack.Equals(_pack!.PackPath,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("请在复制来源的同一个 Pack 内粘贴。");
         var (bytes,snapshot)=ProjectTables();var schema=GetSchema();
-        using var view=PackArchive.OpenView(_pack.PackPath!,bytes,snapshot.RemoveFiles);
+        using var view=DuplicateUpgradeArchive.OpenView(_pack.PackPath!,bytes,snapshot.RemoveFiles);
         var cats=TableFiles.ReadComposite(view,TabFileNaming.Cats,["category"],schema);
         if(cats is null || !cats.RawRows.Any(r=>PageCell(cats,r,"category").Equals(category,StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("目标页签不存在，请先创建或打开目标页签。");

@@ -98,6 +98,45 @@ public static class TabFactionVisibility
     private static string Allowed(Settings settings, string category) => string.Join(" && ", Categories(settings)
         .Select(key => $"({category} != \"{key}\" || ({Selection(settings, key)}))"));
 
+    /// <summary>
+    /// 只迁回页签显示名单：将当前名单回退后，必须逐字节命中清单中的编译哈希。
+    /// 因而其他 UI、成本回调或结构的外部修改仍会被拒绝，不需要相信外部文件自报的来源。
+    /// </summary>
+    internal static bool TryRebaseCompiled(byte[] original, byte[] current, string compiledHash, out byte[] logical)
+    {
+        logical = [];
+        try
+        {
+            var utf8 = new System.Text.UTF8Encoding(false, true);
+            var beforeText = utf8.GetString(original);
+            var currentText = utf8.GetString(current);
+            var (before, beforeComment) = Metadata(XDocument.Parse(beforeText, LoadOptions.PreserveWhitespace));
+            var (after, afterComment) = Metadata(XDocument.Parse(currentText, LoadOptions.PreserveWhitespace));
+            if (afterComment is null) return false;
+            var keys = Categories(before).Concat(Categories(after)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            Dictionary<string, string[]> Rules(Dictionary<string, string[]> source) => keys.ToDictionary(k => k,
+                k => source.GetValueOrDefault(k, []), StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, bool> Inverse(Settings source) => keys.ToDictionary(k => k,
+                k => source.Excluded.GetValueOrDefault(k), StringComparer.OrdinalIgnoreCase);
+            var rollback = XDocument.Parse(Apply(currentText, Rules(before.Tabs),
+                raceEdits: Rules(before.Races), excludedEdits: Inverse(before)), LoadOptions.PreserveWhitespace);
+            // Apply 会重排元数据字典；恢复原始注释才能证明其他字节确实完全一致。
+            var (_, rollbackComment) = Metadata(rollback);
+            if (beforeComment is null) rollbackComment?.Remove();
+            else if (rollbackComment is null) rollback.Root!.AddFirst(new XComment(beforeComment.Value));
+            else rollbackComment.Value = beforeComment.Value;
+            if (!DuplicateUpgradeArchive.Hash(utf8.GetBytes(rollback.ToString(SaveOptions.DisableFormatting)))
+                .Equals(compiledHash, StringComparison.OrdinalIgnoreCase)) return false;
+            logical = utf8.GetBytes(Apply(beforeText, Rules(after.Tabs),
+                raceEdits: Rules(after.Races), excludedEdits: Inverse(after)));
+            return true;
+        }
+        catch (Exception ex) when (ex is System.Xml.XmlException or ArgumentException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
     public static string Apply(string xml, IReadOnlyDictionary<string, string[]> edits,
         IEnumerable<(string Old, string New)>? renames = null,
         IEnumerable<(string Key, string Donor)>? newTabs = null,

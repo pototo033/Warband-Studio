@@ -20,7 +20,7 @@ public static class AmendTestRunner
         var dest = Path.GetFullPath(a[3]);
         var notes = new List<string>();
 
-        using var pack = PackArchive.Open(packPath);
+        using var pack = DuplicateUpgradeArchive.OpenView(packPath);
         var infos = TableFiles.ReadMerged(pack, "unit_upgrade_group_ui_infos_tables", schema, notes)
                     ?? throw new InvalidDataException("包里没有 ui_infos");
         var junc = TableFiles.ReadConcat(pack, "unit_to_unit_group_junctions_tables", schema, notes)
@@ -381,7 +381,14 @@ public static class AmendTestRunner
         e.RemoveGroup.Add(mergeDrop);
         e.InfoEdits.Remove(mergeDrop);
 
-        var rep = WarbandExporter.Export(packPath, vanillaPath, dest, schema, e);
+        // 此探针专门对拍“作者编辑 → DB 字节”，不能把派生的运行时桥接行当成作者路线来断言。
+        // 保存门禁与重复兵编译另有真实导出探针及回归测试；这里仍执行完整 RPFM Error 门禁。
+        using var native = PackArchive.Open(vanillaPath);
+        var projected = new Dictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
+        WarbandAmender.Apply(pack,native,e,schema,projected,notes);
+        PackWriter.WriteFrom(pack,projected,dest,dropPaths:e.RemoveFiles);
+        RpfmExportValidation.Validate(dest,vanillaPath).RequireSaveAllowed();
+        var rep = new ExportReport(dest,0,0,0,0,projected.Keys.ToArray(),notes);
         var plan = new Dictionary<string, object>
         {
             ["dest"] = dest,

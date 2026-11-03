@@ -103,10 +103,28 @@ public sealed partial class MainViewModel
                 return false;
             }
             var info = ProjectStore.Ensure(dir, prefillKey: _settings.GroupKeyPrefix);
+            var validPacks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var failedPacks = new List<string>();
             foreach (var relative in info.Packs)
             {
                 var candidate = ProjectStore.FullPath(dir, relative);
-                if (File.Exists(candidate)) { using var validation = WarbandStudio.Packfile.PackArchive.Open(candidate); }
+                if (!File.Exists(candidate)) continue;
+                try
+                {
+                    // 先验证逻辑视图，保护当前工程；坏的兼容清单不应挡住同工程的其他包。
+                    using var validation = DuplicateUpgradeArchive.OpenView(candidate);
+                    validPacks.Add(candidate);
+                }
+                catch (Exception ex)
+                {
+                    failedPacks.Add($"{Path.GetFileName(candidate)}：{ex.Message}");
+                    FileLog.Write("工程包预检失败：" + candidate, ex);
+                }
+            }
+            if (validPacks.Count == 0 && failedPacks.Count > 0)
+            {
+                Status = "工程未切换：没有可打开的包；" + string.Join("；", failedPacks);
+                return false;
             }
             if (!await ConfirmUnsavedBeforeAsync("打开工程")) return false;
             await ResetProjectSessionsAsync();
@@ -120,9 +138,9 @@ public sealed partial class MainViewModel
             var all = ProjectStore.PacksIn(dir);
             var toOpen = info.Packs
                 .Select(rel => ProjectStore.FullPath(dir, rel))
-                .Where(f => f.Length > 0 && File.Exists(f))
+                .Where(f => f.Length > 0 && validPacks.Contains(f))
                 .ToList();
-            var missing = info.Packs.Count - toOpen.Count;
+            var missing = info.Packs.Count - toOpen.Count - failedPacks.Count;
             var last = ProjectStore.FullPath(dir, info.LastPack);
             if (toOpen.Any(f => f.Equals(last, StringComparison.OrdinalIgnoreCase)))
             {
@@ -132,18 +150,19 @@ public sealed partial class MainViewModel
             var opened = 0;
             foreach (var f in toOpen)
             {
-                if (!await OpenPackPathAsync(f, open: true, asUnitPack: false)) return false;
-                opened++;
+                if (await OpenPackPathAsync(f, open: true, asUnitPack: false)) opened++;
+                else failedPacks.Add($"{Path.GetFileName(f)}：{Status}");
             }
             Status = toOpen.Count switch
             {
                 0 => $"工程「{info.Name}」已打开 —— 用「导入 WUU 模板」或「导入 Pack」放一个包进来" +
                      (all.Count > 0 ? "（目录里有包但都没被识别：工程根右键「工程内的包…」勾一下）" : ""),
-                _ => $"工程「{info.Name}」已打开，同时开 {toOpen.Count} 个包：{string.Join("、", toOpen.Select(Path.GetFileName))}" +
-                     (all.Count > toOpen.Count ? $"（另有 {all.Count - toOpen.Count} 个未识别，不自动开）" : "") +
+                _ => $"工程「{info.Name}」已打开，成功打开 {opened} 个包" +
+                     (all.Count > info.Packs.Count ? $"（另有 {all.Count - info.Packs.Count} 个未识别，不自动开）" : "") +
                      (missing > 0 ? $"（{missing} 个清单里的包不在了，已跳过）" : ""),
             };
-            FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，识别 {info.Packs.Count} / 目录 {all.Count} 个包，本次开 {toOpen.Count} 个）");
+            if (failedPacks.Count > 0) Status += $"；{failedPacks.Count} 个包未打开：" + string.Join("；", failedPacks);
+            FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，识别 {info.Packs.Count} / 目录 {all.Count} 个包，本次开 {opened} 个，失败 {failedPacks.Count} 个）");
             return true;
         }
         catch (Exception ex) { Status = "打开工程失败：" + ex.Message; FileLog.Write("打开工程失败", ex); return false; }
@@ -273,6 +292,10 @@ public sealed partial class MainViewModel
         {
             Status = await Task.Run(() => _backend.SaveInPlaceAsync(session));
             return true;
+        }
+        catch (WarbandStudio.Pack.UpgradeRuleConflictException ex)
+        {
+            return ResolveDuplicateUpgradeRules(packPath,ex) && await SavePackByPathAsync(packPath);
         }
         catch (Exception ex) { Status = "保存失败：" + ex.Message; FileLog.Write("保存失败", ex); return false; }
     }

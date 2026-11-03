@@ -24,7 +24,7 @@ public sealed partial class Backend
             }
             return false;
         }
-        using (var view = PackArchive.OpenView(current, Edits.TableReplacements, Edits.RemoveFiles))
+        using (var view = DuplicateUpgradeArchive.OpenView(current, Edits.TableReplacements, Edits.RemoveFiles))
             if (Contains(view)) return;
         foreach (var source in PermissionReferencePacks(current).Concat(VanillaDbPackPath is { } v ? new[] { v } : []))
         {
@@ -37,7 +37,7 @@ public sealed partial class Backend
     private (DbTable? Military, DbTable? Exclusive) GrantSources()
     {
         var session = _pack ?? throw new InvalidOperationException("先打开一个包。");
-        using var view = PackArchive.OpenView(session.PackPath!,Edits.TableReplacements,Edits.RemoveFiles);
+        using var view = DuplicateUpgradeArchive.OpenView(session.PackPath!,Edits.TableReplacements,Edits.RemoveFiles);
         using var vanilla = VanillaDbPackPath is { } path && File.Exists(path) ? PackArchive.Open(path) : null;
         var schema = GetSchema();
         DbTable? Read(string name,string[] keys) => TableFiles.MergeComposite(

@@ -8,7 +8,7 @@ public static class TabFileBindingOperations
     public static void NormalizeRecovered(PackArchive pack,WarbandEdits edits,Schema schema,List<string> notes)
     {
         if(edits.TableReplacements.Count==0) return;
-        using var original=PackArchive.Open(pack.FilePath);
+        using var original=DuplicateUpgradeArchive.OpenView(pack.FilePath);
         foreach(var (path,bytes) in edits.TableReplacements.ToArray())
         {
             var parts=path.Replace('\\','/').Split('/');

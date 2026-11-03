@@ -92,6 +92,8 @@ public sealed class WarbandEdits
     /// <summary>页签重命名：(旧 key, 新 key)。改齐 categories 行 / infos.category / twui / 两张图。</summary>
     public List<(string Old, string New)> TabRenames { get; } = [];
     public Dictionary<string,string> TabFileNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>同一实际升级存在重叠规则时，由用户选择；签名包含成本/条件，改规则后旧选择自动失效。</summary>
+    public Dictionary<string,string> DuplicateUpgradeChoices { get; } = new(StringComparer.Ordinal);
 
     /// <summary>「打开页签」：把别的种族的页签也加进当前画布（这些页签里的兵**不自动写军事组授权**）。</summary>
     public List<string> OpenedTabs { get; } = [];
@@ -248,7 +250,7 @@ public sealed class WarbandEdits
     }
 
     public int Count =>
-        TabFileNames.Count + TableReplacements.Count + AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
+        DuplicateUpgradeChoices.Count + TabFileNames.Count + TableReplacements.Count + AddJunction.Count + RemoveJunction.Count + AddGroup.Count + RemoveGroup.Count + InfoEdits.Count +
         AddRoute.Count + RemoveRoute.Count + AddLink.Count + RemoveLink.Count + AddCost.Count + NewTabs.Count + AddUnitGroup.Count + FileReplacements.Count + RemoveUnitGroup.Count + TabScopes.Count + OpenedTabs.Count + TabRenames.Count + UnlockXp.Count + TabRaceScopes.Count + RemoveFiles.Count +
         PoolFactors.Count + PoolCosts.Count + RemoveCost.Count + RemovePoolCost.Count + AddExclusive.Count + RemoveExclusive.Count + RemovePoolLinks.Count + TabAllowedFactions.Count + TabAllowedRaces.Count + TabVisibilityExcluded.Count;
 
@@ -279,6 +281,7 @@ public sealed class WarbandEdits
         P("页签归属", TabScopes.Count);
         P("重命名页签", TabRenames.Count);
         P("落表文件名",TabFileNames.Count);
+        P("重复兵升级规则",DuplicateUpgradeChoices.Count);
         P("解锁经验", UnlockXp.Count);
         P("资源池", PoolFactors.Count);
         P("成本扣资源", PoolCosts.Count);
@@ -326,6 +329,7 @@ public sealed class WarbandEdits
         c.OpenedTabs.AddRange(OpenedTabs);
         c.TabRenames.AddRange(TabRenames);
         foreach(var (tab,name) in TabFileNames) c.TabFileNames[tab]=name;
+        foreach(var (key,value) in DuplicateUpgradeChoices) c.DuplicateUpgradeChoices[key]=value;
         c.UnlockXp.AddRange(UnlockXp);
         c.TabRaceScopes.AddRange(TabRaceScopes);
         foreach (var (key, factions) in TabAllowedFactions) c.TabAllowedFactions[key] = factions.ToArray();

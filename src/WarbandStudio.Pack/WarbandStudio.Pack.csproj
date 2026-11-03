@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <EmbeddedResource Include="Runtime\duplicate_upgrades.lua" LogicalName="WarbandStudio.Pack.duplicate_upgrades.lua" />
     <ProjectReference Include="..\WarbandStudio.Core\WarbandStudio.Core.csproj" />
     <ProjectReference Include="..\WarbandStudio.Rpfm\WarbandStudio.Rpfm.csproj" />
     <ProjectReference Include="..\WarbandStudio.Packfile\WarbandStudio.Packfile.csproj" />

@@ -28,6 +28,7 @@ public sealed partial class Backend
         next.TabRaceScopes.AddRange(previous.TabRaceScopes);
         next.TabScopes.AddRange(previous.TabScopes);
         foreach(var (tab,name) in previous.TabFileNames) next.TabFileNames[tab]=name;
+        foreach(var (key,value) in previous.DuplicateUpgradeChoices) next.DuplicateUpgradeChoices[key]=value;
         _editsByPack[Key] = next;
         InvalidateCanvas();
         RestagePendingArt();
@@ -43,7 +44,7 @@ public sealed partial class Backend
         {
             RequireEditablePack(packPath);
             var (bytes, snapshot) = ProjectTables();
-            using var view = PackArchive.OpenView(packPath, bytes, snapshot.RemoveFiles);
+            using var view = DuplicateUpgradeArchive.OpenView(packPath, bytes, snapshot.RemoveFiles);
             var name = PackSession.TableNameOf(innerPath);
             var table = DbTable.Decode(view.ReadDecoded(innerPath), name, GetSchema());
             var at = table.Columns.FindIndex(c => c.Name == column);
@@ -76,7 +77,7 @@ public sealed partial class Backend
             if (!Regex.IsMatch(newKey, "^[A-Za-z0-9_]+$")) throw new ArgumentException("兵组 key 只能包含字母、数字和下划线。");
             if (oldKey == newKey) return false;
             var (bytes, snapshot) = ProjectTables();
-            using var view = PackArchive.OpenView(_pack!.PackPath!, bytes, snapshot.RemoveFiles);
+            using var view = DuplicateUpgradeArchive.OpenView(_pack!.PackPath!, bytes, snapshot.RemoveFiles);
             RenameKey(view, bytes, "unit_upgrade_groups_tables", "unit_group", oldKey, newKey);
             CommitTables(bytes, snapshot);
             return true;

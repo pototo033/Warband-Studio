@@ -34,13 +34,18 @@ public static class WarbandExporter
     /// <paramref name="vanillaDbPack"/> 是原版 `data/db.pack`（要它提供兵的完整行）。
     /// </summary>
     public static ExportReport Export(string packPath, string vanillaDbPack, string destPath, Schema schema,
-                                      WarbandEdits? edits = null, Func<string, RpfmDiagnosticReport>? validateStaged = null)
+                                      WarbandEdits? edits = null, Func<string, RpfmDiagnosticReport>? validateStaged = null,
+                                      IEnumerable<string>? referencePacks = null)
     {
+        // 另存后仍继承原兼容身份，避免仅因文件名变化就创建另一套预算池。
+        using(var identitySource=PackArchive.Open(packPath))
+            if(DuplicateUpgradeArchive.Read(identitySource)?.ProjectKey is {Length:>0} previousKey && string.IsNullOrWhiteSpace(edits?.ProjectKey))
+            { edits=edits?.Clone()??new WarbandEdits();edits.ProjectKey=previousKey; }
         var notes = new List<string>();
         var added = new List<string>();
         var replacements = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
 
-        using var pack = PackArchive.OpenView(packPath, edits?.TableReplacements ?? new Dictionary<string, byte[]>(), edits?.RemoveFiles);
+        using var pack = DuplicateUpgradeArchive.OpenView(packPath, edits?.TableReplacements, edits?.RemoveFiles);
         using var vanilla = PackArchive.Open(vanillaDbPack);
 
         // 1) 树里的兵：兵组↔兵 关联表的 unit 列
@@ -266,11 +271,28 @@ public static class WarbandExporter
             catch (Exception ex) { throw new InvalidDataException("画布编辑落表失败，已停止导出以保留原包：" + ex.Message, ex); }
         }
 
+        // 重复兵兼容统一在最终逻辑表上运行，覆盖表视图、拖拽、拆合组等所有编辑入口。
+        var logicalBytes = new Dictionary<string, byte[]>(edits?.TableReplacements ?? new Dictionary<string, byte[]>(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (file, bytes) in replacements) logicalBytes[file] = bytes;
+        using var authored = DuplicateUpgradeArchive.OpenView(packPath, logicalBytes, edits?.RemoveFiles);
+        using var sourceBytes = PackArchive.Open(packPath);
+        var choices = DuplicateUpgradeArchive.Read(sourceBytes)?.Choices ?? new Dictionary<string,string>();
+        foreach (var (key, value) in edits?.DuplicateUpgradeChoices ?? new Dictionary<string,string>()) choices[key] = value;
+        var sources = new List<PackArchive>();
+        Dictionary<string,byte[]> derived;
+        try
+        {
+            foreach (var path in (referencePacks ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+                if (!Path.GetFullPath(path).Equals(Path.GetFullPath(packPath), StringComparison.OrdinalIgnoreCase) && !Path.GetFullPath(path).Equals(Path.GetFullPath(vanillaDbPack), StringComparison.OrdinalIgnoreCase)) sources.Add(DuplicateUpgradeArchive.OpenView(path));
+            derived = DuplicateUpgradeCompiler.Compile(authored, vanilla, schema, edits ?? new WarbandEdits(), choices, notes, sources);
+        }
+        finally { foreach (var source in sources) source.Dispose(); }
+
         // 5) 写包（其余条目原样搬运）
         var staged = destPath + ".exporting." + Guid.NewGuid().ToString("N");
         try
         {
-            PackWriter.WriteFrom(pack, replacements, staged, dropPaths: edits?.RemoveFiles);
+            PackWriter.WriteFrom(authored, derived, staged);
             using (PackArchive.Open(staged)) { }
             var diagnostics = (validateStaged ?? (p => RpfmExportValidation.Validate(p, vanillaDbPack)))(staged);
             diagnostics.RequireSaveAllowed();
