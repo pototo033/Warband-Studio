@@ -1,4 +1,4 @@
--- 原生接口负责换兵；本脚本只镜像预算、结算已经由原生确认的资源交易。
+-- 原生接口负责换兵；本脚本仅为本地玩家镜像预算、结算原生已确认的资源交易。
 local config = require('__DATA_MODULE__')
 local namespace = 'studio_duplicate_' .. config.namespace
 local save_key, timer = namespace .. '_accounting', namespace .. '_budget'
@@ -24,8 +24,9 @@ local function hold(frame,value)
     return value
 end
 local function faction_for(frame,state)
+    if state.name~=local_key then return nil end
     local faction=hold(frame,cm:get_faction(state.name))
-    if live(faction) then return faction end
+    if live(faction) and faction:is_human() then return faction end
 end
 local function pool_from(frame,manager,key)
     hold(frame,manager)
@@ -43,15 +44,6 @@ local function treasury(frame,state)
     local faction=faction_for(frame,state)
     if not faction then error('faction unavailable: ' .. state.name) end
     return faction:treasury()
-end
-local function faction_names(list)
-    local frame={handles={list}}
-    local names={}
-    for i=0,list:num_items()-1 do
-        local faction=hold(frame,list:item_at(i))
-        if live(faction) then names[#names+1]=faction:name() end
-    end
-    return names
 end
 local function source_resource(frame,state,source)
     if not source then return nil end
@@ -265,6 +257,7 @@ end
 local function create_state(faction,initialise)
     if not active() or not live(faction) then return nil end
     local name=faction:name()
+    if name~=local_key or not faction:is_human() then return nil end
     if states[name] then return states[name] end
     local _,first=next(by_resource)
     if not first then return nil end
@@ -293,7 +286,7 @@ local function create_state(faction,initialise)
             if debt>0 then settle(operation,state,entry,debt,'load_recovery') end
         end
         persist(state);mirror(operation,state,'startup')
-        log('READY faction=' .. name .. ' policies=' .. #config.policies .. ' fingerprint=' .. config.fingerprint .. ' runtime=interface-lifetime-1')
+        log('READY faction=' .. name .. ' policies=' .. #config.policies .. ' fingerprint=' .. config.fingerprint .. ' runtime=interface-lifetime-1 refresh=local_player_only')
     end)
     return state
 end
@@ -314,24 +307,25 @@ cm:add_first_tick_callback(function()
     local_key=cm:get_local_faction_name(true)
     saved=cm:get_saved_value(save_key)
     if type(saved)~='table' or saved.fingerprint~=config.fingerprint or type(saved.factions)~='table' then saved={fingerprint=config.fingerprint,factions={}} end
-    local model=cm:model()
-    local world=model:world()
-    -- 初始化会写预算并触发外部回调，先复制 key，不能跨写操作继续遍历原生列表。
-    local factions=faction_names(world:faction_list())
-    for _,name in ipairs(factions) do create_state(cm:get_faction(name),false) end
+    -- 不遍历世界派系，也不读取/清零旧AI预算；只迁移本地玩家自己的未结账本。
+    saved.factions={[local_key]=saved.factions[local_key]}
     create_state(cm:get_faction(local_key),true)
     core:add_listener(namespace .. '_changed','PooledResourceChanged',true,function(context)
         if not active() or not ready or writing or billing then return end
-        local resource=context:resource();if not live(resource) then return end
         -- 行省资源变化可能不携带派系上下文，也要立即刷新当前军队预算。
         if not context:has_faction() then
+            local resource=context:resource();if not live(resource) then return end
             if real_resources[resource:key()] then refresh_local('province_resource') end
             return
         end
         local faction=context:faction();if not live(faction) then return end
-        local state=states[faction:name()]
+        if faction:name()~=local_key or not faction:is_human() then return end
+        local state=states[local_key]
         if not state then return end
-        local entry=by_resource[resource:key()]
+        local resource=context:resource();if not live(resource) then return end
+        local key=resource:key()
+        local entry=by_resource[key]
+        if not entry and not real_resources[key] then return end
         protected(state,'resource',function(frame)
             hold(frame,context);hold(frame,resource);hold(frame,faction)
             if entry then
@@ -359,8 +353,8 @@ cm:add_first_tick_callback(function()
     core:add_listener(namespace .. '_turn','FactionTurnStart',true,function(context)
         if not active() then return end
         local faction=context:faction()
-        if not live(faction) then return end
-        local state=states[faction:name()] or create_state(faction,true)
+        if not live(faction) or faction:name()~=local_key or not faction:is_human() then return end
+        local state=states[local_key] or create_state(faction,true)
         if not state then return end
         protected(state,'turn',function(frame)
             state.turn=cm:turn_number();for _,entry in pairs(by_resource) do state.reset[entry.id]=true end
@@ -374,11 +368,6 @@ cm:add_first_tick_callback(function()
     cm:repeat_real_callback(function()
         if not active() then return end
         refresh_local('timer')
-        local active_factions=faction_names(cm:whose_turn_is_it())
-        for _,name in ipairs(active_factions) do
-            local state=create_state(cm:get_faction(name),false)
-            if state and state.name~=local_key then protected(state,'active_turn',function(frame) mirror(frame,state,'active_turn') end) end
-        end
     end,200,timer)
     refresh_local('ready')
 end)

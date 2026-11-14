@@ -140,7 +140,7 @@ tests = [
     ('insufficient province blocks before spending', "state.local_key='counts';state.ui_selected=2", 'assert(not native_pay(counts));assert(counts.cash==5000 and counts.pools.power.balance==1000);no_failure()'),
     ('no selected army blocks province costs', "state.local_key='counts'", 'assert(not native_pay(counts));select_army(1);assert(native_pay(counts));no_failure()'),
     ('province events without faction immediately revoke stale credit', "state.local_key='counts';state.ui_selected=1", "area.pool.balance=50;fire('PooledResourceChanged',{has_faction=function()return false end,resource=function()return area.pool end});assert(not native_pay(counts));no_failure()"),
-    ('independent original and copied prices', "state.local_key='counts';state.ui_selected=1", 'assert(native_pay(counts));assert(area.pool.balance==700 and counts.pools.power.balance==800);assert(native_pay(gold));assert(gold.cash==4500);no_failure()'),
+    ('original price applies only to the current player', "state.local_key='counts';state.ui_selected=1", 'assert(native_pay(counts));assert(area.pool.balance==700 and counts.pools.power.balance==800);assert(not native_pay(gold));assert(gold.cash==5000);no_failure()'),
     ('duplicate native callbacks do not charge again', '', "assert(native_pay(gold));local s=cfg.policies[1].slots[1];fire('PooledResourceChanged',event(gold,gold.pools[s.resource],-cfg.scale,cfg.pay_factor));assert(gold.cash==4500);no_failure()"),
     ('binding IDs accepted', 'state.binding_keys=true', 'assert(native_pay(gold));assert(gold.cash==4500);no_failure()'),
     ('queued batch charged once', '', 'assert(native_pay(gold,1,true));assert(native_pay(gold,1,true));state.timer();flush();assert(gold.cash==4000);no_failure()'),
@@ -149,7 +149,7 @@ tests = [
     ('treasury below full price blocks', 'gold.cash=400', 'assert(not native_pay(gold));assert(gold.cash==400);no_failure()'),
     ('discount total rounded once', '', 'assert(native_pay(gold,0.955));assert(gold.cash==5000-math.floor(500*0.955+0.5));no_failure()'),
     ('next turn epoch does not drop first payment', '', "assert(native_pay(gold));state.turn=2;fire('FactionTurnStart',{faction=function()return gold end});for _,s in ipairs(cfg.policies[1].slots)do gold.pools[s.resource].pay=0 end;assert(native_pay(gold));assert(gold.cash==4000);no_failure()"),
-    ('AI keeps ignored resources', '', 'assert(native_pay(coast));assert(coast.cash==4800 and coast.pools.infamy.balance==1000);no_failure()'),
+    ('AI receives no compatibility budget', '', 'assert(not native_pay(coast));assert(coast.cash==5000 and coast.pools.infamy.balance==1000);no_failure()'),
     ('multiplayer fails closed', 'state.mp=true', 'assert(next(state.listeners)==nil and not native_pay(gold));assert(gold.cash==5000)'),
 ]
 for name, before, code in tests:
