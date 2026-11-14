@@ -120,6 +120,7 @@ public sealed partial class MainViewModel : ObservableObject
             Raise(nameof(ProjectText));
             Raise(nameof(ProjectKey));
             Raise(nameof(IsWelcomeVisible));
+            RebuildTree();
         }
     }
 

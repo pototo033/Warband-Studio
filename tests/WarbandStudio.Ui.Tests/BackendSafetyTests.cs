@@ -282,18 +282,31 @@ public sealed partial class BackendSafetyTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SwitchingToEmptyProjectClearsSessionsAndCanReopenOriginal()
+    public async Task EmptyProjectRootTracksCreateSwitchReopenAndClose()
     {
         var vm = new MainViewModel(_settings, ValidateFixturePack);
         var backend = (Backend)typeof(MainViewModel).GetField("_backend", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
         var a = Path.Combine(_root, "A"); var b = Path.Combine(_root, "B");
         Assert.True(await vm.NewProjectAsync(a, "output/packs", "AKEY"));
+        var root = Assert.Single(vm.TreeRoots);
+        Assert.Equal("工程：A", root.Name);
+        Assert.Equal("工程", root.Tag);
+        Assert.Empty(root.Children);
         Assert.True(await vm.ImportPackToProjectAsync(_pack)); Assert.Single(backend.Packs);
         Assert.Equal(a, backend.Pack!.ProjectDirectory); Assert.Equal("AKEY", backend.Pack.ProjectKey);
+        Assert.Equal(backend.Pack.PackPath, Assert.Single(Assert.Single(vm.TreeRoots).Children).PackPath);
         Assert.True(await vm.NewProjectAsync(b, projectKey: "BKEY"));
         Assert.Empty(backend.Packs); Assert.Null(backend.Pack); Assert.Empty(vm.CenterTabs); Assert.Empty(vm.Library);
+        Assert.Equal("工程：B", Assert.Single(vm.TreeRoots).Name);
+        Assert.Empty(vm.TreeRoots[0].Children);
         Assert.True(await vm.OpenProjectAsync(a)); Assert.Single(backend.Packs); Assert.Equal("AKEY", backend.Pack!.ProjectKey);
-        await vm.CloseProjectAsync(); await backend.DisposeAsync();
+        Assert.True(await vm.OpenRecentProjectAsync(b));
+        Assert.Empty(backend.Packs);
+        Assert.Equal("工程：B", Assert.Single(vm.TreeRoots).Name);
+        Assert.Empty(vm.TreeRoots[0].Children);
+        await vm.CloseProjectAsync();
+        Assert.Empty(vm.TreeRoots);
+        await backend.DisposeAsync();
     }
 
     [Fact]

@@ -230,10 +230,9 @@ public sealed partial class MainViewModel
         if (_project is null) return;
         if (!await ConfirmUnsavedBeforeAsync("关闭工程")) return;
         await ResetProjectSessionsAsync();
-        Project = null;
         _projectDir = "";
         _backend.ProjectKey = "";
-        RebuildTree();
+        Project = null;
         FileLog.Write("工程：已关闭");
         Status = "工程已关闭";
     }
