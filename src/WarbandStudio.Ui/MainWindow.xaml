@@ -517,6 +517,13 @@
                                 <TextBlock Text="{Binding LibraryTitle}" Style="{StaticResource PanelHeaderText}" />
                             </DockPanel>
                         </Border>
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="6,3,6,1">
+                            <RadioButton Content="按种族 / 派系" GroupName="UnitLibraryPage" IsChecked="True"
+                                         Margin="0,0,12,0" Click="OnAssignedLibraryPage" />
+                            <RadioButton Content="未分配归属" GroupName="UnitLibraryPage"
+                                         IsChecked="{Binding ShowUnassignedUnits, Mode=OneWay}" Click="OnUnassignedLibraryPage"
+                                         ToolTip="显示无法归到任何种族或派系的单位" />
+                        </StackPanel>
                         <TextBox DockPanel.Dock="Top" Margin="4,2,4,2"
                                  Text="{Binding LibrarySearch, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="搜索兵种库：key 和中文名都能搜（留空 = 全部）" />
@@ -574,12 +581,38 @@
                             <TreeView.ItemContainerStyle>
                                 <Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
                                     <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=OneWay}" />
+                                    <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                 </Style>
                             </TreeView.ItemContainerStyle>
                             <TreeView.ItemTemplate>
                                 <HierarchicalDataTemplate DataType="{x:Type vm:MainViewModel+ModItem}" ItemsSource="{Binding Children}">
-                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"
-                                               ToolTip="{Binding TablePath}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <CheckBox Content="应用种族筛选" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                  IsChecked="{Binding RaceFilterEnabled, Mode=OneWay}"
+                                                  Click="OnModRaceFilterClick"
+                                                  ToolTip="按「种族 / 派系」当前所选的种族筛选此 mod 的兵种">
+                                            <CheckBox.Style>
+                                                <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsFile}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding DataContext.CanFilterModRace, RelativeSource={RelativeSource AncestorType=Window}}" Value="False" />
+                                                                <Condition Binding="{Binding RaceFilterEnabled}" Value="False" />
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="IsEnabled" Value="False" />
+                                                            <Setter Property="ToolTip" Value="请先在「种族 / 派系」选择一个种族或派系" />
+                                                            <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </CheckBox.Style>
+                                        </CheckBox>
+                                        <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"
+                                                   ToolTip="{Binding TablePath}" VerticalAlignment="Center" />
+                                    </StackPanel>
                                 </HierarchicalDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>

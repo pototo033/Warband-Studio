@@ -350,6 +350,7 @@
     <button id="tmImport">从其他 mod 导入页签…</button>
     <button id="tmScope">应用到其他种族…</button>
     <button id="tmFactions">允许显示的派系 / 种族…</button>
+    <button id="tmDelete" class="danger">删除页签…</button>
     <button id="tmClose">关闭</button>
   </div>
   <div class="row" id="tmRow2" style="display:none;max-height:220px;overflow:auto;max-width:420px;flex-wrap:wrap"></div>
@@ -1367,6 +1368,10 @@ function buildRail(pages) {
                    : (filterRace ? ((pageRaces[p] || []).indexOf(filterRace) >= 0 || scoped(p)) : true);
   const opened = DATA.openedTabs || [];
   const mine = (DATA.newTabs || []);
+  if (activePage && ![...(pages || []), ...opened, ...mine].includes(activePage)) {
+    activePage = null;
+    pagePinned = false;
+  }
   let shown = (pages || []).filter(p => isOurs(p) || opened.indexOf(p) >= 0 || mine.indexOf(p) >= 0);
   for (const t of mine) if (shown.indexOf(t) < 0) shown = shown.concat([t]);
   for (const t of opened) if (shown.indexOf(t) < 0) shown = shown.concat([t]);
@@ -2389,6 +2394,10 @@ document.getElementById('tmPaste').onclick = () => {
   if (!DATA.tabClipboard || !DATA.tabClipboard.canPaste) return;
   document.getElementById('tabMenu').classList.add('hidden');
   report({type: 'pasteTab', category: tmCategory});
+};
+document.getElementById('tmDelete').onclick = () => {
+  document.getElementById('tabMenu').classList.add('hidden');
+  report({type: 'deleteTab', category: tmCategory});
 };
 document.getElementById('tmClose').onclick = () => document.getElementById('tabMenu').classList.add('hidden');
 

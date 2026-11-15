@@ -1756,27 +1756,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
 
     // 成本读写独立维护，复用原门面状态与资源链。
     /// <summary>twui 里已有的页签 key（新建页签对话框的下拉用）。</summary>
-    public List<string> TabKeys()
-    {
-        var keys = new List<string>();
-        try
-        {
-            var pack = _pack?.Archive;
-            if (pack is null) return keys;
-            var e = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith("warband_upgrades.twui.xml", StringComparison.OrdinalIgnoreCase));
-            if (e is null) return keys;
-            keys = WarbandNewTab.ExistingTabs(System.Text.Encoding.UTF8.GetString(pack.ReadDecoded(e)));
-            var cats = TableFiles.ReadMerged(pack, "unit_upgrade_group_ui_categories_tables", GetSchema(), null);
-            if (cats is not null)
-                foreach (var r in cats.Rows)
-                {
-                    var v = r[0].ToTsv();
-                    if (v.Length > 0 && !keys.Contains(v, StringComparer.OrdinalIgnoreCase)) keys.Add(v);
-                }
-        }
-        catch (Exception ex) { Log?.Invoke("页签列表读取失败：" + ex.Message); }
-        return keys;
-    }
+    public List<string> TabKeys() => _pack?.Archive is { } pack ? TabKeysOf(pack) : [];
 
     /// <summary>图标 url（http://icons.local/…）→ WPF 能读的本地文件路径（兵种库列表用）。</summary>
     public string? LocalIconPath(string? url)
@@ -2219,7 +2199,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     {
         lock (StateSync)
         {
-        if (_pack?.SetPendingTables(Edits.TableReplacements) == true)
+        if (_pack?.SetPendingTables(Edits.TableReplacements, Edits.RemoveFiles) == true)
         {
             _landUnitByUnit = null; _costIndexArchive = null; _costTables.Clear();
             _costListCache = null; _resourceListCache = null; _milGroups = null; _raceMilGroups = null;
@@ -2229,6 +2209,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         _rev++;
         _factionCache = null;
         _canvasCache = null;
+        _referenceFactionCache = null;
         _canvasCacheKey = null;
         }
     }
@@ -2665,7 +2646,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         var legendFacs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var (allFactions, _) = LoadFactions();
+            var allFactions = LoadFactions().Factions;
             var (milByFac2, _) = MilGroups();
             foreach (var f in allFactions)
             {
@@ -3026,7 +3007,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         try
         {
             var allRaces = new System.Text.Json.Nodes.JsonArray();
-            foreach (var sub in LoadFactions().Item1.Select(f => f.Subculture)
+            foreach (var sub in LoadFactions().Factions.Select(f => f.Subculture)
                          .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 var nm = Loc.Text("cultures_subcultures_name_" + sub) ?? sub;   // 种族名（loc 里没有就显示 key）
@@ -3165,7 +3146,9 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>右上：种族（subculture）→ 派系（faction key）两级列表，实时读 DB（原版打底 + 本包覆盖）。</summary>
     public string BuildFactionJson()
     {
-        var (factions, allUnits) = LoadFactions();
+        var library = LoadFactions();
+        var factions = library.Factions;
+        var allUnits = library.All;
         var races = new System.Text.Json.Nodes.JsonArray();
         foreach (var g in factions.GroupBy(f => f.Subculture).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
@@ -3199,11 +3182,14 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     }
 
     /// <summary>右下：兵种库（实时读 DB、按派系分类）。faction 传派系 key、或 "race:种族"；空 = 全部兵。</summary>
-    public string BuildUnitLibraryJson(string? faction)
+    public string BuildUnitLibraryJson(string? faction, bool unassigned = false)
     {
         var pack = _pack?.Archive ?? throw new InvalidOperationException("先打开一个 pack。");
         PrepareIcons(pack);
-        var (factions, allUnits) = LoadFactions();
+        var library = LoadFactions(includeReferences: unassigned);
+        if (unassigned) return UnitsLibraryJson("未分配归属", library.Unassigned, library.LandByUnit);
+        var factions = library.Factions;
+        var allUnits = library.All;
         string label;
         List<string> units;
         if (string.IsNullOrWhiteSpace(faction)) { units = allUnits; label = "全部"; }
@@ -3235,7 +3221,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     }
 
     /// <summary>把一串兵做成"兵种库"JSON（图标 / 中文名 / 已在画布上）——种族页和 mod 兵种页共用。</summary>
-    private string UnitsLibraryJson(string label, List<string> units)
+    private string UnitsLibraryJson(string label, List<string> units, IReadOnlyDictionary<string, string>? landByUnit = null)
     {
         var arr = new System.Text.Json.Nodes.JsonArray();
         var icons = new System.Text.Json.Nodes.JsonObject();
@@ -3244,7 +3230,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         {
             arr.Add(u);
             if (Icons.Url(u, countMiss: false) is { } url) icons[u] = url;
-            if (UnitName(u, LandOf(u)) is { } nm) names[u] = nm;
+            if (UnitName(u, landByUnit?.GetValueOrDefault(u) ?? LandOf(u)) is { } nm) names[u] = nm;
         }
         var inTree = CanvasUnits();
         var inTreeArr = new System.Text.Json.Nodes.JsonArray();
@@ -3401,11 +3387,18 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// "mod 兵种"页的兵种库：列出**这个包自己加的兵**（在它的 main_units_tables 里、原版没有的 key）。
     /// 卡片、中文名、图标、拖拽都用和种族页兵种库同一套（同一个 UnitCard 数据 + 同一个 ListBox 事件）。
     /// </summary>
-    public string BuildModUnitLibraryJson(string packPath, string? tablePath = null)
+    public string BuildModUnitLibraryJson(string packPath, string? tablePath = null, string? race = null)
     {
-        var session = _packs.FirstOrDefault(s => (s.PackPath ?? "").Equals(packPath, StringComparison.OrdinalIgnoreCase)) ?? _pack;
+        var session = _packs.FirstOrDefault(s => string.Equals(s.PackPath, packPath, StringComparison.OrdinalIgnoreCase));
         var pack = session?.Archive ?? throw new InvalidOperationException("先打开一个 pack。");
         PrepareIcons(pack);
+        var library = string.IsNullOrWhiteSpace(race) ? null : LoadFactions(includeReferences: true);
+        var permitted = library?.Factions.Where(f => f.Subculture.Equals(race, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(f => f.Units).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string Result(string label, IEnumerable<string> keys) => UnitsLibraryJson(label,
+            keys.Where(key => permitted is null || permitted.Contains(key))
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(key => key, StringComparer.OrdinalIgnoreCase).ToList(),
+            library?.LandByUnit);
         var schema = GetSchema();
         var notes = new List<string>();
         PackArchive? vp = null;
@@ -3443,8 +3436,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                             var u = r[fk].ToTsv();
                             if (u.Length > 0) units.Add(u);
                         }
-                    return UnitsLibraryJson(Path.GetFileName(tablePath!), units
-                        .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
+                    return Result(Path.GetFileName(tablePath!), units);
                 }
             }
             var t = TableFiles.ReadMerged(pack, "main_units_tables", schema, notes);
@@ -3460,8 +3452,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                         units.Add(u);
                     }
             }
-            units = units.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
-            return UnitsLibraryJson(session?.DisplayName ?? "mod", units);
+            return Result(session!.DisplayName, units);
         }
         finally { vp?.Dispose(); }
     }
@@ -3534,8 +3525,10 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
 
     private Dictionary<string, string>? _landUnitByUnit;
 
-    private (List<FactionUnits> Factions, List<string> All)? _factionCache;
-    private string? _factionCacheKey;
+    private sealed record FactionLibrary(List<FactionUnits> Factions, List<string> All,
+        List<string> Unassigned, Dictionary<string, string> LandByUnit);
+    private FactionLibrary? _factionCache;
+    private FactionLibrary? _referenceFactionCache;
 
     /// <summary>派系 → 军事组 的分类结果（通用/专属 + 该种族的通用组），以及种族 → 该种族的全部军事组。</summary>
     public sealed record MilGroupInfo(string Faction, string Race, string Group, bool Generic);
@@ -3637,31 +3630,49 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     ///   ③ building_units_allowed_tables（faction 列 + enabled = true，招募来源）
     /// 结果与 main_units_tables 求交，只留真正存在的兵。
     /// </summary>
-    private (List<FactionUnits> Factions, List<string> All) LoadFactions()
+    private FactionLibrary LoadFactions(bool includeReferences = false)
     {
-        var pack = _pack?.Archive ?? throw new InvalidOperationException("先打开一个 pack。");
-        var key = _pack!.PackPath + "|" + (settings.GameDir ?? "");
-        if (_factionCache is not null && _factionCacheKey == key) return _factionCache.Value;
+        var cached = includeReferences ? _referenceFactionCache : _factionCache;
+        if (cached is not null) return cached;
+        var pack = _pack?.Archive;
+        if (pack is null && !includeReferences) throw new InvalidOperationException("先打开一个 pack。");
 
         var schema = GetSchema();
         var notes = new List<string>();
-        PackArchive? vp = null;
+        var sources = new List<PackArchive>();
+        var ownedSources = new List<PackArchive>();
         try
         {
-            var vanilla = VanillaDbPackPath;
-            if (vanilla is not null && File.Exists(vanilla)) vp = PackArchive.Open(vanilla);
-            DbTable? M(string table) => TableFiles.Merge(
-                vp is null ? null : TableFiles.ReadMerged(vp, table, schema, notes),
-                TableFiles.ReadMerged(pack, table, schema, notes));
+            void AddSource(string? path)
+            {
+                if (path is null || !File.Exists(path)) return;
+                var opened = _packs.FirstOrDefault(s => s.IsOpen && string.Equals(s.PackPath, path, StringComparison.OrdinalIgnoreCase))?.Archive;
+                if (opened is null)
+                {
+                    opened = PackArchive.Open(path);
+                    ownedSources.Add(opened);
+                }
+                if (!sources.Contains(opened)) sources.Add(opened);
+            }
+            AddSource(VanillaDbPackPath);
+            if (includeReferences)
+            {
+                var references = _pack?.PackPath is { } current
+                    ? PermissionReferencePacks(current)
+                    : _packs.Where(s => s.IsUnitPack && s.IsOpen).Select(s => s.PackPath!).ToArray();
+                foreach (var path in references) AddSource(path);
+            }
+            if (pack is not null && !sources.Contains(pack)) sources.Add(pack);
+            DbTable? M(string table) => sources.Aggregate((DbTable?)null, (result, source) =>
+                TableFiles.Merge(result, TableFiles.ReadMerged(source, table, schema, notes)));
 
             // ★ 军事组授权（units_to_groupings_military_permissions_tables）：**原版为基底 + 本包新增/覆盖重复**，
             //   而且必须按 (unit, military_group) **组合键**合并 —— 这张表 schema 的键只标了 unit，
             //   但一个兵可以同时挂多个军事组（原版 5340 行里大量是一个兵好几条）。用上面那个 M()（按键合并）
             //   会：① 本包的行把原版同一个兵的**其它组**顶掉；② 同一个兵的多组只剩一条。
             //   实测原版 5340 行被并成 1945 条 —— 表现就是"打开 mod 包以后兵全变成不属于当前军事组（黄标）"。
-            DbTable? C(string table, string[] keyCols) => TableFiles.MergeComposite(
-                vp is null ? null : TableFiles.ReadComposite(vp, table, keyCols, schema, notes),
-                TableFiles.ReadComposite(pack, table, keyCols, schema, notes), keyCols);
+            DbTable? C(string table, string[] keyCols) => sources.Aggregate((DbTable?)null, (result, source) =>
+                TableFiles.MergeComposite(result, TableFiles.ReadComposite(source, table, keyCols, schema, notes), keyCols));
 
             var fac = M("factions_tables")
                       ?? throw new InvalidDataException("读不到 factions_tables：需要在「全局选项」里设游戏目录（原版 data/db.pack）。");
@@ -3696,42 +3707,38 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             // 英雄/领主 = land_units.class == "com"（原版 1398 个 _cha_ 全在这个类）；
             // 兵种库只列普通部队，所以按 land_unit → class 把 com 剔掉。
             var charUnit = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var nameByUnit = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (main is not null && land is not null)
+            var landByUnit = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var classByLand = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (land is not null)
             {
-                var mu0 = Col(main, "unit");
-                if (mu0 < 0) mu0 = TableFiles.FindKeyColumn(main);
-                var ml0 = Col(main, "land_unit");
                 var lk0 = Col(land, "land_unit");
                 if (lk0 < 0) lk0 = TableFiles.FindKeyColumn(land);
                 var lc0 = Col(land, "class");
-                var classByLand = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (mu0 >= 0 && ml0 >= 0 && lk0 >= 0 && lc0 >= 0)
+                if (lk0 >= 0 && lc0 >= 0)
                     foreach (var r in land.Rows)
                     {
                         var k = r[lk0].ToTsv();
                         if (k.Length > 0) classByLand[k] = r[lc0].ToTsv();
                     }
-                if (mu0 >= 0 && ml0 >= 0)
-                    foreach (var r in main.Rows)
-                    {
-                        var u = r[mu0].ToTsv();
-                        var lu = r[ml0].ToTsv();
-                        if (u.Length == 0) continue;
-                        if (classByLand.TryGetValue(lu, out var cls) && cls.Equals("com", StringComparison.OrdinalIgnoreCase))
-                            charUnit.Add(u);
-                        var nm = UnitName(u, lu);
-                        if (nm is not null) nameByUnit[u] = nm;
-                    }
-                Log?.Invoke($"兵种库：英雄/领主 {charUnit.Count} 个（land_units.class=com）已剔除；中文名 {nameByUnit.Count} 条");
             }
-
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (main is not null)
             {
                 var mu = Col(main, "unit");
                 if (mu < 0) mu = TableFiles.FindKeyColumn(main);
-                if (mu >= 0) foreach (var r in main.Rows) { var u = r[mu].ToTsv(); if (u.Length > 0) known.Add(u); }
+                var ml = Col(main, "land_unit");
+                if (mu >= 0)
+                    foreach (var row in main.Rows)
+                    {
+                        var unit = row[mu].ToTsv();
+                        if (unit.Length == 0) continue;
+                        known.Add(unit);
+                        if (ml < 0) continue;
+                        var landKey = row[ml].ToTsv();
+                        landByUnit[unit] = landKey;
+                        if (classByLand.TryGetValue(landKey, out var type) && type.Equals("com", StringComparison.OrdinalIgnoreCase))
+                            charUnit.Add(unit);
+                    }
             }
 
             static Dictionary<string, HashSet<string>> Bucket(DbTable? t, int unitCol, int groupCol, int flagCol)
@@ -3815,13 +3822,19 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                 all.UnionWith(set);
             }
 
-            _factionCache = (list, all.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
-            _factionCacheKey = key;
+            var unassigned = includeReferences
+                ? known.Except(charUnit, StringComparer.OrdinalIgnoreCase)
+                    .Except(list.Where(f => f.Subculture.Length > 0).SelectMany(f => f.Units), StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
+                : [];
+            var result = new FactionLibrary(list, all.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(), unassigned, landByUnit);
+            if (includeReferences) _referenceFactionCache = result;
+            else _factionCache = result;
             Log?.Invoke($"派系库：{list.Count} 个派系（传奇 {list.Count(f => f.Legendary)}）/ {list.Count(f => f.Units.Count > 0)} 个有兵；兵种并集 {all.Count}（main_units {known.Count}）" +
                         (notes.Count > 0 ? "；" + string.Join("；", notes.Take(3)) : ""));
-            return _factionCache.Value;
+            return result;
         }
-        finally { vp?.Dispose(); }
+        finally { foreach (var source in ownedSources) source.Dispose(); }
     }
 
     /// <summary>诊断（走 rpfm_cli：坏引用/非法枚举/空 key…）。</summary>：坏引用/非法枚举/空 key…）。</summary>

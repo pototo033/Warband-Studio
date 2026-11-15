@@ -59,8 +59,35 @@ public static class WarbandNewTab
         var bom = xml.Length > 0 && xml[0] == '\uFEFF' ? "\uFEFF" : "";
         xml = xml.TrimStart('\uFEFF');
 
+        string? restoredDonor = null;
+        if (ExistingTabs(xml).Count == 0)
+        {
+            var restored = WarbandTabRemoval.RestoreTemplate(xml);
+            if (ExistingTabs(restored) is [var last])
+            {
+                xml = restored;
+                restoredDonor = last;
+            }
+        }
         if (Regex.IsMatch(xml, "id=\"holder_tab_" + Regex.Escape(key) + "\"", RegexOptions.IgnoreCase))
+        {
+            if (key.Equals(restoredDonor, StringComparison.OrdinalIgnoreCase))
+            {
+                repl[twuiEntry.Path] = Encoding.UTF8.GetBytes(bom + xml);
+                var restoredFiles = new List<string> { twuiEntry.Path };
+                foreach (var (kind, source) in new[] { ("background_images_", bgSource), ("button_upgrade_", btnSource) })
+                {
+                    if (string.IsNullOrWhiteSpace(source)) continue;
+                    var target = SkinDir + kind + key.ToLowerInvariant() + ".png";
+                    if (File.Exists(source)) repl[target] = File.ReadAllBytes(source);
+                    else if (FindLoose(pack, source) is { } asset) repl[target] = pack.ReadDecoded(asset);
+                    else continue;
+                    restoredFiles.Add(target);
+                }
+                return new NewTabReport(true, key, key, restoredFiles, null);
+            }
             return new NewTabReport(false, key, "", [], $"页签 {key} 已经存在了。");
+        }
 
         // 母版：优先自由页签，其次任意一个
         var existing = ExistingTabs(xml);
@@ -259,7 +286,7 @@ public static class WarbandNewTab
                 : $"页签 {key} 的图取自母版：{Path.GetFileName(dPath)}");
         }
 
-        var finalXml = sb.ToString();
+        var finalXml = restoredDonor is null ? sb.ToString() : WarbandTabRemoval.RemoveXml(sb.ToString(), restoredDonor, keepLastTemplate: false);
         try
         {
             new System.Xml.XmlDocument().LoadXml(finalXml);
@@ -291,7 +318,9 @@ public static class WarbandNewTab
     {
         var e = pack.VisibleEntries.FirstOrDefault(x => x.Path.EndsWith(TwuiSuffix, StringComparison.OrdinalIgnoreCase));
         if (e is null) return null;
-        var keys = ExistingTabs(System.Text.Encoding.UTF8.GetString(pack.ReadDecoded(e)));
+        var xml = Encoding.UTF8.GetString(pack.ReadDecoded(e)).TrimStart('\uFEFF');
+        var keys = ExistingTabs(xml);
+        if (keys.Count == 0) keys = ExistingTabs(WarbandTabRemoval.RestoreTemplate(xml));
         return PreferredDonors.FirstOrDefault(d => keys.Contains(d, StringComparer.OrdinalIgnoreCase))
                ?? keys.LastOrDefault();
     }

@@ -23,11 +23,12 @@ public sealed partial class MainViewModel
         Raise(nameof(IsCanvasActive));
         _selectedFaction = null;
         Raise(nameof(SelectedFaction));
+        Raise(nameof(CanFilterModRace));
+        ++_libRefreshGen;
         Factions.Clear();
         Library.Clear();
         _libAll = [];
-        _modLibAll = [];
-        ModLibrary.Clear();
+        RefreshMods();
         ResetCostForm();
         AfterPackClosed();
     }

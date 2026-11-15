@@ -47,7 +47,7 @@ public sealed partial class Backend
             _undoByPack[path] = undo;
             _redoByPack[path] = redo;
             FileLog.Write($"更新恢复：仅加载未保存修改，未写入原包；表缓存={restored.TableReplacements.Count}，撤销={undo.Count}，重做={redo.Count}");
-            pack.SetPendingTables(_editsByPack[path].TableReplacements);
+            pack.SetPendingTables(_editsByPack[path].TableReplacements, _editsByPack[path].RemoveFiles);
             RefreshSourceScope();
             if (!pack.IsUnitPack) RestagePendingArt();
             return pack;

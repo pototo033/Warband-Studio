@@ -77,16 +77,20 @@ public sealed class PackSession(RpfmCli? cli)
     /// <summary>原生打开的包（读表用）。</summary>
     public PackArchive? Archive => _archive;
     private Dictionary<string, byte[]>? _pendingTables;
-    public bool SetPendingTables(IReadOnlyDictionary<string, byte[]> tables)
+    private HashSet<string>? _pendingRemovals;
+    public bool SetPendingTables(IReadOnlyDictionary<string, byte[]> tables, IEnumerable<string>? removed = null)
     {
         if (PackPath is null) return false;
+        var removals = new HashSet<string>(removed ?? [], StringComparer.OrdinalIgnoreCase);
         // 编辑集可在同一字典内换表；比较上次条目的字节对象，不能只比较字典本身。
         if (_pendingTables is not null && _pendingTables.Count == tables.Count &&
-            tables.All(p => _pendingTables.TryGetValue(p.Key, out var bytes) && ReferenceEquals(bytes, p.Value))) return false;
-        var view = DuplicateUpgradeArchive.OpenView(PackPath, tables);
+            tables.All(p => _pendingTables.TryGetValue(p.Key, out var bytes) && ReferenceEquals(bytes, p.Value)) &&
+            _pendingRemovals?.SetEquals(removals) == true) return false;
+        var view = DuplicateUpgradeArchive.OpenView(PackPath, tables, removals);
         _archive?.Dispose();
         _archive = view;
         _pendingTables = new(tables, StringComparer.OrdinalIgnoreCase);
+        _pendingRemovals = removals;
         _files = view.VisibleEntries.Where(e => IsWarbandFile(e.Path)).Select(e => new RFileInfo
         {
             Path = e.Path, ContainerName = Info!.FileName, FileType = GuessFileType(e.Path),
@@ -127,6 +131,7 @@ public sealed class PackSession(RpfmCli? cli)
     private void Close()
     {
         _pendingTables = null;
+        _pendingRemovals = null;
         CompatibilityRecoveryNotes = [];
         _archive?.Dispose();
         _archive = null;

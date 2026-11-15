@@ -1355,6 +1355,15 @@ vm.runInContext("DATA.tabClipboard={category:'SRC',groups:2,canPaste:false};",ct
 chk('不同 Pack 的快照不粘贴',msgs().length===0);
 vm.runInContext("DATA.tabClipboard.canPaste=true;",ctx);byId.tmPaste.onclick();
 chk('粘贴使用目标页签',last().type==='pasteTab'&&last().category==='DEST');
+clear();vm.runInContext("tmCategory='DEST'; activePage='SRC';",ctx);byId.tmDelete.onclick();
+chk('删除请求使用右键页签',last().type==='deleteTab'&&last().category==='DEST');
+const afterTabDeletion=vm.runInContext(`(()=>{
+ DATA={pages:['OUT'],newTabs:[],openedTabs:[]};
+ activePage='DEST';pagePinned=true;filterRace=null;filterFaction=null;
+ buildRail(DATA.pages);
+ return activePage;
+})()`,ctx);
+chk('删除当前页后自动切到剩下的页签',afterTabDeletion==='OUT');
 const bases=vm.runInContext(`(()=>{
  const g={x:100,y:100,units:['u']},other={x:400,y:400,units:['v']};
  return [1,2,3,4].map(p=>{

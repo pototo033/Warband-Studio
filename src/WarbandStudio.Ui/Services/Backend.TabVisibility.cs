@@ -63,7 +63,7 @@ public sealed partial class Backend
             var selected = new JsonObject();
             foreach (var (category, factions) in EffectiveTabAllowedFactions()) selected[category] = ToJsonArray(factions);
             var catalog = new JsonArray();
-            foreach (var f in LoadFactions().Item1.OrderByDescending(f => f.Legendary).ThenBy(f => f.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var f in LoadFactions().Factions.OrderByDescending(f => f.Legendary).ThenBy(f => f.Key, StringComparer.OrdinalIgnoreCase))
                 catalog.Add(new JsonObject { ["key"] = f.Key, ["name"] = f.Name ?? f.Key,
                     ["race"] = f.Subculture, ["legendary"] = f.Legendary });
             result["allowed"] = selected;

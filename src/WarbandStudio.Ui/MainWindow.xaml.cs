@@ -339,6 +339,15 @@ public partial class MainWindow : Window
         if (e.NewValue is ViewModels.MainViewModel.ModItem m) _vm.PickModNode(m);
     }
 
+    private void OnAssignedLibraryPage(object sender, RoutedEventArgs e) => _vm.ShowUnassignedUnits = false;
+    private void OnUnassignedLibraryPage(object sender, RoutedEventArgs e) => _vm.ShowUnassignedUnits = true;
+
+    private void OnModRaceFilterClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.CheckBox { DataContext: ViewModels.MainViewModel.ModItem mod } checkbox)
+            _vm.SetModRaceFilter(mod, checkbox.IsChecked == true);
+    }
+
     /// <summary>左下「UI 素材库」右键 → 把这张图加进当前编辑的包（导出时落盘；不动画布）。</summary>
     /// <summary>
     /// 可编辑 ComboBox 的"箭头区兜底"：点在最右侧 30px（箭头那一块）就把下拉展开。

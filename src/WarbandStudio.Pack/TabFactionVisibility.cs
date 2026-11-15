@@ -65,6 +65,15 @@ public static class TabFactionVisibility
         ? new(StringComparer.OrdinalIgnoreCase)
         : Metadata(XDocument.Parse(xml, LoadOptions.PreserveWhitespace)).Settings.Excluded;
 
+    internal static string ClearCategory(string xml, XDocument document, string key)
+    {
+        var (settings, _) = Metadata(document);
+        if (!Categories(settings).Contains(key, StringComparer.OrdinalIgnoreCase)) return xml;
+        return Apply(xml, new Dictionary<string, string[]> { [key] = [] },
+            raceEdits: new Dictionary<string, string[]> { [key] = [] },
+            excludedEdits: new Dictionary<string, bool> { [key] = false });
+    }
+
     public static string[] Normalize(IEnumerable<string> factions) => factions.Select(f => f.Trim())
         .Where(f => f.Length > 0).Select(f => Regex.IsMatch(f, "^[A-Za-z0-9_]+$") ? f
             : throw new ArgumentException("无效的派系/种族 key：" + f))
@@ -192,7 +201,11 @@ public static class TabFactionVisibility
         {
             var cb = Visibility(holder);
             if (settings.Visibility.TryGetValue(Id(holder), out var original)) cb.SetAttributeValue("context_function_id", original);
-            if (!settings.Tabs.ContainsKey(key) && !settings.Races.ContainsKey(key) && !settings.Excluded.ContainsKey(key)) continue;
+            if (!settings.Tabs.ContainsKey(key) && !settings.Races.ContainsKey(key) && !settings.Excluded.ContainsKey(key))
+            {
+                settings.Visibility.Remove(Id(holder));
+                continue;
+            }
             var baseline = Expression(cb);
             settings.Visibility.TryAdd(Id(holder), baseline);
             cb.SetAttributeValue("context_function_id", $"({baseline}) && ({Selection(settings, key)})");

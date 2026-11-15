@@ -308,6 +308,7 @@ public sealed partial class MainViewModel : ObservableObject
             var owner = _backend.Packs.FirstOrDefault(s => string.Equals(s.PackPath, tt.PackPath, StringComparison.OrdinalIgnoreCase));
             if (owner is null) { Status = "此表所属包已关闭"; return; }
             _backend.SwitchTo(owner);
+            RefreshLibrarySoon(refreshFactions: false);
             _ = ReloadTableTabAsync(tt);
             return;
         }
@@ -317,6 +318,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (session is null) return;
         _backend.SwitchTo(session);
         PackOpened?.Invoke();
+        RefreshLibrarySoon(refreshFactions: false);
         LoadUiAssets();          // 左下「UI 素材库」跟着换成这个包的图
         RefreshPooledResources(); // 成本工坊清单也跟着换（切画布 = 换当前包）
     }
@@ -343,7 +345,9 @@ public sealed partial class MainViewModel : ObservableObject
         set
         {
             if (!Set(ref _selectedFaction, value)) return;
-            _ = LoadLibraryAsync(value?.Key);
+            if (!ShowUnassignedUnits) _ = LoadLibraryAsync(value?.Key);
+            Raise(nameof(CanFilterModRace));
+            if (_selectedMod is { } mod && _modRaceFilters.Contains(mod.Key)) _ = LoadModLibraryAsync(mod);
             // 种族和派系选择只影响归属判定及兵种库，画布仍显示当前页签全部单位
             var race = value?.Race;
             var fac = value is { IsFaction: true } ? value.Key : null;
@@ -359,6 +363,18 @@ public sealed partial class MainViewModel : ObservableObject
         get => _libSearch;
         set { _libSearch = value; Raise(nameof(LibrarySearch)); ApplyLibFilter(); }
     }
+    private bool _showUnassignedUnits;
+    public bool ShowUnassignedUnits
+    {
+        get => _showUnassignedUnits;
+        set
+        {
+            if (!Set(ref _showUnassignedUnits, value)) return;
+            _libAll = [];
+            ApplyLibFilter();
+            _ = LoadLibraryAsync(_selectedFaction?.Key);
+        }
+    }
     /// <summary>种族页兵种库的全量（搜索只是过滤显示，不重新读库）。</summary>
     private List<UnitCard> _libAll = [];
     /// <summary>mod 兵种库的全量。</summary>
@@ -368,7 +384,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// 「mod 兵种」页的节点：根 = 兵种包，子节点 = 该包的 `main_units_tables` **文件**
     /// （选中哪个文件就显示哪个文件的兵 —— 比如 `za_...` 与 `!!!...` 两张适配表各自成表）。
     /// </summary>
-    public sealed class ModItem(string key, string name, string? tablePath = null)
+    public sealed class ModItem(string key, string name, string? tablePath = null) : ObservableObject
     {
         public string Key { get; } = key;              // 包内路径（packPath）
         public string Name { get; } = name;            // 包名 / 文件名
@@ -377,20 +393,45 @@ public sealed partial class MainViewModel : ObservableObject
         public bool IsFile => TablePath is { Length: > 0 };
         /// <summary>树里默认展开（这样"包 → 表文件"一眼能看见）。</summary>
         public bool IsExpanded { get; set; } = true;
+        private bool _isSelected;
+        public bool IsSelected { get => _isSelected; set => Set(ref _isSelected, value); }
+        private bool _raceFilterEnabled;
+        public bool RaceFilterEnabled { get => _raceFilterEnabled; set => Set(ref _raceFilterEnabled, value); }
     }
     public System.Collections.ObjectModel.ObservableCollection<ModItem> Mods { get; } = [];
     public System.Collections.ObjectModel.ObservableCollection<UnitCard> ModLibrary { get; } = [];
     private ModItem? _selectedMod;
+    private readonly HashSet<string> _modRaceFilters = new(StringComparer.OrdinalIgnoreCase);
+    public bool CanFilterModRace => !string.IsNullOrWhiteSpace(_selectedFaction?.Race);
     private string _modSearch = "";
     private string _modTitle = "mod 兵种（选一个包）";
 
     public ModItem? SelectedMod
     {
         get => _selectedMod;
-        set { _selectedMod = value; Raise(nameof(SelectedMod)); _ = LoadModLibraryAsync(value); }
+        set
+        {
+            if (!Set(ref _selectedMod, value)) return;
+            _modLibAll = [];
+            ApplyModLibFilter();
+            _ = LoadModLibraryAsync(value);
+        }
     }
     /// <summary>树里选中的（可能是包根，也可能是某张表文件）—— 由 UI 的选中事件调用。</summary>
     public void PickModNode(ModItem? node) => SelectedMod = node;
+    public void SetModRaceFilter(ModItem pack, bool enabled)
+    {
+        if (enabled && !CanFilterModRace) return;
+        if (enabled) _modRaceFilters.Add(pack.Key);
+        else _modRaceFilters.Remove(pack.Key);
+        pack.RaceFilterEnabled = enabled;
+        if (!string.Equals(_selectedMod?.Key, pack.Key, StringComparison.OrdinalIgnoreCase))
+        {
+            pack.IsSelected = true;
+            SelectedMod = pack;
+        }
+        else _ = LoadModLibraryAsync(_selectedMod);
+    }
     /// <summary>mod 兵种库搜索（key 和名字都能搜）。</summary>
     public string ModLibrarySearch
     {
@@ -418,7 +459,10 @@ public sealed partial class MainViewModel : ObservableObject
         var q = (_modSearch ?? "").Trim();
         ModLibrary.Clear();
         foreach (var c in _modLibAll) if (LibMatch(c, q)) ModLibrary.Add(c);
-        ModLibraryTitle = (_selectedMod?.Name ?? "mod 兵种（选一个包）") +
+        var race = _selectedMod is { } mod && _modRaceFilters.Contains(mod.Key) && CanFilterModRace
+            ? Factions.FirstOrDefault(f => f.Race.Equals(_selectedFaction!.Race, StringComparison.OrdinalIgnoreCase))?.Display ?? _selectedFaction!.Race
+            : null;
+        ModLibraryTitle = (_selectedMod?.Name ?? "mod 兵种（选一个包）") + (race is null ? "" : $" · {race}") +
                           $"：{(q.Length > 0 ? "搜到 " : "")}{ModLibrary.Count} 个兵";
     }
 
@@ -427,24 +471,29 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
+            var previous = _selectedMod;
             Mods.Clear();
             foreach (var (key, name) in _backend.OpenMods())
             {
-                var packNode = new ModItem(key, name);
+                var packNode = new ModItem(key, name) { RaceFilterEnabled = _modRaceFilters.Contains(key) };
                 foreach (var (tPath, tName) in _backend.ModUnitTables(key))
                     packNode.Children.Add(new ModItem(key, tName, tPath));   // 子节点 = 每个 main_units 表文件
                 Mods.Add(packNode);
             }
-            if (Mods.Count == 0) { _modLibAll = []; ApplyModLibFilter(); return; }
+            if (Mods.Count == 0) { SelectedMod = null; return; }
             // 刚加载的那个优先选中；否则保持当前选中（还在列表里就不跳）
             var pack = (selectKey is { Length: > 0 }
                         ? Mods.FirstOrDefault(m => m.Key.Equals(selectKey, StringComparison.OrdinalIgnoreCase))
                         : null)
-                       ?? (_selectedMod is not null ? Mods.FirstOrDefault(m => m.Key.Equals(_selectedMod.Key, StringComparison.OrdinalIgnoreCase)) : null)
+                       ?? (previous is not null ? Mods.FirstOrDefault(m => m.Key.Equals(previous.Key, StringComparison.OrdinalIgnoreCase)) : null)
                        ?? Mods[0];
             // 默认落到**第一张 main_units 表文件**上（而不是包根 = "这个包的全部兵"）——
             // 用户口径：不要一进来就停在"全部"，自动切到具体的表里
-            SelectedMod = pack.Children.Count > 0 ? pack.Children[0] : pack;
+            var selected = selectKey is null && previous is not null && pack.Key.Equals(previous.Key, StringComparison.OrdinalIgnoreCase)
+                ? previous.IsFile ? pack.Children.FirstOrDefault(m => string.Equals(m.TablePath, previous.TablePath, StringComparison.OrdinalIgnoreCase)) ?? pack : pack
+                : pack.Children.FirstOrDefault() ?? pack;
+            selected.IsSelected = true;
+            SelectedMod = selected;
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Status = "mod 清单读取失败：" + ex.Message; }
@@ -453,11 +502,12 @@ public sealed partial class MainViewModel : ObservableObject
     private int _modGen;
     private async Task LoadModLibraryAsync(ModItem? mod)
     {
-        if (mod is null || _backend.Pack?.IsOpen != true) { _modLibAll = []; ApplyModLibFilter(); return; }
         var gen = ++_modGen;
+        if (mod is null) return;
+        var race = _modRaceFilters.Contains(mod.Key) ? _selectedFaction?.Race : null;
         try
         {
-            var json = await ReadCurrentAsync(() => _backend.BuildModUnitLibraryJson(mod.Key, mod.TablePath));
+            var json = await ReadCurrentAsync(() => _backend.BuildModUnitLibraryJson(mod.Key, mod.TablePath, race));
             if (gen != _modGen) return;
             _modLibAll = [];
             using var doc = JsonDocument.Parse(json);
@@ -481,10 +531,11 @@ public sealed partial class MainViewModel : ObservableObject
             ApplyModLibFilter();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Status = "mod 兵种读不出来：" + ex.Message; _modLibAll = []; ApplyModLibFilter(); }
+        catch (Exception ex) when (gen == _modGen) { Status = "mod 兵种读不出来：" + ex.Message; _modLibAll = []; ApplyModLibFilter(); }
+        catch (Exception ex) { FileLog.Write("旧的 mod 兵种读取失败", ex); }
     }
 
-    public string LibraryTitle => _selectedFaction is null or { IsAll: true }
+    public string LibraryTitle => ShowUnassignedUnits ? $"兵种库（未分配归属，{Library.Count}）" : _selectedFaction is null or { IsAll: true }
         ? "兵种库（全部）"
         : $"兵种库：{_selectedFaction.Key}";
 
@@ -713,7 +764,12 @@ public sealed partial class MainViewModel : ObservableObject
             using var message = JsonDocument.Parse(json);
             var type = message.RootElement.GetProperty("type").GetString();
             if (type == "exportDiagnosticBundle") { _ = ExportDiagnosticBundleAsync(); return; }
-            if (type is "undo" or "redo" or "renameGroup" or "copyTab" or "pasteTab") { lock (_backend.StateSync) ApplyCanvasEditCore(json); }
+            if (type is "deleteTab")
+            {
+                var category = message.RootElement.GetProperty("category").GetString() ?? "";
+                if (Confirm?.Invoke($"删除页签「{category}」？\n\n该页的兵组、关联升级和连线将被移除。保存前可撤销。") != true) return;
+            }
+            if (type is "undo" or "redo" or "renameGroup" or "copyTab" or "pasteTab" or "deleteTab") { lock (_backend.StateSync) ApplyCanvasEditCore(json); }
             else _backend.Edit(() => { ApplyCanvasEditCore(json); return true; });
         }
         catch (Exception ex) { Status = "画布编辑失败：" + ex.Message; FileLog.Write("画布编辑事务失败", ex); }
@@ -872,6 +928,14 @@ public sealed partial class MainViewModel : ObservableObject
                 case "pasteTab":
                     Status = _backend.PasteTab(S("category"));
                     _backend.InvalidateCanvas();RebuildTree();PackOpened?.Invoke();RefreshOpenTables();RefreshLibrarySoon();AutoSaveSoon();
+                    return;
+                case "deleteTab":
+                    Status = _backend.DeleteTab(S("category"));
+                    RebuildTree();
+                    PackOpened?.Invoke();
+                    RefreshOpenTables();
+                    RefreshLibrarySoon();
+                    AutoSaveSoon();
                     return;
                 case "renameGroup":
                     _backend.RenameGroup(S("old"), S("new"));
@@ -1180,11 +1244,14 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>读兵种库（faction 传族/派系 key；空 = 全部）。</summary>
     public async Task LoadLibraryAsync(string? faction)
     {
+        var gen = ++_libRefreshGen;
         if (_backend.Pack?.IsOpen != true) return;
+        var unassigned = ShowUnassignedUnits;
         IsBusy = true;
         try
         {
-            var json = await ReadCurrentAsync(() => _backend.BuildUnitLibraryJson(faction));
+            var json = await ReadCurrentAsync(() => _backend.BuildUnitLibraryJson(faction, unassigned));
+            if (gen != _libRefreshGen) return;
             ApplyLibraryJson(json);
             Status = $"兵种库：{Library.Count} 个兵";
         }
@@ -1241,17 +1308,26 @@ public sealed partial class MainViewModel : ObservableObject
     /// 静默做：不动忙碌态、不动状态栏；用代数号防止旧结果覆盖新结果。
     /// </summary>
     private int _libRefreshGen;
-    private async void RefreshLibrarySoon()
+    private async void RefreshLibrarySoon(bool refreshFactions = true)
     {
-        _ = RefreshFactionsSoon();          // 编辑也会改种族/派系的兵数 → 树也刷（就地更新，不丢选中）
-        if (_selectedFaction is null || _backend.Pack?.IsOpen != true) return;
+        if (refreshFactions) _ = RefreshFactionsSoon();
+        if (_selectedMod is { } mod && _modRaceFilters.Contains(mod.Key)) _ = LoadModLibraryAsync(mod);
+        if (_backend.Pack?.IsOpen != true)
+        {
+            ++_libRefreshGen;
+            _libAll = [];
+            ApplyLibFilter();
+            return;
+        }
+        var unassigned = ShowUnassignedUnits;
+        if (!unassigned && _selectedFaction is null) return;
         var gen = ++_libRefreshGen;
-        var key = _selectedFaction.Key;
+        var key = _selectedFaction?.Key;
         try
         {
-            var json = await ReadCurrentAsync(() => _backend.BuildUnitLibraryJson(key));
+            var json = await ReadCurrentAsync(() => _backend.BuildUnitLibraryJson(key, unassigned));
             // 期间又刷新过 / 换了种族派系 → 这次结果作废
-            if (gen != _libRefreshGen || !string.Equals(key, _selectedFaction?.Key, StringComparison.OrdinalIgnoreCase)) return;
+            if (gen != _libRefreshGen || (!unassigned && !string.Equals(key, _selectedFaction?.Key, StringComparison.OrdinalIgnoreCase))) return;
             ApplyLibraryJson(json);
         }
         catch (OperationCanceledException) { }
@@ -1502,6 +1578,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 // 兵种包：只当参考 —— 不动画布、不进战帮树；刷新 mod 清单并**选中刚加载的这个**
                 RefreshMods(packPath);
+                if (ShowUnassignedUnits) _ = LoadLibraryAsync(null);
                 Raise(nameof(PackOpen));
                 var up = _backend.Packs.FirstOrDefault(p => (p.PackPath ?? "").Equals(packPath, StringComparison.OrdinalIgnoreCase));
                 Status = $"已加载兵种包 {Path.GetFileName(packPath)}（{up?.Files.Count ?? 0} 个文件）：" +
@@ -1513,6 +1590,7 @@ public sealed partial class MainViewModel : ObservableObject
             LoadUiAssets();            // 左下「UI 素材库」
             RefreshPooledResources();  // 右上「成本工坊」的选择资源下拉（原版打底 + 本包覆盖）
             RefreshMods();             // 右上「mod 兵种」页的包清单 + 第一个包的兵种库
+            if (ShowUnassignedUnits) _ = LoadLibraryAsync(null);
             Raise(nameof(PackOpen));
             foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ExportDiagnosticBundleCommand, ClosePackCommand,
                                       OpenPackCommand, OpenUnitPackCommand }) c.RaiseCanExecute();
@@ -1803,6 +1881,7 @@ public sealed partial class MainViewModel : ObservableObject
             PackText = "Pack：未打开";
         }
         Raise(nameof(PackOpen));
+        RefreshLibrarySoon(refreshFactions: false);
         foreach (var c in new[] { SavePackCommand, SavePackAsCommand, ExportDiagnosticBundleCommand, ClosePackCommand }) c.RaiseCanExecute();
     }
 
