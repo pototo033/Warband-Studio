@@ -1108,6 +1108,7 @@ public sealed partial class MainViewModel : ObservableObject
                     Status = $"已移动「{S("group")}」（{I("x")},{I("y")}）拖动即应用；{_backend.EditSummary}";
                     RebuildTree();             // 拖动也会改 studio_layout → 树里的红标要跟上
                     PackOpened?.Invoke();      // **松手就重推一次**：页面与坐标框跟着"已记录的位置"走（不会再出现"看似没应用"）
+                    RefreshOpenTables();
                     AutoSaveSoon();            // 拖动松手也走自动保存（防抖合并）
                     return;
                 case "removeLink":

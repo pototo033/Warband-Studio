@@ -31,7 +31,9 @@ function makeEl(tag) {
     insertBefore(c) { this.children.push(c); return c; },
     removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); },
     remove() { }, setAttribute() { }, getAttribute() { return null; }, removeAttribute() { },
-    addEventListener() { }, removeEventListener() { }, dispatchEvent() { },
+    _listeners: {},
+    addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); },
+    removeEventListener() { }, dispatchEvent() { },
     querySelectorAll(sel) { return selAll(sel).filter(x => { let p = x.parentElement; while (p) { if (p === e) return true; p = p.parentElement; } return false; }); },
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
     closest() { return null; }, matches() { return false; },
@@ -86,8 +88,10 @@ const documentStub = {
   body: makeEl('body'),
 };
 
+const windowListeners = {};
 const ctx = { console, setTimeout, clearTimeout, setInterval, clearInterval, Math, Date, JSON, document: documentStub,
-              prompt: () => null, confirm: () => true, alert: () => { }, addEventListener: () => { } };
+              prompt: () => null, confirm: () => true, alert: () => { },
+              addEventListener(type, fn) { (windowListeners[type] ||= []).push(fn); } };
 ctx.window = ctx;
 ctx.globalThis = ctx;
 vm.createContext(ctx);
@@ -528,10 +532,6 @@ chk('「无连线」可视化：有路线没连线的对画临时虚线，且**�
 chk('快捷键不抢输入框：焦点在 INPUT/TEXTAREA 时 keydown 直接返回（源码级，v0.157）',
     /tagName === 'INPUT'[\s\S]{0,120}return;/.test(SOURCE),
     '没找到"焦点在输入框就不处理快捷键"的守卫（退格会误删兵牌）');
-
-chk('防误触：按下后 ~0.2 秒内的位移不算拖动（源码级，v0.154）',
-    /t0: Date\.now\(\)/.test(SOURCE) && /Date\.now\(\) - \(drag\.t0 \|\| 0\) >= 200/.test(SOURCE),
-    '没找到 200ms 防误触门槛（拖动手抖会把兵牌挪出几像素）');
 
 console.log('⑭ 升级/连线解绑：新建可「只升级不连线」，已有升级可「取消连线」（v0.121）');
 vm.runInContext(`
@@ -1417,6 +1417,71 @@ const cthZero=vm.runInContext(`(()=>{
 })()`,ctx);
 chk('CTH实际双兵组上端到鸦人左端、mid=0：先竖直再水平',cthZero.path==='M293 493.5 L293 343.5 L400 343.5');
 chk('CTH单折点默认mid为零且不显示会改变拓扑的拖动手柄',cthZero.mid===0&&cthZero.knob===null);
+console.log('拖动坐标提交：实际鼠标事件覆盖快速拖动、吸附和多兵组');
+const actualDate = ctx.Date;
+ctx.Date = class extends Date { static now() { return ctx.__clock; } };
+function dragCase({ snap = false, mode = 'vertex', duration = 60, dx = 20, dy = 20,
+                    multiple = false, cardIndex = 0, empty = false, zoomFactor = 1, shift = false }) {
+  vm.runInContext(`
+    selected = null; multiGroups = []; upgGroups = []; linkSel = null; lineCur = null;
+    drag = null; band = null; panning = null;
+    renderWarband({groups:[
+      {unit_group:'dragA', x:137, y:262, category:'PA', units:${empty ? '[]' : "['u1','u2']"}},
+      {unit_group:'dragB', x:287, y:412, category:'PA', units:['u3']}
+    ], links:[], pages:['PA'], icons:{}, names:{}, routeList:[]});
+    snapOn = ${snap}; snapMode = ${JSON.stringify(mode)}; zoom = ${zoomFactor};
+    multiGroups = ${multiple ? "['dragA','dragB']" : '[]'};
+  `, ctx);
+  clear();
+  const card = vm.runInContext('CARDSBYGROUP.dragA[' + cardIndex + ']', ctx);
+  const mouse = { button: 0, clientX: 100, clientY: 100, shiftKey: shift, preventDefault() { }, stopPropagation() { } };
+  ctx.__clock = 1000;
+  for (const listener of card._listeners.mousedown || []) listener(mouse);
+  ctx.__clock += duration;
+  const moved = { ...mouse, clientX: 100 + dx, clientY: 100 + dy };
+  for (const listener of windowListeners.mousemove || []) listener(moved);
+  for (const listener of windowListeners.mouseup || []) listener(moved);
+  const positions = vm.runInContext('JSON.stringify([GROUPS.dragA, GROUPS.dragB].map(g=>[g.x,g.y]))', ctx);
+  return { positions: JSON.parse(positions), edits: msgs().filter(m => m.type === 'move' || m.type === 'moveMany') };
+}
+const quickSnap = dragCase({snap:true});
+chk('200ms 内顶点吸附拖动，松手立即提交吸附坐标', quickSnap.edits.length === 1
+  && quickSnap.edits[0].x === 150 && quickSnap.edits[0].y === 300, quickSnap);
+const quickFree = dragCase({dx:20,dy:-10});
+chk('关闭吸附时快速拖动也提交坐标', quickFree.edits.length === 1
+  && quickFree.edits[0].x === 157 && quickFree.edits[0].y === 252, quickFree);
+for (const [mode, expected] of [['x',[150,282]], ['y',[157,300]]]) {
+  const result = dragCase({snap:true,mode});
+  chk(mode + ' 单轴吸附的松手坐标与画面一致', result.edits.length === 1
+    && result.edits[0].x === expected[0] && result.edits[0].y === expected[1]
+    && JSON.stringify(result.positions[0]) === JSON.stringify(expected), result);
+}
+const batch = dragCase({snap:true,multiple:true});
+chk('快速多选拖动只提交一次整批坐标', batch.edits.length === 1 && batch.edits[0].type === 'moveMany'
+  && JSON.stringify(batch.edits[0].groups.map(g=>[g.x,g.y])) === JSON.stringify([[150,300],[300,450]]), batch);
+const secondCard = dragCase({snap:true,cardIndex:1});
+chk('拖动双兵组第二张牌提交的是整组原点', secondCard.edits.length === 1
+  && secondCard.edits[0].x === 150 && secondCard.edits[0].y === 300, secondCard);
+const emptyGroup = dragCase({snap:true,empty:true});
+chk('空组快速吸附拖动同样提交坐标', emptyGroup.edits.length === 1
+  && emptyGroup.edits[0].x === 150 && emptyGroup.edits[0].y === 300, emptyGroup);
+const jitter = dragCase({snap:true,dx:3,dy:1});
+chk('快速点击的小幅手抖不触发吸附、不移动模型、不提交编辑', jitter.edits.length === 0
+  && JSON.stringify(jitter.positions) === JSON.stringify([[137,262],[287,412]]), jitter);
+const tinyHold = dragCase({snap:true,duration:250,dx:2,dy:1});
+chk('长按后未越过两像素门槛仍不改变坐标', tinyHold.edits.length === 0
+  && tinyHold.positions[0][0] === 137 && tinyHold.positions[0][1] === 262, tinyHold);
+const precise = dragCase({duration:250,dx:3,dy:1});
+chk('长按后可进行三像素精细拖动并提交', precise.edits.length === 1
+  && precise.edits[0].x === 140 && precise.edits[0].y === 263, precise);
+const scaled = dragCase({zoomFactor:2,dx:40,dy:20});
+chk('缩放后的快速拖动使用游戏坐标提交', scaled.edits.length === 1
+  && scaled.edits[0].x === 157 && scaled.edits[0].y === 272, scaled);
+const slowShift = dragCase({shift:true,dx:40,dy:20});
+chk('Shift 精调后的快速拖动也使用实际坐标提交', slowShift.edits.length === 1
+  && slowShift.edits[0].x === 147 && slowShift.edits[0].y === 267, slowShift);
+ctx.Date = actualDate;
+vm.runInContext("snapOn=false; snapMode='vertex'; zoom=1;",ctx);
 console.log();
 if (bad) { console.log('【结果】✗ ' + bad + ' 项不通过'); process.exit(1); }
 console.log('【结果】✓ 全部 ' + good + ' 项通过');

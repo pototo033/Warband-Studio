@@ -2517,11 +2517,13 @@ addEventListener('mousemove', e => {
     return;
   }
   if (drag) {
-    // 真的动了才算"拖动"：没有这一步，mouseup 里的"回报坐标"分支永远不成立 ——
-    // 表现就是"拖了坐标不落表，下一次重推画布（加兵/撤销等）又弹回原位"。
-    // 防误触：按下后 ~0.2 秒内的位移**不算拖动**（点选兵牌时手抖常带出几像素位移，用户实测）；之后照旧 2px 阈值
-    if (!drag.moved && (Math.abs(e.clientX - drag.sx) > 2 || Math.abs(e.clientY - drag.sy) > 2)
-        && Date.now() - (drag.t0 || 0) >= 200) drag.moved = true;
+    // 开始拖动前同时阻止模型和画面移动，避免吸附预览改变了位置却没有松手提交。
+    // 快速位移达到 6 个屏幕像素即可开始；长按 200ms 后保留 2px 门槛，便于精调。
+    if (!drag.moved) {
+      const distance = Math.max(Math.abs(e.clientX - drag.sx), Math.abs(e.clientY - drag.sy));
+      if (distance <= 2 || (distance < 6 && Date.now() - drag.t0 < 200)) return;
+      drag.moved = true;
+    }
     // Shift = 精调（位移打 0.25 折）。必须**增量**累加：中途按下/松开 Shift 若整段重算，兵牌会被拽回起点
     const slow = e.shiftKey ? 0.25 : 1;
     const stepX = (e.clientX - drag.lastX) / zoom * slow, stepY = (e.clientY - drag.lastY) / zoom * slow;
