@@ -129,6 +129,37 @@ public class ProjectStoreTests : IDisposable
     }
 
     [Fact]
+    public void ReferencePathsKeepExternalLocationsAndMoveWithInternalFiles()
+    {
+        var info = ProjectStore.Ensure(_dir);
+        var internalPack = Path.Combine(_dir, "refs", "内置参考.pack");
+        var externalPack = Path.Combine(Path.GetTempPath(), "external_mod.pack");
+        Assert.True(ProjectStore.AddReferencePack(info, _dir, internalPack));
+        Assert.False(ProjectStore.AddReferencePack(info, _dir, internalPack.ToUpperInvariant()));
+        Assert.True(ProjectStore.AddReferencePack(info, _dir, externalPack));
+        ProjectStore.Save(_dir, info);
+        var loaded = ProjectStore.Load(_dir);
+        Assert.Equal("refs/内置参考.pack", loaded.ReferencePacks[0]);
+        Assert.True(Path.IsPathFullyQualified(loaded.ReferencePacks[1]));
+        var moved = _dir + "_moved";
+        Assert.Equal(Path.Combine(moved, "refs", "内置参考.pack"), ProjectStore.FullPath(moved, loaded.ReferencePacks[0]));
+        Assert.Equal(externalPack, ProjectStore.FullPath(moved, loaded.ReferencePacks[1]));
+        Assert.True(ProjectStore.RemoveReferencePack(loaded, _dir, internalPack.ToUpperInvariant()));
+        Assert.Single(loaded.ReferencePacks);
+        Assert.Empty(loaded.Packs);
+    }
+
+    [Fact]
+    public void OldProjectsWithoutReferencePathsRemainEmpty()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, ProjectStore.ProjectFile), "{\"Name\":\"old\",\"Packs\":[]}");
+        Assert.Empty(ProjectStore.Load(_dir).ReferencePacks);
+        File.WriteAllText(Path.Combine(_dir, ProjectStore.ProjectFile), "{\"Name\":\"old\",\"ReferencePacks\":null,\"Packs\":[]}");
+        Assert.Empty(ProjectStore.Load(_dir).ReferencePacks);
+    }
+
+    [Fact]
     public void TouchRecent_去重_新的在前_最多5个()
     {
         var r = new List<string>();

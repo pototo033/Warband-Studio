@@ -16,7 +16,10 @@ public sealed partial class MainViewModel
     private async Task ResetProjectSessionsAsync()
     {
         ++_autoSaveGen;
-        foreach (var session in _backend.Packs.ToArray()) await _backend.CloseSessionAsync(session);
+        // 关闭/切换工程只释放会话，不能被当作用户逐个卸载参考 mod。
+        _projectReferencesSuspended++;
+        try { foreach (var session in _backend.Packs.ToArray()) await _backend.CloseSessionAsync(session); }
+        finally { _projectReferencesSuspended--; }
         _activeCenterTab = null!;
         CenterTabs.Clear();
         Raise(nameof(ActiveCenterTab));
@@ -66,11 +69,13 @@ public sealed partial class MainViewModel
             ProjectStore.TouchRecent(_settings.RecentProjects, dir);
             _settings.Save();
             PruneRecentProjects();
+            var references = await RestoreProjectReferencesAsync();
             var packs = info.Packs.Select(rel => ProjectStore.FullPath(dir, rel)).Where(File.Exists).ToList();
             if (packs.Count > 0 && !await OpenPackPathAsync(packs[0], open: true, asUnitPack: false)) return false;
             Status = packs.Count > 0
                 ? $"工程「{info.Name}」已打开：{Path.GetFileName(packs[0])}"
                 : $"工程「{info.Name}」已建好（Pack 目录 {info.PackDir}）—— 用「导入 WUU 模板」或「导入 Pack」放一个包进来";
+            Status += references;
             FileLog.Write($"工程：新建 {dir}（Pack 目录 {ProjectStore.PackDirOf(dir, info)}，项目 key「{info.ProjectKey}」）");
             return true;
         }
@@ -135,6 +140,7 @@ public sealed partial class MainViewModel
             ProjectStore.TouchRecent(_settings.RecentProjects, dir);
             _settings.Save();
             PruneRecentProjects();
+            var references = await RestoreProjectReferencesAsync();
             // **按识别清单打开所有包**（工程目录里没被识别的包不自动开）；LastPack 放最后开 = 激活的画布
             var all = ProjectStore.PacksIn(dir);
             var toOpen = info.Packs
@@ -163,6 +169,7 @@ public sealed partial class MainViewModel
                      (missing > 0 ? $"（{missing} 个清单里的包不在了，已跳过）" : ""),
             };
             if (failedPacks.Count > 0) Status += $"；{failedPacks.Count} 个包未打开：" + string.Join("；", failedPacks);
+            Status += references;
             FileLog.Write($"工程：打开 {dir}（项目 key「{info.ProjectKey}」，识别 {info.Packs.Count} / 目录 {all.Count} 个包，本次开 {opened} 个，失败 {failedPacks.Count} 个）");
             return true;
         }
@@ -205,8 +212,9 @@ public sealed partial class MainViewModel
             ProjectStore.TouchRecent(_settings.RecentProjects, projectDir);
             _settings.Save();
             PruneRecentProjects();
+            var references = await RestoreProjectReferencesAsync();
             if (!await OpenPackPathAsync(dest, open: true, asUnitPack: false)) return false;
-            Status = $"已复制进工程并打开：{Path.GetFileName(dest)}（源文件不动，编辑都在工程里）";
+            Status = $"已复制进工程并打开：{Path.GetFileName(dest)}（源文件不动，编辑都在工程里）" + references;
             FileLog.Write($"工程：从 Pack 建立 {projectDir}（复制 {src} → {dest}，项目 key「{info.ProjectKey}」）");
             return true;
         }

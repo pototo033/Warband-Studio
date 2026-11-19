@@ -118,6 +118,8 @@
                 <Button Content="加载兵种 mod" Padding="10,3" Margin="0,0,6,0" Command="{Binding OpenUnitPackCommand}"
                         ToolTip="加载兵种参考包，为兵种库提供图标、中文名与单位数据" />
                 <Button Content="诊断" Padding="10,3" Margin="0,0,6,0" Command="{Binding DiagnosticsCommand}" />
+                <Button Content="AI 接口" Padding="10,3" Margin="0,0,6,0" Click="OnAiInterface"
+                        ToolTip="连接 MCP 客户端，查询和编辑工坊当前窗口或独立 Pack 会话" />
                 <Button Content="教程" Padding="10,3" Margin="0,0,10,0" VerticalAlignment="Center"
                         Click="OnStartTour" ToolTip="再看一遍使用教程（PPT 式指引）" />
                 <CheckBox Content="自动保存" VerticalAlignment="Center" Margin="0,0,10,0"
@@ -587,6 +589,11 @@
                             <TreeView.ItemTemplate>
                                 <HierarchicalDataTemplate DataType="{x:Type vm:MainViewModel+ModItem}" ItemsSource="{Binding Children}">
                                     <StackPanel Orientation="Horizontal">
+                                        <StackPanel.ContextMenu>
+                                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Header="卸载 mod（取消下次自动加载）" Click="OnUnloadReferenceMod" />
+                                            </ContextMenu>
+                                        </StackPanel.ContextMenu>
                                         <CheckBox Content="应用种族筛选" Margin="0,0,6,0" VerticalAlignment="Center"
                                                   IsChecked="{Binding RaceFilterEnabled, Mode=OneWay}"
                                                   Click="OnModRaceFilterClick"

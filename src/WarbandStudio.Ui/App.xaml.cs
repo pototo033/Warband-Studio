@@ -8,6 +8,12 @@ public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
+        var mcp = e.Args.Contains("--mcp-stdio");
+        if (mcp)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        }
+        else StartupUri = new Uri("MainWindow.xaml", UriKind.Relative);
         FileLog.Write("=== WarbandStudio 启动 ===");
         try
         {
@@ -29,7 +35,8 @@ public partial class App : Application
         catch (Exception ex)
         {
             FileLog.Write("启动文件校验失败",ex);
-            MessageBox.Show(ex.Message + "\n\n日志：" + FileLog.Path,"程序文件校验失败",MessageBoxButton.OK,MessageBoxImage.Error);
+            if (mcp) Console.Error.WriteLine(ex.Message);
+            else MessageBox.Show(ex.Message + "\n\n日志：" + FileLog.Path,"程序文件校验失败",MessageBoxButton.OK,MessageBoxImage.Error);
             Shutdown(1);
             return;
         }
@@ -45,5 +52,12 @@ public partial class App : Application
             if (args.ExceptionObject is Exception ex) FileLog.Write("后台未处理异常", ex);
         };
         base.OnStartup(e);
+        if (mcp) RunMcp(e.Args);
+    }
+
+    private async void RunMcp(string[] args)
+    {
+        var code = await Task.Run(() => Services.Ai.McpLaunch.RunAsync(args));
+        Shutdown(code);
     }
 }

@@ -166,6 +166,7 @@ public partial class MainWindow : Window
     /// <summary>关窗口前：有未导出编辑就提醒（是=保存后关 / 否=放弃编辑关 / 取消=不关）。防丢失的最后一道。</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        if (_aiExecuting) { e.Cancel = true; _vm.SetStatus("AI 操作执行中，请完成后关闭窗口。"); return; }
         if (_forceClosing) { base.OnClosing(e); return; }
         if (!_tableFlushedForClose && _editingTable is not null)
         { e.Cancel = true; Dispatcher.InvokeAsync(FlushTableThenCloseAsync); return; }
@@ -346,6 +347,12 @@ public partial class MainWindow : Window
     {
         if (sender is System.Windows.Controls.CheckBox { DataContext: ViewModels.MainViewModel.ModItem mod } checkbox)
             _vm.SetModRaceFilter(mod, checkbox.IsChecked == true);
+    }
+
+    private async void OnUnloadReferenceMod(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.MenuItem { DataContext: ViewModels.MainViewModel.ModItem mod })
+            await _vm.UnloadReferenceModAsync(mod);
     }
 
     /// <summary>左下「UI 素材库」右键 → 把这张图加进当前编辑的包（导出时落盘；不动画布）。</summary>

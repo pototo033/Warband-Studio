@@ -24,6 +24,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>已打开的 pack（多个共存，各自一棵树）。</summary>
     public IReadOnlyList<PackSession> Packs => _packs;
 
+    public event Action<string, bool>? ReferencePackChanged;
+
     /// <summary>
     /// 画布上的全部编辑（"直接改 pack"：内存里攒着，导出/另存时由 WarbandAmender 一次落表）。
     /// </summary>
@@ -68,10 +70,12 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         lock (StateSync)
         {
             var path = session.PackPath;
-            if (_packs.Remove(session)) session.CloseAsync().GetAwaiter().GetResult();
+            var removed = _packs.Remove(session);
+            if (removed) session.CloseAsync().GetAwaiter().GetResult();
             if (ReferenceEquals(_pack, session)) _pack = _packs.LastOrDefault(s => !s.IsUnitPack);
             if (path is not null) { _editsByPack.Remove(path); _undoByPack.Remove(path); _redoByPack.Remove(path); }
             RefreshSourceScope();
+            if (removed && session.IsUnitPack && path is not null) ReferencePackChanged?.Invoke(path, false);
             Log?.Invoke($"已关闭包：{session.DisplayName}");
             return Task.CompletedTask;
         }
@@ -2042,6 +2046,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         Log?.Invoke(session.IsUnitPack
             ? $"已加载兵种包 {Path.GetFileName(packPath)}：{session.Files.Count} 个文件（参考用：图标/中文名/兵种库；不占画布）"
             : $"已打开 {Path.GetFileName(packPath)}：{session.Files.Count} 个文件（原生 {sw.ElapsedMilliseconds} ms）");
+        if (asUnitPack) ReferencePackChanged?.Invoke(full, true);
         return Task.FromResult(session);
         }
     }
@@ -2232,7 +2237,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                 snapshot.ProjectKey = target.ProjectKey ?? ProjectKey;
                 var vanilla = VanillaDbPackPath ?? throw new InvalidOperationException("保存需要游戏 data/db.pack。");
                 var report = WarbandExporter.Export(path, vanilla, temp, GetSchema(), snapshot,
-                    validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line), PermissionReferencePacks(path))), PermissionReferencePacks(path));
+                    p => ValidateExport(p, vanilla, path), PermissionReferencePacks(path));
                 foreach(var note in report.Notes.Where(n=>n.StartsWith("重复兵兼容：",StringComparison.Ordinal)))Log?.Invoke(note);
                 using (PackArchive.Open(temp)) { } // 写完并确认索引可读取，才进入替换。
                 AtomicFile.Flush(temp);
@@ -2334,7 +2339,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         var snapshot = Edits.Clone();
         snapshot.ProjectKey = _pack?.ProjectKey ?? ProjectKey;
         var rep = WarbandStudio.Pack.WarbandExporter.Export(pack, vanilla, destPath, GetSchema(), snapshot,
-            validateStaged ?? (p => RpfmExportValidation.Validate(p, vanilla, line => Log?.Invoke(line), PermissionReferencePacks(pack))), PermissionReferencePacks(pack));
+            p => ValidateExport(p, vanilla, pack), PermissionReferencePacks(pack));
         foreach(var note in rep.Notes.Where(n=>n.StartsWith("重复兵兼容：",StringComparison.Ordinal)))Log?.Invoke(note);
         sw.Stop();
         Log?.Invoke($"导出完成：{destPath}（解锁 {rep.Unlocked} 个兵，{sw.ElapsedMilliseconds} ms）");

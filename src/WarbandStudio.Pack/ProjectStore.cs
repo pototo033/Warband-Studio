@@ -22,6 +22,9 @@ public sealed class ProjectInfo
     /// "导入 Pack 到工程"会自动登记；工程里其它没登记的包不会自动开（用「工程内的包…」勾选）。</summary>
     public List<string> Packs { get; set; } = [];
 
+    /// <summary>本工程加载的兵种参考 mod：工程内用相对路径，外部用绝对路径；只记录路径、不复制包。</summary>
+    public List<string> ReferencePacks { get; set; } = [];
+
     public string Created { get; set; } = "";
 }
 
@@ -82,6 +85,7 @@ public static class ProjectStore
         {
             var json = File.ReadAllText(f);
             var info = JsonSerializer.Deserialize<ProjectInfo>(json) ?? throw new InvalidDataException("工程配置为空。");
+            info.ReferencePacks ??= [];
             using var document = JsonDocument.Parse(json);
             // 只迁移没有识别清单字段的旧格式；用户主动清空清单后不能被 LastPack 加回来。
             if (!document.RootElement.TryGetProperty(nameof(ProjectInfo.Packs), out _) && !string.IsNullOrWhiteSpace(info.LastPack))
@@ -167,6 +171,22 @@ public static class ProjectStore
         if (info.Packs.Any(p => p.Equals(rel, StringComparison.OrdinalIgnoreCase))) return false;
         info.Packs.Add(rel);
         return true;
+    }
+
+    /// <summary>参考包在工程内才用相对路径，避免工程搬家时改变外部创意工坊或 data 路径。</summary>
+    public static bool AddReferencePack(ProjectInfo info, string projectDir, string packPath)
+    {
+        var full = FullPath(projectDir, packPath);
+        if (full.Length == 0 || info.ReferencePacks.Any(path => FullPath(projectDir, path).Equals(full, StringComparison.OrdinalIgnoreCase))) return false;
+        var boundary = Path.GetFullPath(projectDir).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        info.ReferencePacks.Add(full.StartsWith(boundary, StringComparison.OrdinalIgnoreCase) ? RelPath(projectDir, full) : full.Replace('\\', '/'));
+        return true;
+    }
+
+    public static bool RemoveReferencePack(ProjectInfo info, string projectDir, string packPath)
+    {
+        var full = FullPath(projectDir, packPath);
+        return full.Length > 0 && info.ReferencePacks.RemoveAll(path => FullPath(projectDir, path).Equals(full, StringComparison.OrdinalIgnoreCase)) > 0;
     }
 
     /// <summary>把一个包备份进 `old/`（**用 .pack 后缀**，直接拷出来就能当包用），返回备份路径；

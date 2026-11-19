@@ -43,6 +43,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _settings = initialSettings;
         _backend = new Backend(_settings, validateStaged);
+        _backend.ReferencePackChanged += RememberProjectReference;
         _gameDir = _settings.GameDir;
         _backupDir = string.IsNullOrWhiteSpace(_settings.BackupDir)
             ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WarbandStudio", "backups")
