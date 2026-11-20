@@ -9,7 +9,7 @@ public sealed partial class Backend
     internal DbTable? AutomationTable(string table, string[] keys)
     {
         var (bytes, snapshot) = ProjectTables();
-        using var view = DuplicateUpgradeArchive.OpenView(_pack!.PackPath!, bytes, snapshot.RemoveFiles);
+        using var view = OpenCanvasSource(bytes, snapshot.RemoveFiles);
         return TableFiles.ReadComposite(view, table, keys, GetSchema());
     }
     internal RpfmDiagnosticReport? LastExportDiagnostics { get; private set; }
@@ -26,14 +26,14 @@ public sealed partial class Backend
     internal IReadOnlyList<string> AutomationFiles()
     {
         var (bytes, snapshot) = ProjectTables();
-        using var view = DuplicateUpgradeArchive.OpenView(_pack!.PackPath!, bytes, snapshot.RemoveFiles);
+        using var view = OpenCanvasSource(bytes, snapshot.RemoveFiles);
         return view.VisibleEntries.Select(e => e.Path).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     internal byte[] AutomationReadFile(string path)
     {
         var (bytes, snapshot) = ProjectTables();
-        using var view = DuplicateUpgradeArchive.OpenView(_pack!.PackPath!, bytes, snapshot.RemoveFiles);
+        using var view = OpenCanvasSource(bytes, snapshot.RemoveFiles);
         return view.ReadDecoded(path);
     }
 

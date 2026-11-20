@@ -9,6 +9,7 @@ public sealed partial class Backend
 {
     public string DeleteTab(string category) => Edit(() =>
     {
+        EnsureNativeCategories(category);
         var path = _pack?.PackPath ?? "";
         RequireEditablePack(path);
         if (string.IsNullOrWhiteSpace(category)) throw new ArgumentException("页签 key 不能为空。", nameof(category));
@@ -81,7 +82,7 @@ public sealed partial class Backend
             var rows = table.RawRows.Where(row => !checks.Any(check => check.Test!(row[check.Index].ToTsv()))).ToList();
             if (rows.Count == table.RawRows.Count) continue;
             hadCategory |= tableName == TabFileNaming.Cats;
-            if (rows.Count > 0) bytes[entry.Path] = PageBytes(table, rows);
+            if (rows.Count > 0 || NativeWarband()?.Files.ContainsKey(entry.Path) == true) bytes[entry.Path] = PageBytes(table, rows);
             else
             {
                 bytes.Remove(entry.Path);

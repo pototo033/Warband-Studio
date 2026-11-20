@@ -7,6 +7,9 @@ public sealed partial class Backend
 {
     public int SetGroupsCategory(IEnumerable<(string Group, int X, int Y)> groups, string category)
     {
+        groups = groups.ToArray();
+        EnsureNativeGroups(groups.Select(group => group.Group).ToArray());
+        EnsureNativeCategories(category);
         var count = 0;
         foreach (var item in groups.Where(g => !string.IsNullOrWhiteSpace(g.Group)).DistinctBy(g => g.Group, StringComparer.OrdinalIgnoreCase))
         {

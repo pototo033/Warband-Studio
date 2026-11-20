@@ -93,6 +93,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
 
     public void SetGroupPos(string group, int x, int y)
     {
+        EnsureNativeGroups(group);
         var cat = Edits.InfoEdits.TryGetValue(group, out var old) ? old.Category : null;
         Edits.InfoEdits[group] = (x, y, cat);
         Log?.Invoke($"画布拖动：{group} → ({x},{y})（待导出）");
@@ -104,6 +105,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// </summary>
     public int SetGroupsAxis(IEnumerable<string> groups, string axis, int value)
     {
+        groups = groups.ToArray();
+        EnsureNativeGroups(groups.ToArray());
         var n = 0;
         foreach (var g in groups.Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -122,6 +125,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>把组挪到另一个页签（写 infos 的 category）。</summary>
     public void SetGroupCategory(string group, string category, int x, int y)
     {
+        EnsureNativeGroups(group);
+        EnsureNativeCategories(category);
         Edits.InfoEdits[group] = (x, y, category);
         Log?.Invoke($"改页签：{group} → {category}（待导出）");
     }
@@ -132,6 +137,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// </summary>
     public void AddUnitToGroup(string group, string unit, int x, int y, bool isNewGroup, string? category = null)
     {
+        EnsureNativeGroups(group);
+        EnsureNativeCategories(category);
         NoteElite(unit);                       // RoR/精英：自动解锁战役经验
         Edits.SetJunction(unit, group, true);
         if (isNewGroup) Edits.SetGroup(group, true);
@@ -151,6 +158,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>删一张兵卡（组里只剩它时用 <see cref="RemoveGroup"/>）。</summary>
     public void RemoveUnitFromGroup(string group, string unit)
     {
+        EnsureNativeGroups(group);
         Edits.SetJunction(unit, group, false);
         Log?.Invoke($"画布删兵：{unit} ← 组 {group}（待导出）");
     }
@@ -158,6 +166,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>删整组（连带 junction / 坐标 / 连线 / 升级路线）。</summary>
     public void RemoveGroup(string group)
     {
+        EnsureNativeGroups(group);
         Edits.SetGroup(group, false);
         Log?.Invoke($"画布删组：{group}（连带的兵、连线、升级路线一起删；待导出）");
     }
@@ -172,6 +181,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                            bool mutual, int childPos, int parentPos, double autoCost = 0, bool alsoLink = true,
                            double midOffset = 0)
     {
+        EnsureNativeGroups(baseGroup, targetGroup);
         var cost = costKey ?? "";
         if (string.IsNullOrWhiteSpace(cost) && autoCost > 0)
         {
@@ -203,6 +213,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>改一条升级的金额/等级（键不变 → 覆盖表替换原行）。</summary>
     public void UpdateRoute(string upgradeKey, string baseGroup, string targetGroup, string cost, int requiredRank, int subtractedRank)
     {
+        EnsureNativeGroups(baseGroup, targetGroup);
         Edits.SetRoute(new WarbandEdits.RouteEdit(upgradeKey, baseGroup, targetGroup, cost, requiredRank, subtractedRank), true);
         Log?.Invoke($"改升级：{upgradeKey}（成本 {cost}，等级 {requiredRank}/-{subtractedRank}）　待导出");
     }
@@ -214,6 +225,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     public void SwapRoute(string upgradeKey, string baseGroup, string targetGroup, string cost, int requiredRank, int subtractedRank,
                           int childPos, int parentPos, bool alsoLink = true, double midOffset = 0)
     {
+        EnsureNativeGroups(baseGroup, targetGroup);
         Edits.SetRoute(new WarbandEdits.RouteEdit(upgradeKey, targetGroup, baseGroup, cost, requiredRank, subtractedRank), true);
         if (alsoLink)
         {
@@ -236,6 +248,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
                             double midOffset = 0)
     {
         if (string.IsNullOrWhiteSpace(child) || string.IsNullOrWhiteSpace(parent)) return;
+        EnsureNativeGroups(child, parent);
         Edits.SetLinkPair(new WarbandEdits.LinkEdit(child, parent, childPos, parentPos, 0, 0, midOffset), true);
         InvalidateCanvas();
         Log?.Invoke($"{why}：{parent} → {child}（只写 ui_links，升级路线不动；同一对只留这一条）　待导出");
@@ -245,6 +258,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     public void RemoveLinkOnly(string child, string parent)
     {
         if (string.IsNullOrWhiteSpace(child) || string.IsNullOrWhiteSpace(parent)) return;
+        EnsureNativeGroups(child, parent);
         Edits.SetLinkPair(new WarbandEdits.LinkEdit(child, parent, 0, 0, 0, 0, 0), false);
         InvalidateCanvas();
         Log?.Invoke($"删连线（只删线）：{parent} → {child}（这一对的两个方向一起清）　待导出");
@@ -253,6 +267,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>删一条升级（路线 + 对应连线一起删）。</summary>
     public void RemoveRoute(string upgradeKey, string baseGroup, string targetGroup, bool alsoLink = true)
     {
+        EnsureNativeGroups(baseGroup, targetGroup);
         Edits.SetRoute(new WarbandEdits.RouteEdit(upgradeKey, baseGroup, targetGroup, "", 0, 0), false);
         if (alsoLink) Edits.SetLinkPair(new WarbandEdits.LinkEdit(targetGroup, baseGroup, 0, 0, 0, 0, 0), false);
         Log?.Invoke($"删升级：{upgradeKey}（{baseGroup} → {targetGroup}）{(alsoLink ? "，连线一起删" : "")}　待导出");
@@ -275,6 +290,9 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// </summary>
     public void MergeGroups(string keep, IEnumerable<string> drops, int? x = null, int? y = null, string? category = null)
     {
+        drops = drops.ToArray();
+        EnsureNativeGroups(drops.Prepend(keep).ToArray());
+        EnsureNativeCategories(category);
         var list = drops.Where(d => d.Length > 0 && !d.Equals(keep, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (list.Count == 0) return;
@@ -319,6 +337,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// </summary>
     public int SplitGroup(string group, int x, int y, string? category, string? race, string? faction)
     {
+        EnsureNativeGroups(group);
+        EnsureNativeCategories(category);
         var units = UnitsOf(group);
         if (units.Count <= 1) return 0;
         var made = 0;
@@ -422,6 +442,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     public void MoveUnitsToNewGroup(string group, List<(string Group, string Unit)> units,
                                     int x, int y, string? category, string? race, string? faction)
     {
+        EnsureNativeGroups(units.Select(unit => unit.Group).ToArray());
+        EnsureNativeCategories(category);
         Edits.SetGroup(group, true);
         foreach (var (oldGroup, unit) in units)
         {
@@ -436,6 +458,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>新建分组（空组，先落在画布上，之后往里拖兵）。</summary>
     public void NewGroup(string group, int x, int y, string? category)
     {
+        EnsureNativeCategories(category);
         if (string.IsNullOrWhiteSpace(group)) return;
         if (GroupKeyTaken(group))
         {
@@ -462,6 +485,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     private bool GroupKeyTaken(string key)
     {
         if (string.IsNullOrWhiteSpace(key)) return false;
+        if (NativeWarband()?.Groups.ContainsKey(key) == true) return true;
         if (Edits.AddGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return true;
         if (Edits.RemoveGroup.Any(g => g.Equals(key, StringComparison.OrdinalIgnoreCase))) return true;
         var pack = _pack?.Archive;
@@ -484,6 +508,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     /// <summary>页签重命名（一次改齐 categories / infos / twui / 两张图）。</summary>
     public void RenameTab(string oldKey, string newKey, string? fileName = null)
     {
+        EnsureNativeCategories(oldKey);
         newKey = (newKey ?? "").Trim().ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(oldKey) || newKey.Length == 0) throw new ArgumentException("页签 key 不能为空。");
         if(fileName is not null) fileName=TabFileBindings.Validate(fileName);
@@ -1760,7 +1785,12 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
 
     // 成本读写独立维护，复用原门面状态与资源链。
     /// <summary>twui 里已有的页签 key（新建页签对话框的下拉用）。</summary>
-    public List<string> TabKeys() => _pack?.Archive is { } pack ? TabKeysOf(pack) : [];
+    public List<string> TabKeys()
+    {
+        if (_pack?.Archive is null) return [];
+        using var source = OpenCanvasSource();
+        return TabKeysOf(source);
+    }
 
     /// <summary>图标 url（http://icons.local/…）→ WPF 能读的本地文件路径（兵种库列表用）。</summary>
     public string? LocalIconPath(string? url)
@@ -2062,7 +2092,7 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         var pack = _pack ?? throw new InvalidOperationException("还没打开 pack。");
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var (bytes, snapshot) = ProjectTables();
-        using var view = DuplicateUpgradeArchive.OpenView(pack.PackPath!, bytes, snapshot.RemoveFiles);
+        using var view = OpenCanvasSource(bytes, snapshot.RemoveFiles);
         var table = DbTable.Decode(view.ReadDecoded(innerPath), PackSession.TableNameOf(innerPath), GetSchema());
         sw.Stop();
         Log?.Invoke($"解表 {table.TableName}：{table.Rows.Count} 行 × {table.Columns.Count} 列（{sw.ElapsedMilliseconds} ms）");
@@ -2354,7 +2384,6 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
     {
         using var iconBatch = Icons.BeginBatch();
         var session = _pack ?? throw new InvalidOperationException("先打开一个 pack。");
-        var pack = session.Archive ?? throw new InvalidOperationException("这个 pack 还没打开。");
         var cacheKey = session.PackPath + "|" + _rev;
         if (_canvasCache is not null && _canvasCacheKey == cacheKey)
         {
@@ -2363,6 +2392,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         }
         var schema = GetSchema();
         var notes = new List<string>();
+
+        using var pack = OpenCanvasSource();
 
         var infos = TableFiles.ReadMerged(pack, "unit_upgrade_group_ui_infos_tables", schema, notes);
         var junc = TableFiles.ReadConcat(pack, "unit_to_unit_group_junctions_tables", schema, notes);
@@ -2491,6 +2522,16 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
             }
         }
         catch (Exception ex) { notes.Add("成本 Key 列表跳过：" + ex.Message); }
+        // 原版路线引用的价签同样显示原值，当前 MOD 的同 key 成本仍优先。
+        if (NativeWarband()?.Costs is { } nativeCosts)
+        {
+            var used = routeInfo.Values.Select(route => route.Cost).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var idColumn = nativeCosts.Columns.FindIndex(column => column.Name == "id");
+            var amountColumn = nativeCosts.Columns.FindIndex(column => column.Name == "treasury_cost");
+            foreach (var row in nativeCosts.Rows)
+                if (idColumn >= 0 && amountColumn >= 0 && used.Contains(row[idColumn].ToTsv()) && !costAmount.ContainsKey(row[idColumn].ToTsv()))
+                { costKeys.Add(row[idColumn].ToTsv()); costAmount[row[idColumn].ToTsv()] = row[amountColumn].Num; }
+        }
         foreach (var kv in Edits.AddCost)
         {
             if (!costKeys.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)) costKeys.Add(kv.Key);
@@ -3468,8 +3509,8 @@ public sealed partial class Backend(AppSettings settings, Func<string, RpfmDiagn
         var set = new HashSet<string>(Edits.TableReplacements.Keys, StringComparer.OrdinalIgnoreCase);
         try
         {
-            var pack = _pack?.Archive;
-            if (pack is null) return set;
+            if (_pack?.Archive is null) return set;
+            using var pack = OpenCanvasSource();
             var t = TableFiles.ReadConcat(pack, "unit_to_unit_group_junctions_tables", GetSchema(), null);
             if (t is not null)
             {

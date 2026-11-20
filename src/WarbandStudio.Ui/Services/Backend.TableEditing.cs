@@ -43,10 +43,24 @@ public sealed partial class Backend
         Edit(() =>
         {
             RequireEditablePack(packPath);
+            var nativeFile = NativeWarband()?.Files.ContainsKey(innerPath) == true;
+            if (nativeFile)
+            {
+                var shown = ReadTable(innerPath);
+                if (row < 0 || row >= shown.Rows.Count || !shown.Rows[row].Select(value => value.ToTsv()).SequenceEqual(expected))
+                    throw new InvalidOperationException("表数据已经变化，请刷新表视图后重试。");
+                EnsureNativeCategories(NativeWarband()!.Categories.ToArray());
+            }
             var (bytes, snapshot) = ProjectTables();
             using var view = DuplicateUpgradeArchive.OpenView(packPath, bytes, snapshot.RemoveFiles);
             var name = PackSession.TableNameOf(innerPath);
             var table = DbTable.Decode(view.ReadDecoded(innerPath), name, GetSchema());
+            if (nativeFile && (row >= table.Rows.Count || !table.Rows[row].Select(value => value.ToTsv()).SequenceEqual(expected)))
+            {
+                var matches = table.Rows.Select((values, index) => (values, index)).Where(item => item.values.Select(value => value.ToTsv()).SequenceEqual(expected)).ToArray();
+                if (matches.Length != 1) throw new InvalidOperationException("原版表行无法唯一定位，请刷新表视图后重试。");
+                row = matches[0].index;
+            }
             var at = table.Columns.FindIndex(c => c.Name == column);
             if (at < 0 || row < 0 || row >= table.Rows.Count || !table.Rows[row].Select(v => v.ToTsv()).SequenceEqual(expected)) throw new InvalidOperationException("表数据已经变化，请刷新表视图后重试。");
             if (expected[at] == text) return false;
@@ -72,6 +86,7 @@ public sealed partial class Backend
     {
         Edit(() =>
         {
+            EnsureNativeGroups(oldKey);
             RequireEditablePack(_pack?.PackPath ?? "");
             newKey = newKey.Trim();
             if (!Regex.IsMatch(newKey, "^[A-Za-z0-9_]+$")) throw new ArgumentException("兵组 key 只能包含字母、数字和下划线。");

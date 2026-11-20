@@ -84,6 +84,23 @@ public sealed class DuplicateUpgradeTests : IDisposable
         return DuplicateUpgradeCompiler.Compile(source,vanilla,_schema,new WarbandEdits{ProjectKey="Test"},choices??new Dictionary<string,string>(),[]);
     }
     [Fact]
+    public void EmptySamePathOverrideHidesTheWholeLowerFileDuringDuplicateCompilation()
+    {
+        var path=Fixture(sameCost:true);
+        using(var vanilla=PackArchive.Open(File("vanilla.pack")))
+            PackWriter.WriteFrom(vanilla,new Dictionary<string,byte[]> {
+                [$"db/{Junc}/deleted_lower"]=Table(Junc,D(("unit_group","a"),("unit","unexpected_source"))),
+                [$"db/{Junc}/separate_lower"]=Table(Junc,D(("unit_group","a"),("unit","source")))
+            },File("vanilla_new.pack"));
+        System.IO.File.Move(File("vanilla_new.pack"),File("vanilla.pack"),true);
+        using(var authored=PackArchive.Open(path))
+            PackWriter.WriteFrom(authored,new Dictionary<string,byte[]> {[$"db/{Junc}/deleted_lower"]=Table(Junc)},File("authored_new.pack"));
+        System.IO.File.Move(File("authored_new.pack"),path,true);
+        var result=Compile(path);
+        Assert.Contains(DuplicateUpgradeArchive.ManifestPath,result.Keys);
+    }
+
+    [Fact]
     public async Task EveryVisibleDuplicateUsesClosureAndReopenRestoresAuthoredRowsWithoutEdits()
     {
         var path=Fixture();var original=System.IO.File.ReadAllBytes(path);var bytes=Compile(path);

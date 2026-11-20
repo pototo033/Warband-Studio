@@ -63,11 +63,21 @@ public static partial class DuplicateUpgradeCompiler
             // 有效值严格走组合键 API；另外保留来源路径，修改/删除时才能回到原文件。
             var provenance = new Dictionary<string, Row>(StringComparer.OrdinalIgnoreCase);
             DbTable? merged=null;
-            foreach(var source in new[]{vanilla}.Concat(dependencies).Append(authored))
+            var sources = new[]{vanilla}.Concat(dependencies).Append(authored).ToArray();
+            for (var sourceIndex = 0; sourceIndex < sources.Length; sourceIndex++)
             {
-                var rows=ReferenceEquals(source,authored)?Local(table):Read(source,table);
-                var current=TableFiles.ReadComposite(source,table,Keys[table],schema);
-                if(current is null)continue;
+                var source = sources[sourceIndex];
+                // 同一完整内部路径被后层接管时，旧文件整张失效；空覆盖也必须能删掉原版行。
+                var hidden = sources.Skip(sourceIndex + 1).SelectMany(pack => TableFiles.EntriesFor(pack, table))
+                    .Select(entry => entry.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var rows=(ReferenceEquals(source,authored)?Local(table):Read(source,table)).Where(row => !hidden.Contains(row.Path)).ToList();
+                if(rows.Count == 0)continue;
+                var model = rows[0].Table;
+                var uniqueRows = rows.GroupBy(row => string.Join('\u0001', Keys[table].Select(key => row[key])), StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.Last()).ToArray();
+                var current = new DbTable { TableName = model.TableName, Version = model.Version, Guid = model.Guid,
+                    MysteriousByte = model.MysteriousByte, Definition = model.Definition, Columns = model.Columns,
+                    Rows = uniqueRows.Select(row => row.Display).ToList(), RawRows = uniqueRows.Select(row => row.Raw).ToList() };
                 if(rows.Any(r=>r.Table.Version!=current.Version) || merged is not null &&
                     !merged.Definition.Fields.Select(f=>(f.Name,f.Type)).SequenceEqual(current.Definition.Fields.Select(f=>(f.Name,f.Type))))
                     throw new InvalidDataException("重复兵兼容发现混合版本的表，未改写："+table);

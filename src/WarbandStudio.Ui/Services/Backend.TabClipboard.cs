@@ -36,7 +36,7 @@ public sealed partial class Backend
         {
             RequireEditablePack(_pack?.PackPath??"");
             var (bytes,snapshot)=ProjectTables();
-            using var view=DuplicateUpgradeArchive.OpenView(_pack!.PackPath!,bytes,snapshot.RemoveFiles);
+            using var view=OpenCanvasSource(bytes,snapshot.RemoveFiles);
             var schema=GetSchema();
             DbTable? Read(string table)
             {
@@ -86,6 +86,7 @@ public sealed partial class Backend
 
     public string PasteTab(string category)=>Edit(()=>
     {
+        EnsureNativeCategories(category);
         RequireEditablePack(_pack?.PackPath??"");
         var copy=_pageCopy??throw new InvalidOperationException("请先复制一个页签。");
         if(!copy.Pack.Equals(_pack!.PackPath,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("请在复制来源的同一个 Pack 内粘贴。");
