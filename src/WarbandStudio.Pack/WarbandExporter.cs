@@ -295,6 +295,8 @@ public static class WarbandExporter
             PackWriter.WriteFrom(authored, derived, staged);
             using (PackArchive.Open(staged)) { }
             var diagnostics = (validateStaged ?? (p => RpfmExportValidation.Validate(p, vanillaDbPack)))(staged);
+            diagnostics = WarbandReferenceIntegrity.Combine(diagnostics, staged, vanillaDbPack, schema, referencePacks);
+            foreach (var issue in diagnostics.Items.Where(item => item.RowContext?.StartsWith("最终覆盖校验") == true)) notes.Add(issue.ToString());
             diagnostics.RequireSaveAllowed();
             notes.Add(diagnostics.Summary);
             notes.AddRange(diagnostics.Items.Select(x => x.ToString()));

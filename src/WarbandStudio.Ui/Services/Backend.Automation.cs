@@ -19,6 +19,8 @@ public sealed partial class Backend
     {
         var report = (validateStaged ?? (p => RpfmExportValidation.Validate(
             p, vanilla, line => Log?.Invoke(line), PermissionReferencePacks(source))))(staged);
+        report = WarbandReferenceIntegrity.Combine(report, staged, vanilla, GetSchema(), PermissionReferencePacks(source));
+        foreach (var issue in report.Items.Where(item => item.RowContext?.StartsWith("最终覆盖校验") == true)) Log?.Invoke(issue.ToString());
         LastExportDiagnostics = report;
         return report;
     }

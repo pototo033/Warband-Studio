@@ -14,7 +14,7 @@ namespace WarbandStudio.Pack;
 ///   · **删行** → 只能改**原来那个文件**（覆盖表删不掉别人的行）：把它解出来、滤掉目标行、原样重编回去。
 /// 编码器与解码器是逐字节往返验证过的（verify_native.py ①），所以重编不会破坏其余内容。
 /// </summary>
-public static class WarbandAmender
+public static partial class WarbandAmender
 {
     /// <summary>页签本体/授权/成本这些"不归属单个页签"的表的新行文件（名字排最后：同名 key 就是它赢）。</summary>
     public const string EditFileName = "zzzz_studio_edits";
@@ -41,6 +41,7 @@ public static class WarbandAmender
         TabFileBindingOperations.ApplyNames(pack,e,schema,repl,notes);
         using var renamedView=e.TabFileNames.Count>0 ? DuplicateUpgradeArchive.OpenView(pack.FilePath,repl,e.RemoveFiles):null;
         if(renamedView is not null) pack=renamedView;
+        var originalRouteKeys = CurrentRouteKeys(pack, schema, repl);
 
         // ── -1) 旧名覆盖表搬家（见 MigrateLegacy 的说明）──
         MigrateLegacy(pack, repl, e, notes);
@@ -1180,6 +1181,11 @@ public static class WarbandAmender
             repl[TabFileBindings.MetadataPath]=TabFileBindings.Encode(TabFileBindings.Effective(pack,e));
             changed++;
         }
+        // 删除兵组、自愈和直接删路线都会移除升级；统一按最终差分清理其全部引用。
+        // 原表中的空覆盖必须保留，否则游戏会重新读取被删掉的原版条件。
+        var deletedRouteKeys = originalRouteKeys.Except(CurrentRouteKeys(pack, schema, repl), StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        changed += DropRouteReferences(pack, schema, repl, notes, deletedRouteKeys);
         return changed;
     }
 

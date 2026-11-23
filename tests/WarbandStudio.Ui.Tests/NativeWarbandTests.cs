@@ -34,6 +34,10 @@ public sealed partial class BackendSafetyTests
         Replace(Cost, new Dictionary<string, object> { ["id"] = "native_cost", ["treasury_cost"] = -456L });
         Replace("main_units_tables", new() { ["unit"] = "u1" }, new() { ["unit"] = "u2" }, new() { ["unit"] = "u3" }, new() { ["unit"] = "u4" });
         Replace("unit_upgrade_to_tech_requirements_tables", new Dictionary<string, object> { ["unit_upgrade"] = "RK", ["technology"] = "test_tech" });
+        Replace("effect_bonus_value_unit_upgrade_to_unit_group_junctions_tables",
+            new() { ["unit_upgrade_to_unit_group"] = "RK", ["effect"] = "test_effect" },
+            new() { ["unit_upgrade_to_unit_group"] = "RU", ["effect"] = "test_effect" });
+        Replace("effects_tables", new Dictionary<string, object> { ["effect"] = "test_effect" });
         PackWriter.WriteNew(game, files);
         var xml = """
             <root><warband_upgrades id="warband_upgrades" this="root"><components>
@@ -190,5 +194,33 @@ public sealed partial class BackendSafetyTests
         Assert.Equal("RenamedNative", NativeCanvas().GetProperty("routeList").EnumerateArray().Single(route => route.GetProperty("k").GetString() == "RK").GetProperty("b").GetString());
         Assert.True(_backend.Undo());
         Assert.True(_backend.Edits.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeDeletionCleansEffectsAndSupportsUndoSaveAndRepeatedEditing(bool removeGroup)
+    {
+        var path = await NativeFixture();
+        var original = File.ReadAllBytes(path);
+        _backend.Edit(() => { if (removeGroup) _backend.RemoveGroup("NB"); else _backend.RemoveRoute("RK", "NA", "NB"); return true; });
+        Assert.True(_backend.Undo()); Assert.True(_backend.Edits.IsEmpty);
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.True(_backend.Redo());
+        await _backend.SaveInPlaceAsync();
+        await _backend.CloseSessionAsync(_backend.Pack!); await _backend.OpenPackAsync(path);
+        using (var saved = PackArchive.Open(path))
+        using (var game = PackArchive.Open(Path.Combine(_settings.GameDir, "data", "db.pack")))
+        {
+            Assert.Empty(WarbandReferenceIntegrity.Validate(saved, game, _schema).Items);
+            var effects = TableFiles.ReadConcat(saved, "effect_bonus_value_unit_upgrade_to_unit_group_junctions_tables", _schema)!;
+            Assert.Single(effects.Rows);
+        }
+        _backend.Edit(() => { _backend.RemoveGroup("ND"); return true; });
+        await _backend.SaveInPlaceAsync();
+        using var final = PackArchive.Open(path);
+        var entry = final.Find("db/effect_bonus_value_unit_upgrade_to_unit_group_junctions_tables/data__");
+        Assert.NotNull(entry);
+        Assert.Empty(DbTable.Decode(final.ReadDecoded(entry!), "effect_bonus_value_unit_upgrade_to_unit_group_junctions_tables", _schema).Rows);
     }
 }
